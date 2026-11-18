@@ -63,7 +63,8 @@ pub fn path() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("WLS_CONTEXTS_FILE").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p));
     }
-    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("WLS_Desktop").join("contexts.json"))
+    // stejná složka jako konfigurace (v portable režimu vedle EXE)
+    crate::config::data_dir().map(|d| d.join("contexts.json"))
 }
 
 impl Store {
