@@ -53,6 +53,15 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
      simple map; networking mode of WSL (NAT / mirrored) and the WSL IP address;
    - listening sockets inside the distribution (`ss -ltnp`) that are not containers – e.g. the
      engine API, the TLS proxy – so it is visible what is exposed on localhost.
+   - **ports per application / container, in and out** – directly in the container list and the
+     container detail (and for the app itself: engine API port, TLS proxy, named pipe):
+     - *in*: ports the process actually listens on inside the container (`ss -ltnp` in its
+       network namespace) next to the published ones, highlighting ports that listen but are not
+       published and published ports nobody listens on;
+     - *out*: active outgoing connections (remote address:port, protocol, state – from
+       `ss -tunp` / conntrack in the container's namespace), with traffic per connection where
+       available;
+     - refreshed live while the view is open, filterable, copyable.
 
 ## Containers, images, compose
 
