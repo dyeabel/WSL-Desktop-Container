@@ -6,7 +6,8 @@
 # ukládá aplikace data do podsložky data\ vedle EXE (ne do %APPDATA%) a příkaz docker se
 # přidává do PATH přímo z této složky.
 param([switch]$NoBuild)
-$ErrorActionPreference = 'Stop'
+# nativní příkazy (cargo, git) píší průběh na stderr – úspěch se kontroluje přes $LASTEXITCODE
+$ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 

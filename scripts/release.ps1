@@ -19,7 +19,8 @@ param(
     [switch]$LiveTests,
     [switch]$AllowDirty
 )
-$ErrorActionPreference = 'Stop'
+# nativní příkazy (cargo, git) píší průběh na stderr – úspěch se kontroluje přes $LASTEXITCODE
+$ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 
@@ -39,7 +40,7 @@ if ($Version) {
     $toml = Get-Content Cargo.toml -Raw
     $toml = [regex]::Replace($toml, '(?m)^version\s*=\s*"[^"]+"', "version = `"$Version`"", 1)
     [IO.File]::WriteAllText((Join-Path $root 'Cargo.toml'), $toml)
-    cargo update --workspace --offline 2>$null | Out-Null
+    cargo update --workspace --offline *> $null
     git add Cargo.toml Cargo.lock
     git commit -q -m "Verze $Version"
     Check 'git commit'
