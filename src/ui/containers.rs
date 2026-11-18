@@ -9,7 +9,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         app.snap.containers.iter().filter(|c| c.running()).count(),
         app.snap.containers.len(),
     );
-    header(ui, "Kontejnery", &format!("{run}/{total} běží"));
+    header(ui, t!("Kontejnery", "Containers"), &tf!("{run}/{total} běží", "{run}/{total} running"));
     if !need_engine(app, ui) {
         return;
     }
@@ -19,25 +19,25 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ui,
         240.0,
         |ui, right| if !right {
-            if accent_button(ui, "\u{E3D0} Spustit kontejner").clicked() {
+            if accent_button(ui, t!("\u{E3D0} Spustit kontejner", "\u{E3D0} Run container")).clicked() {
                 app.run_open = true;
             }
-            if ui.button("\u{E094} Obnovit").clicked() {
+            if ui.button(t!("\u{E094} Obnovit", "\u{E094} Refresh")).clicked() {
                 cmd = Some(Cmd::Refresh);
             }
-            ui.checkbox(&mut app.show_all, "Zobrazit i zastavené");
+            ui.checkbox(&mut app.show_all, t!("Zobrazit i zastavené", "Show stopped too"));
         } else {
             more_menu(ui, |ui| {
-                if ui.button("\u{E39E} Pozastavit všechny běžící").clicked() {
+                if ui.button(t!("\u{E39E} Pozastavit všechny běžící", "\u{E39E} Pause all running")).clicked() {
                     cmd = Some(Cmd::PauseAll);
                     ui.close_menu();
                 }
-                if ui.button("\u{E3D2} Obnovit všechny pozastavené").clicked() {
+                if ui.button(t!("\u{E3D2} Obnovit všechny pozastavené", "\u{E3D2} Unpause all paused")).clicked() {
                     cmd = Some(Cmd::UnpauseAll);
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("\u{EC54} Odstranit zastavené kontejnery…").clicked() {
+                if ui.button(t!("\u{EC54} Odstranit zastavené kontejnery…", "\u{EC54} Remove stopped containers…")).clicked() {
                     prune = true;
                     ui.close_menu();
                 }
@@ -49,7 +49,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         app.send(c);
     }
     if prune {
-        app.ask("Odstranit zastavené kontejnery?", "Všechny zastavené kontejnery budou smazány.", Cmd::PruneContainers);
+        app.ask(
+            t!("Odstranit zastavené kontejnery?", "Remove stopped containers?"),
+            t!("Všechny zastavené kontejnery budou smazány.", "All stopped containers will be deleted."),
+            Cmd::PruneContainers,
+        );
     }
     ui.add_space(8.0);
 
@@ -62,11 +66,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         if !f.is_empty() && !c.name().to_lowercase().contains(&f) && !c.image.to_lowercase().contains(&f) {
             continue;
         }
-        let key = c.project().map(|p| format!("\u{E466} {p}")).unwrap_or_else(|| "~Samostatné".into());
+        let key = c.project().map(|p| format!("\u{E466} {p}")).unwrap_or_else(|| t!("~Samostatné", "~Standalone").to_string());
         groups.entry(key).or_default().push(c.clone());
     }
     if groups.is_empty() {
-        ui.label(muted("Žádné kontejnery."));
+        ui.label(muted(t!("Žádné kontejnery.", "No containers.")));
     }
     for (g, list) in groups {
         let title = g.trim_start_matches('~');
@@ -77,12 +81,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         });
         let cols = [
             ("", W::Px(14.0)),
-            ("NÁZEV", W::Fr(2.2)),
+            (t!("NÁZEV", "NAME"), W::Fr(2.2)),
             ("IMAGE", W::Fr(2.0)),
-            ("PORTY", W::FrOpt(2.2)),
-            ("SÍŤ", W::FrOpt(1.2)),
-            ("STAV", W::Fr(1.6)),
-            ("AKCE", icons_w(6)),
+            (t!("PORTY", "PORTS"), W::FrOpt(2.2)),
+            (t!("SÍŤ", "NETWORK"), W::FrOpt(1.2)),
+            (t!("STAV", "STATE"), W::Fr(1.6)),
+            (t!("AKCE", "ACTIONS"), icons_w(6)),
         ];
         table(ui, &format!("grid-{g}"), &cols, |mut body| {
             for c in &list {
@@ -107,7 +111,7 @@ fn row(app: &mut App, r: &mut TableRow<'_>, c: &Container) {
         ui.label(c.networks().join(", "));
     });
     r.col(|ui| {
-        let tip = format!("{}\nvytvořen {}", c.status, fmt_ago(c.created));
+        let tip = tf!("{}\nvytvořen {}", "{}\ncreated {}", c.status, fmt_ago(c.created));
         let resp = ui
             .vertical(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 2.0);
@@ -129,32 +133,35 @@ fn row(app: &mut App, r: &mut TableRow<'_>, c: &Container) {
         let id = c.id.clone();
         let name = c.name();
         if c.paused() {
-            if icon(ui, "\u{E3D2}", "Obnovit (unpause)") {
+            if icon(ui, "\u{E3D2}", t!("Obnovit (unpause)", "Resume (unpause)")) {
                 app.send(Cmd::Container(id.clone(), "unpause"));
             }
         } else if c.running() {
-            if icon(ui, "\u{E46C}", "Zastavit") {
+            if icon(ui, "\u{E46C}", t!("Zastavit", "Stop")) {
                 app.send(Cmd::Container(id.clone(), "stop"));
             }
-            if icon(ui, "\u{E094}", "Restartovat") {
+            if icon(ui, "\u{E094}", t!("Restartovat", "Restart")) {
                 app.send(Cmd::Container(id.clone(), "restart"));
             }
-            if icon(ui, "\u{E39E}", "Pozastavit") {
+            if icon(ui, "\u{E39E}", t!("Pozastavit", "Pause")) {
                 app.send(Cmd::Container(id.clone(), "pause"));
             }
-            if icon(ui, "\u{EAE8}", "Konzole (Windows Terminal)") {
+            if icon(ui, "\u{EAE8}", t!("Konzole (Windows Terminal)", "Console (Windows Terminal)")) {
                 app.send(Cmd::Terminal(Term::Container { id: id.clone(), name: name.clone() }));
             }
-        } else if icon(ui, "\u{E3D0}", "Spustit") {
+        } else if icon(ui, "\u{E3D0}", t!("Spustit", "Start")) {
             app.send(Cmd::Container(id.clone(), "start"));
         }
-        if icon(ui, "\u{EB7A}", "Logy") {
+        if icon(ui, "\u{EB7A}", t!("Logy", "Logs")) {
             app.open_logs(id.clone(), name.clone());
         }
-        if icon(ui, "\u{E4A6}", "Odstranit") {
+        if icon(ui, "\u{E4A6}", t!("Odstranit", "Remove")) {
             app.ask(
-                format!("Odstranit {name}?"),
-                "Kontejner bude zastaven a smazán (pojmenované volume zůstanou).",
+                tf!("Odstranit {name}?", "Remove {name}?"),
+                t!(
+                    "Kontejner bude zastaven a smazán (pojmenované volume zůstanou).",
+                    "The container will be stopped and deleted (named volumes are kept)."
+                ),
                 Cmd::Container(id.clone(), "remove"),
             );
         }
@@ -174,9 +181,9 @@ pub fn cz_duration(s: &str) -> String {
     let s = s.trim();
     match s {
         "" => return String::new(),
-        "Less than a second" => return "méně než 1 s".into(),
-        "About a minute" => return "asi 1 min".into(),
-        "About an hour" => return "asi 1 h".into(),
+        "Less than a second" => return t!("méně než 1 s", "less than 1 s").into(),
+        "About a minute" => return t!("asi 1 min", "about 1 min").into(),
+        "About an hour" => return t!("asi 1 h", "about 1 h").into(),
         _ => {}
     }
     let mut it = s.split_whitespace();
@@ -186,9 +193,9 @@ pub fn cz_duration(s: &str) -> String {
         "minute" => "min",
         "hour" => "h",
         "day" => "d",
-        "week" => "týd.",
-        "month" => "měs.",
-        "year" => "r.",
+        "week" => t!("týd.", "wk"),
+        "month" => t!("měs.", "mo"),
+        "year" => t!("r.", "yr"),
         _ => return s.to_string(),
     };
     format!("{n} {u}")
@@ -198,11 +205,11 @@ pub fn cz_duration(s: &str) -> String {
 /// „Up 2 hours (healthy)“) na český štítek, barvu a doplňující text.
 pub fn state_info(state: &str, status: &str) -> StateInfo {
     let health = if status.contains("(healthy)") {
-        Some(("zdravý".to_string(), theme::GREEN))
+        Some((t!("zdravý", "healthy").to_string(), theme::GREEN))
     } else if status.contains("(unhealthy)") {
-        Some(("nezdravý".to_string(), theme::RED))
+        Some((t!("nezdravý", "unhealthy").to_string(), theme::RED))
     } else if status.contains("health: starting") {
-        Some(("startuje".to_string(), theme::YELLOW))
+        Some((t!("startuje", "starting").to_string(), theme::YELLOW))
     } else {
         None
     };
@@ -213,9 +220,9 @@ pub fn state_info(state: &str, status: &str) -> StateInfo {
         cz_duration(rest)
     };
     let (label, color, detail) = match state {
-        "running" => ("Běží".to_string(), theme::GREEN, format!("běží {}", up_for())),
-        "paused" => ("Pozastaven".to_string(), theme::YELLOW, format!("běží {}", up_for())),
-        "restarting" => ("Restartuje".to_string(), theme::YELLOW, String::new()),
+        "running" => (t!("Běží", "Running").to_string(), theme::GREEN, tf!("běží {}", "up {}", up_for())),
+        "paused" => (t!("Pozastaven", "Paused").to_string(), theme::YELLOW, tf!("běží {}", "up {}", up_for())),
+        "restarting" => (t!("Restartuje", "Restarting").to_string(), theme::YELLOW, String::new()),
         "exited" => {
             // „Exited (1) 6 seconds ago“
             let code = status
@@ -228,22 +235,22 @@ pub fn state_info(state: &str, status: &str) -> StateInfo {
                 .map(|(_, r)| r.trim().trim_end_matches(" ago"))
                 .map(cz_duration)
                 .unwrap_or_default();
-            let detail = if ago.is_empty() { String::new() } else { format!("ukončen před {ago}") };
+            let detail = if ago.is_empty() { String::new() } else { tf!("ukončen před {ago}", "exited {ago} ago") };
             if code.is_empty() || code == "0" {
-                ("Zastaven".to_string(), theme::GREY, detail)
+                (t!("Zastaven", "Stopped").to_string(), theme::GREY, detail)
             } else {
                 let why = match code.as_str() {
-                    "137" => " – zabit (SIGKILL / nedostatek paměti)",
-                    "143" => " – ukončen (SIGTERM)",
-                    "139" => " – pád (SIGSEGV)",
+                    "137" => t!(" – zabit (SIGKILL / nedostatek paměti)", " – killed (SIGKILL / out of memory)"),
+                    "143" => t!(" – ukončen (SIGTERM)", " – terminated (SIGTERM)"),
+                    "139" => t!(" – pád (SIGSEGV)", " – crashed (SIGSEGV)"),
                     _ => "",
                 };
-                (format!("Chyba ({code})"), theme::RED, format!("{detail}{why}"))
+                (tf!("Chyba ({code})", "Error ({code})"), theme::RED, format!("{detail}{why}"))
             }
         }
-        "created" => ("Vytvořen".to_string(), theme::GREY, "zatím nespuštěn".to_string()),
-        "dead" => ("Mrtvý".to_string(), theme::RED, String::new()),
-        "removing" => ("Odstraňuje se".to_string(), theme::YELLOW, String::new()),
+        "created" => (t!("Vytvořen", "Created").to_string(), theme::GREY, t!("zatím nespuštěn", "not started yet").to_string()),
+        "dead" => (t!("Mrtvý", "Dead").to_string(), theme::RED, String::new()),
+        "removing" => (t!("Odstraňuje se", "Removing").to_string(), theme::YELLOW, String::new()),
         other => (other.to_string(), theme::GREY, String::new()),
     };
     StateInfo { label, color, detail, health }
@@ -292,23 +299,23 @@ pub fn run_dialog(app: &mut App, ctx: &egui::Context) {
     let mut cancel = false;
     let nets: Vec<String> = app.snap.networks.iter().map(|n| n.name.clone()).collect();
     let vols: Vec<String> = app.snap.volumes.iter().map(|v| v.name.clone()).collect();
-    let (_, close) = modal(ctx, "run-dialog", "Spustit kontejner", 500.0, |ui| {
+    let (_, close) = modal(ctx, "run-dialog", t!("Spustit kontejner", "Run container"), 500.0, |ui| {
             let r = &mut app.run;
             egui::Grid::new("runform").num_columns(2).spacing([14.0, 10.0]).show(ui, |ui| {
                 ui.label("Image *");
                 ui.add(field(&mut r.image).hint_text("nginx:alpine").desired_width(360.0));
                 ui.end_row();
-                ui.label("Název");
-                ui.add(field(&mut r.name).hint_text("volitelné").desired_width(360.0));
+                ui.label(t!("Název", "Name"));
+                ui.add(field(&mut r.name).hint_text(t!("volitelné", "optional")).desired_width(360.0));
                 ui.end_row();
-                ui.label("Porty");
+                ui.label(t!("Porty", "Ports"));
                 ui.add(field(&mut r.ports).hint_text("8080:80, 127.0.0.1:5432:5432").desired_width(360.0));
                 ui.end_row();
-                ui.label("Proměnné");
-                ui.add(area(&mut r.env).hint_text("KLIC=hodnota (řádek = 1)").desired_rows(3).desired_width(360.0));
+                ui.label(t!("Proměnné", "Variables"));
+                ui.add(area(&mut r.env).hint_text(t!("KLIC=hodnota (řádek = 1)", "KEY=value (one per line)")).desired_rows(3).desired_width(360.0));
                 ui.end_row();
                 ui.label("Volume");
-                ui.add(area(&mut r.volumes).hint_text("data:/var/lib/data (řádek = 1)").desired_rows(2).desired_width(360.0));
+                ui.add(area(&mut r.volumes).hint_text(t!("data:/var/lib/data (řádek = 1)", "data:/var/lib/data (one per line)")).desired_rows(2).desired_width(360.0));
                 ui.end_row();
                 // výběr existujícího volume (sdílení mezi kontejnery)
                 ui.label("");
@@ -316,19 +323,22 @@ pub fn run_dialog(app: &mut App, ctx: &egui::Context) {
                     let (vname, vpath, vro) = &mut app.run_vol;
                     egui::ComboBox::from_id_salt("runvol")
                         .width(130.0)
-                        .selected_text(if vname.is_empty() { "existující volume…" } else { vname.as_str() })
+                        .selected_text(if vname.is_empty() { t!("existující volume…", "existing volume…") } else { vname.as_str() })
                         .show_ui(ui, |ui| {
                             if vols.is_empty() {
-                                ui.label(muted("žádné volume – napiš nový název do pole výše"));
+                                ui.label(muted(t!(
+                                    "žádné volume – napiš nový název do pole výše",
+                                    "no volumes – type a new name in the field above"
+                                )));
                             }
                             for v in &vols {
                                 ui.selectable_value(vname, v.clone(), v);
                             }
                         });
-                    ui.add(field(vpath).hint_text("/data").desired_width(95.0)).on_hover_text("Cesta uvnitř kontejneru");
-                    ui.checkbox(vro, "jen čtení");
+                    ui.add(field(vpath).hint_text("/data").desired_width(95.0)).on_hover_text(t!("Cesta uvnitř kontejneru", "Path inside the container"));
+                    ui.checkbox(vro, t!("jen čtení", "read-only"));
                     let ok = !vname.is_empty() && vpath.trim().starts_with('/');
-                    if ui.add_enabled(ok, egui::Button::new("\u{E3D4} Přidat")).clicked() {
+                    if ui.add_enabled(ok, egui::Button::new(t!("\u{E3D4} Přidat", "\u{E3D4} Add"))).clicked() {
                         let target = vpath.trim().to_string();
                         let line = format!("{}:{}{}", vname, target, if *vro { ":ro" } else { "" });
                         // stejná cesta v kontejneru může být připojená jen jednou – starý řádek nahradit
@@ -349,11 +359,11 @@ pub fn run_dialog(app: &mut App, ctx: &egui::Context) {
                     }
                 });
                 ui.end_row();
-                ui.label("Síť");
+                ui.label(t!("Síť", "Network"));
                 egui::ComboBox::from_id_salt("runnet")
-                    .selected_text(if r.network.is_empty() { "výchozí (bridge)" } else { r.network.as_str() })
+                    .selected_text(if r.network.is_empty() { t!("výchozí (bridge)", "default (bridge)") } else { r.network.as_str() })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut r.network, String::new(), "výchozí (bridge)");
+                        ui.selectable_value(&mut r.network, String::new(), t!("výchozí (bridge)", "default (bridge)"));
                         for n in &nets {
                             ui.selectable_value(&mut r.network, n.clone(), n);
                         }
@@ -366,12 +376,15 @@ pub fn run_dialog(app: &mut App, ctx: &egui::Context) {
                     }
                 });
                 ui.end_row();
-                ui.label("Příkaz");
+                ui.label(t!("Příkaz", "Command"));
                 ui.horizontal(|ui| {
-                    ui.add(field(&mut r.command).hint_text("volitelné").desired_width(250.0));
+                    ui.add(field(&mut r.command).hint_text(t!("volitelné", "optional")).desired_width(250.0));
                     if ui
                         .button("sleep infinity")
-                        .on_hover_text("Udrží kontejner běžící na pozadí (pro image bez vlastní služby: alpine, ubuntu, debian…)")
+                        .on_hover_text(t!(
+                            "Udrží kontejner běžící na pozadí (pro image bez vlastní služby: alpine, ubuntu, debian…)",
+                            "Keeps the container running in the background (for images without their own service: alpine, ubuntu, debian…)"
+                        ))
                         .clicked()
                     {
                         r.command = "sleep infinity".into();
@@ -379,8 +392,14 @@ pub fn run_dialog(app: &mut App, ctx: &egui::Context) {
                 });
                 ui.end_row();
                 ui.label("");
-                ui.checkbox(&mut r.interactive, "Interaktivně v terminálu (-it, po ukončení se smaže)")
-                    .on_hover_text("Otevře Windows Terminal se shellem kontejneru – vhodné pro alpine, ubuntu, busybox…");
+                ui.checkbox(
+                    &mut r.interactive,
+                    t!("Interaktivně v terminálu (-it, po ukončení se smaže)", "Interactive in terminal (-it, removed on exit)"),
+                )
+                .on_hover_text(t!(
+                    "Otevře Windows Terminal se shellem kontejneru – vhodné pro alpine, ubuntu, busybox…",
+                    "Opens Windows Terminal with a shell in the container – good for alpine, ubuntu, busybox…"
+                ));
                 ui.end_row();
             });
             // image bez vlastní služby (alpine, ubuntu…) spuštěný na pozadí bez příkazu hned skončí
@@ -392,8 +411,9 @@ pub fn run_dialog(app: &mut App, ctx: &egui::Context) {
             {
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new(format!(
-                        "\u{E4E0} {base} nemá vlastní službu – na pozadí bez příkazu hned skončí. Zaškrtni „Interaktivně“ nebo dej příkaz (sleep infinity)."
+                    RichText::new(tf!(
+                        "\u{E4E0} {base} nemá vlastní službu – na pozadí bez příkazu hned skončí. Zaškrtni „Interaktivně“ nebo dej příkaz (sleep infinity).",
+                        "\u{E4E0} {base} has no service of its own – in the background without a command it exits immediately. Tick “Interactive” or set a command (sleep infinity)."
                     ))
                     .color(theme::YELLOW)
                     .small(),
@@ -408,7 +428,7 @@ pub fn run_dialog(app: &mut App, ctx: &egui::Context) {
                     ui.set_width(ui.available_width());
                     ui.add(egui::Label::new(RichText::new(r.args().join(" ")).monospace().small().color(theme::MUTED)).wrap());
                 });
-            let (ok, c) = dialog_buttons(ui, "\u{E3D0} Spustit", false, !r.image.trim().is_empty());
+            let (ok, c) = dialog_buttons(ui, t!("\u{E3D0} Spustit", "\u{E3D0} Run"), false, !r.image.trim().is_empty());
             submit = ok;
             cancel = c;
         });
