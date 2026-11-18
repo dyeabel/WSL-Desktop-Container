@@ -114,6 +114,8 @@ pub struct App {
     pub online: Option<Result<Vec<(String, String)>, String>>,
     /// otevřený dialog odinstalace: (engine, smazat data)
     pub uninstall: Option<(crate::engine::Engine, bool)>,
+    /// dialogy správy distribucí (odebrat, export, import, disk)
+    pub distro_dlg: ui::distros::DistroDialogs,
     /// stav instalace docker shimu (zjišťuje se na pozadí)
     pub shim: Arc<Mutex<Option<crate::shim_install::Status>>>,
     pub shim_checking: Arc<AtomicBool>,
@@ -216,6 +218,7 @@ impl App {
             hub: ui::images::HubState::default(),
             build: ui::build::BuildState::default(),
             uninstall: None,
+            distro_dlg: ui::distros::DistroDialogs::from_env(),
             add_distro: None,
             online: None,
             shim: Arc::new(Mutex::new(None)),
@@ -424,6 +427,7 @@ impl App {
                 Msg::BuildOutput(line) => ui::build::on_output(self, line),
                 Msg::BuildDone(r) => ui::build::on_done(self, r),
                 Msg::Inspect(id, r) => ui::detail::on_inspect(self, id, r),
+                Msg::DistroDisk(name, r) => ui::distros::on_disk(self, name, r),
                 Msg::ConfigChanged => {
                     if let Ok(c) = self.cfg.read() {
                         self.cfg_draft = c.clone();
@@ -680,6 +684,7 @@ impl App {
         ui::build::dialogs(self, ctx);
         ui::engine::uninstall_dialog(self, ctx);
         ui::settings::add_distro_dialog(self, ctx);
+        ui::distros::dialogs(self, ctx);
         ui::containers::run_dialog(self, ctx);
         ui::detail::window(self, ctx);
     }

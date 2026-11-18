@@ -415,3 +415,97 @@ fn live_tls_proxy() {
     assert!(!no_cert, "spojení bez klientského certifikátu prošlo");
     assert!(!plain, "HTTP bez TLS prošlo");
 }
+
+/// Správa distribucí: rootfs alpine (export kontejneru přes engine v WLS_DISTRO) -> wsl --import
+/// jako WLS-Test-Import, kontrola v `wsl -l -v`, disk (sparse, compact), export, unregister.
+/// Sahá jen na distribuci WLS-Test-Import. Stahuje alpine:3.20 (~3 MB).
+/// `WLS_DISTRO=Debian cargo test live_distro_manage -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn live_distro_manage() {
+    const NAME: &str = "WLS-Test-Import";
+    const CTR: &str = "wls-test-rootfs";
+    /// Úklid i při panice – odregistruje jen WLS-Test-* distribuci.
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            assert!(NAME.starts_with("WLS-Test-"));
+            if wsl::list().map(|l| l.iter().any(|d| d.name == NAME)).unwrap_or(false) {
+                let _ = wsl::terminate(NAME);
+                let _ = wsl::unregister(NAME);
+            }
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let engine_distro = distro();
+    let cfg = crate::config::Config::load();
+    let cli = cfg.engine.cli(cfg.port, cfg.tls);
+    let engine = |args: &[&str]| {
+        let mut v = cli.clone();
+        v.extend(args.iter().map(|s| s.to_string()));
+        wsl::run_owned(&engine_distro, None, None, &v)
+    };
+
+    let tmp = std::env::temp_dir().join(format!("wls-test-import-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let guard = Cleanup(tmp.clone());
+    if wsl::list().unwrap().iter().any(|d| d.name == NAME) {
+        let _ = wsl::unregister(NAME);
+    }
+
+    // 1) rootfs.tar z kontejneru alpine
+    let rootfs = tmp.join("rootfs.tar");
+    let _ = engine(&["rm", "-f", CTR]);
+    engine(&["create", "--name", CTR, "docker.io/library/alpine:3.20", "/bin/true"]).expect("create");
+    let lin = wsl::to_linux_path(&engine_distro, &rootfs.display().to_string()).expect("wslpath");
+    let exp = engine(&["export", "-o", &lin, CTR]);
+    let _ = engine(&["rm", "-f", CTR]);
+    exp.expect("container export");
+    let size = std::fs::metadata(&rootfs).expect("rootfs.tar").len();
+    eprintln!("rootfs.tar: {size} B");
+    assert!(size > 1_000_000, "rootfs.tar je podezřele malý");
+
+    // 2) import
+    let folder = tmp.join("disk");
+    let out = wsl::import(NAME, &folder.display().to_string(), &rootfs.display().to_string()).expect("import");
+    eprintln!("import: {}", out.trim());
+    let list = wsl::list().unwrap();
+    let d = list.iter().find(|d| d.name == NAME).expect("WLS-Test-Import v wsl -l -v");
+    eprintln!("wsl -l -v: {} {} v{}", d.name, d.state, d.version);
+    let rel = wsl::run(NAME, Some("root"), None, &["cat", "/etc/alpine-release"]).expect("run");
+    eprintln!("alpine-release: {}", rel.trim());
+    assert!(rel.trim().starts_with("3.20"), "{rel}");
+
+    // 3) disk
+    let vhd = wsl::vhd_path(NAME).expect("vhd_path");
+    eprintln!("vhd: {} ({} B)", vhd.display(), std::fs::metadata(&vhd).map(|m| m.len()).unwrap_or(0));
+    assert!(vhd.starts_with(&folder), "{}", vhd.display());
+    let meta = || std::fs::metadata(&vhd).map(|m| (m.len(), wsl::is_sparse(&m))).unwrap_or_default();
+    eprintln!("manage support (sparse, compact): {:?}", wsl::manage_support());
+    eprintln!("disk (size, sparse) po importu: {:?}", meta());
+    let _ = wsl::terminate(NAME);
+    // zhuštěný disk komprimovat nejde – nejdřív vypnout sparse (jen v testu, přímým voláním)
+    // (na WSL 3.0.5 zůstává disk připojený k VM až do wsl --shutdown – ERROR_SHARING_VIOLATION
+    // i po 60 s; shutdown by zastavil i ostatní distribuce, proto se jen vypíše výsledek)
+    let o = wsl::hidden("wsl.exe").args(["--manage", NAME, "--set-sparse", "false"]).output().unwrap();
+    eprintln!("set-sparse false: {} {:?} -> {:?}", o.status.success(), wsl::decode(&o.stdout).trim(), meta());
+    let c = wsl::compact(NAME);
+    eprintln!("compact: {c:?} -> {:?}", meta());
+    let s = wsl::set_sparse(NAME);
+    eprintln!("set-sparse true: {s:?} -> {:?}", meta());
+    assert!(s.is_ok(), "{s:?}");
+    assert!(meta().1, "disk není sparse");
+
+    // 4) export (tar)
+    let out_tar = tmp.join("export.tar");
+    let out = wsl::export(NAME, &out_tar.display().to_string(), crate::wsl::ExportFormat::Tar).expect("export");
+    eprintln!("export: {} -> {} B", out.trim(), std::fs::metadata(&out_tar).map(|m| m.len()).unwrap_or(0));
+    assert!(std::fs::metadata(&out_tar).map(|m| m.len() > 1_000_000).unwrap_or(false));
+
+    // 5) unregister
+    let _ = wsl::terminate(NAME);
+    wsl::unregister(NAME).expect("unregister");
+    assert!(!wsl::list().unwrap().iter().any(|d| d.name == NAME), "distribuce zůstala registrovaná");
+    drop(guard);
+    assert!(!tmp.exists(), "dočasná složka zůstala");
+}

@@ -304,6 +304,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         if accent_button(ui, t!("\u{E3D4} Přidat distribuci…", "\u{E3D4} Add distribution…")).clicked() {
             super::settings::open_add_distro(app);
         }
+        if ui.button(t!("\u{E010} Importovat…", "\u{E010} Import…")).on_hover_text(t!("wsl --import ze souboru .tar / .vhdx", "wsl --import from a .tar / .vhdx file")).clicked() {
+            super::distros::open_import(app);
+        }
         if ui.button(t!("\u{E094} Obnovit", "\u{E094} Refresh")).clicked() {
             app.send(Cmd::Refresh);
         }
@@ -318,7 +321,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         (t!("DISTRIBUCE", "DISTRIBUTION"), W::Fr(2.0)),
         (t!("STAV", "STATE"), W::Fr(1.0)),
         ("WSL", W::Px(40.0)),
-        (t!("AKCE", "ACTIONS"), W::Px(250.0)),
+        (t!("AKCE", "ACTIONS"), W::Px(280.0)),
     ];
     table(ui, "distros", &cols, |mut body| {
         for d in &distros {
@@ -360,6 +363,21 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     app.cfg_draft.distro = d.name.clone();
                     app.save_config(c);
                 }
+                super::more_menu(ui, |ui| {
+                    if ui.button(t!("\u{EAF0} Exportovat…", "\u{EAF0} Export…")).clicked() {
+                        ui.close_menu();
+                        super::distros::open_export(app, &d.name);
+                    }
+                    if ui.button(t!("\u{E29E} Disk a komprimace…", "\u{E29E} Disk and compacting…")).clicked() {
+                        ui.close_menu();
+                        super::distros::open_disk(app, &d.name);
+                    }
+                    ui.separator();
+                    if ui.button(RichText::new(t!("\u{E4A6} Odebrat distribuci…", "\u{E4A6} Remove distribution…")).color(theme::RED)).clicked() {
+                        ui.close_menu();
+                        super::distros::open_remove(app, &d.name);
+                    }
+                });
             });
           });
         }
