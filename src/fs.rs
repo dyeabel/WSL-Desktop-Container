@@ -116,13 +116,18 @@ pub fn delete(distro: &str, root: bool, paths: &[String]) -> Result<String, Stri
 }
 
 pub fn copy(distro: &str, root: bool, sources: &[String], dest_dir: &str) -> Result<String, String> {
-    let mut a: Vec<&str> = vec!["cp", "-r", "--"];
+    // -P: symlinky kopírovat jako symlinky, --remove-destination: nepsat skrz existující symlink v cíli
+    let mut a: Vec<&str> = vec!["cp", "-rP", "--remove-destination", "--"];
     a.extend(sources.iter().map(|s| s.as_str()));
     a.push(dest_dir);
     run(distro, root, &a)
 }
 
 pub fn chmod(distro: &str, root: bool, mode: &str, path: &str) -> Result<String, String> {
+    if root {
+        // jako root neměnit práva cíle symlinku (třeba /etc/shadow) – F-10
+        return run(distro, root, &["sh", "-c", SAFE_CHMOD, "sh", mode, path]);
+    }
     run(distro, root, &["chmod", "--", mode, path])
 }
 
@@ -151,8 +156,23 @@ pub fn read_text(distro: &str, root: bool, path: &str) -> Result<String, String>
     String::from_utf8(out.stdout).map_err(|_| t!("Soubor není v UTF-8", "The file is not UTF-8").to_string())
 }
 
+/// chmod, který odmítne symlink.
+const SAFE_CHMOD: &str = r#"if [ -L "$2" ]; then echo "symlink – nezměněno: $2" >&2; exit 3; fi; exec chmod -- "$1" "$2""#;
+
+/// Zápis jako root: do dočasného souboru ve stejné složce a přejmenování přes cíl, takže se
+/// symlink nahradí, ne přepíše jeho cíl (F-10). Symlink rovnou odmítne; práva a vlastníka
+/// převezme z původního souboru.
+const SAFE_WRITE: &str = r#"f="$1"
+if [ -L "$f" ]; then echo "symlink – neuloženo: $f" >&2; exit 3; fi
+d=$(dirname -- "$f")
+t=$(mktemp "$d/.wls-edit.XXXXXX") || exit 1
+if ! cat > "$t"; then rm -f -- "$t"; exit 1; fi
+if [ -e "$f" ]; then chmod --reference="$f" -- "$t" 2>/dev/null; chown --reference="$f" -- "$t" 2>/dev/null; else chmod 644 -- "$t"; fi
+mv -fT -- "$t" "$f""#;
+
 pub fn write_text(distro: &str, root: bool, path: &str, text: &str) -> Result<String, String> {
-    wsl::run_stdin(distro, user(root), &["sh", "-c", "cat > \"$1\"", "sh", path], text)
+    let script = if root { SAFE_WRITE } else { "cat > \"$1\"" };
+    wsl::run_stdin(distro, user(root), &["sh", "-c", script, "sh", path], text)
 }
 
 #[cfg(test)]

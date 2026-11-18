@@ -24,9 +24,27 @@ mod wslconfig;
 #[cfg(test)]
 mod live_tests;
 
+/// Vytvoří pojmenovaný mutex pro aktuální relaci; false = aplikace už běží.
+/// Handle se záměrně nezavírá – mutex patří procesu až do jeho konce.
+#[cfg(windows)]
+fn single_instance() -> bool {
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    let name: Vec<u16> = "Local\\WLS-Desktop-single-instance".encode_utf16().chain(std::iter::once(0)).collect();
+    let h = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    !(h.is_null() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS)
+}
+
+#[cfg(not(windows))]
+fn single_instance() -> bool {
+    true
+}
+
 fn main() -> eframe::Result<()> {
-    // jen jedna instance: když už běží (třeba schovaná v tray), jen ji zobrazíme
-    if tray::activate_existing("WLS Desktop") {
+    // jen jedna instance: pojmenovaný mutex (okno se dá podvrhnout, F-14); když už běží
+    // (třeba schovaná v tray), jen zobrazíme její okno
+    if !single_instance() {
+        tray::activate_existing("WLS Desktop");
         return Ok(());
     }
     std::thread::spawn(|| {

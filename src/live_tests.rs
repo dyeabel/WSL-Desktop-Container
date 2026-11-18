@@ -418,3 +418,23 @@ fn live_tls_proxy() {
     assert!(!no_cert, "spojení bez klientského certifikátu prošlo");
     assert!(!plain, "HTTP bez TLS prošlo");
 }
+
+/// Operace jako root nesmí psát / měnit práva skrz symlink (F-10).
+#[test]
+#[ignore]
+fn live_fs_root_symlink_safe() {
+    let d = distro();
+    let dir = "/tmp/wls-test-fs-root";
+    let root = |a: &[&str]| wsl::run(&d, Some("root"), None, a);
+    root(&["sh", "-c", "rm -rf /tmp/wls-test-fs-root && mkdir /tmp/wls-test-fs-root && cd /tmp/wls-test-fs-root && echo tajne > secret && chmod 600 secret && ln -s secret link && echo a > plain && chmod 640 plain"]).unwrap();
+    let w = fs::write_text(&d, true, &format!("{dir}/link"), "pwned\n");
+    let c = fs::chmod(&d, true, "666", &format!("{dir}/link"));
+    let p = fs::write_text(&d, true, &format!("{dir}/plain"), "b\n");
+    let state = root(&["sh", "-c", "cd /tmp/wls-test-fs-root && cat secret && stat -c '%a %n' secret plain && cat plain && ls -a"]).unwrap();
+    let _ = root(&["rm", "-rf", dir]);
+    eprintln!("{w:?} {c:?} {p:?}\n{state}");
+    assert!(w.is_err() && c.is_err(), "{w:?} {c:?}");
+    assert!(p.is_ok(), "{p:?}");
+    assert!(state.contains("tajne") && state.contains("600 secret") && state.contains("640 plain") && state.contains("b\n"), "{state}");
+    assert!(!state.contains(".wls-edit"), "{state}");
+}

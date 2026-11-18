@@ -39,7 +39,15 @@ pub fn run_build(distro: &str, engine: Engine, port: u16, tls: bool, spec: &Buil
     }
     let args = spec.args_for(engine, port, tls);
     on_line(&format!("$ cd {ctx}"));
-    on_line(&format!("$ {}", args.join(" ")));
+    // hodnoty build argumentů s „tajnými“ názvy ve výpisu zamaskovat (F-11)
+    let shown: Vec<String> = args
+        .iter()
+        .map(|a| match a.split_once('=') {
+            Some((k, _)) if crate::inspect::is_secret(k) => format!("{k}=***"),
+            _ => a.clone(),
+        })
+        .collect();
+    on_line(&format!("$ {}", shown.join(" ")));
     let code = wsl::run_stream(distro, None, Some(&ctx), &args, &mut on_line)?;
     let tags = spec.tag_list();
     if code == 0 {

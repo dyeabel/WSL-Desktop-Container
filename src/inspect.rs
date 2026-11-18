@@ -102,7 +102,12 @@ fn strs(v: &Value, p: &str) -> Vec<String> {
 /// Klíč proměnné, jejíž hodnotu v přehledu skrýváme.
 pub fn is_secret(key: &str) -> bool {
     let k = key.to_ascii_uppercase();
-    ["PASS", "SECRET", "TOKEN", "KEY"].iter().any(|w| k.contains(w))
+    [
+        "PASS", "PWD", "SECRET", "TOKEN", "KEY", "AUTH", "CREDENTIAL", "PRIVATE", "DSN", "DATABASE_URL", "CONNECTION_STRING",
+        "COOKIE", "SESSION", "SALT", "SIGNATURE",
+    ]
+    .iter()
+    .any(|w| k.contains(w))
 }
 
 fn port_num(p: &str) -> u32 {

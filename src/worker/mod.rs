@@ -472,11 +472,18 @@ impl Worker {
                 .spawn()
                 .map(|_| String::new())
                 .map_err(|e| e.to_string()),
-            Cmd::Explorer(p) => std::process::Command::new("explorer.exe")
-                .arg(wsl::unc(&distro, &p))
-                .spawn()
-                .map(|_| String::new())
-                .map_err(|e| e.to_string()),
+            Cmd::Explorer(p) => {
+                // jen existující složka – cesta může pocházet z labelu kontejneru a explorer.exe
+                // by soubor rovnou otevřel přidruženým programem (F-05)
+                if wsl::run(&distro, None, None, &["test", "-d", &p]).is_err() {
+                    return Err(tf!("{p} není složka v {distro}", "{p} is not a folder in {distro}"));
+                }
+                std::process::Command::new("explorer.exe")
+                    .arg(wsl::unc(&distro, &p))
+                    .spawn()
+                    .map(|_| String::new())
+                    .map_err(|e| e.to_string())
+            }
             Cmd::Inspect(id) => self.inspect_detail(id),
             Cmd::Recreate { id, spec } => self.recreate(id, spec),
         }
