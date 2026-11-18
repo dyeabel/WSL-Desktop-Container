@@ -233,7 +233,7 @@ fn live_container_detail() {
 
     // logy (stejný stream jako okno logů)
     let mut logs = String::new();
-    d.stream_logs(&det.id, 10, |c| {
+    d.stream_logs(&det.id, &crate::docker::LogOpts::follow(10), |c, _| {
         logs.push_str(c);
         !logs.contains("hello detail")
     })
@@ -335,7 +335,7 @@ fn live_recreate_networks() {
     d.container_action(name, "start").expect("start");
     let wait_log = |id: &str| {
         let mut logs = String::new();
-        d.stream_logs(id, 10, |c| {
+        d.stream_logs(id, &crate::docker::LogOpts::follow(10), |c, _| {
             logs.push_str(c);
             !(logs.contains("found") || logs.contains("created"))
         })
@@ -965,4 +965,95 @@ fn live_run_env_file() {
     assert!(r.is_ok(), "{r:?}");
     assert!(env.iter().any(|e| e == "SECRET_TOKEN=tajne heslo=1") && env.iter().any(|e| e == "PLAIN=x"), "{env:?}");
     assert_eq!(left.trim(), "0");
+}
+
+/// Sloučené logy compose stacku: dva kontejnery s labely projektu `wls-test-logs` (jeden s TTY,
+/// druhý po pár řádcích zmlkne), stejné streamy jako okno logů stacku (`logbuf::Streams`),
+/// reorder buffer podle času a ukončení vláken po zastavení (i u mlčícího kontejneru).
+/// `WLS_DISTRO=Debian cargo test live_stack_logs -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn live_stack_logs() {
+    use crate::logbuf::{self, LogBuf, Streams, MAX_LINES, REORDER};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+    const PROJECT: &str = "wls-test-logs";
+    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let d = Docker::new(port);
+    assert!(d.ping(), "API na {port} neodpovídá");
+    let ver: serde_json::Value = d.get("/version").unwrap();
+    let podman = ver.to_string().contains("Podman");
+    let url = format!("tcp://127.0.0.1:{port}");
+    let cli: Vec<&str> = if podman { vec!["podman", "--url", &url] } else { vec!["docker", "-H", &url] };
+    let distro = distro();
+    let names = ["wls-test-logs-web", "wls-test-logs-worker"];
+    let cleanup = || {
+        for n in names {
+            let _ = d.container_action(n, "remove");
+        }
+    };
+    cleanup();
+    let run = |name: &str, svc: &str, tty: bool, script: &str| {
+        let (pl, sl) = (format!("com.docker.compose.project={PROJECT}"), format!("com.docker.compose.service={svc}"));
+        let mut a = cli.clone();
+        a.extend(["run", "-d", "--name", name, "--label", &pl, "--label", &sl]);
+        if tty {
+            a.push("-t");
+        }
+        a.extend(["docker.io/library/alpine:3.20", "sh", "-c", script]);
+        wsl::run(&distro, None, None, &a).unwrap_or_else(|e| panic!("run {name}: {e}"));
+    };
+    run(names[0], "web", false, "i=0; while [ $i -lt 400 ]; do i=$((i+1)); echo web line $i; sleep 0.2; done");
+    run(names[1], "worker", true, "i=0; while [ $i -lt 15 ]; do i=$((i+1)); echo worker line $i; sleep 0.13; done; sleep 600");
+    // historie pro tail (řádky obou služeb proložené v čase)
+    std::thread::sleep(Duration::from_millis(1500));
+
+    let snap = d.snapshot();
+    let targets = logbuf::stack_targets(&snap.containers, PROJECT);
+    eprintln!("targets: {:?}", targets.iter().map(|t| &t.1).collect::<Vec<_>>());
+    assert_eq!(targets.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["web", "worker"]);
+    let ids: Vec<String> = targets.iter().map(|t| t.0.clone()).collect();
+    let buf = Arc::new(Mutex::new(LogBuf::new(MAX_LINES, Some(REORDER))));
+    let streams = Streams::start(port, buf.clone(), &ids, 500);
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(100));
+        buf.lock().unwrap().flush(Instant::now());
+    }
+    // worker už mlčí -> jeho vlákno visí na čtení; skončit musí díky zavření spojení
+    let t = Instant::now();
+    let ended = streams.stop_and_join(Duration::from_secs(3));
+    eprintln!("vlákna skončila: {ended} za {:?}", t.elapsed());
+
+    let mut g = buf.lock().unwrap();
+    g.flush_all();
+    let lines: Vec<_> = g.iter().cloned().collect();
+    drop(g);
+    cleanup();
+    let svc_names = ["web".to_string(), "worker".to_string()];
+    let shown = logbuf::format_lines(lines.iter(), Some(&svc_names), true, logbuf::local_offset);
+    let all: Vec<&str> = shown.lines().collect();
+    eprintln!("{} řádků, prvních 8:\n{}\n…\nposlední 4:\n{}", all.len(), all[..8.min(all.len())].join("\n"), all[all.len().saturating_sub(4)..].join("\n"));
+
+    assert!(ended, "vlákna streamů po zastavení neskončila");
+    let web = lines.iter().filter(|l| l.src == 0).count();
+    let worker = lines.iter().filter(|l| l.src == 1).count();
+    eprintln!("web: {web}, worker: {worker}");
+    assert!(web >= 20, "web: {web}");
+    assert_eq!(worker, 15, "worker (TTY) má poslat přesně 15 řádků");
+    assert!(lines.iter().all(|l| l.ts.is_some()), "řádek bez času: {:?}", lines.iter().find(|l| l.ts.is_none()));
+    assert!(lines.iter().all(|l| l.text.starts_with("web line ") || l.text.starts_with("worker line ")), "{lines:?}");
+    let ts: Vec<i64> = lines.iter().filter_map(|l| l.ts).collect();
+    assert!(ts.windows(2).all(|w| w[0] <= w[1]), "pořadí podle času není monotónní");
+    // služby jsou proložené (řazení podle času, ne podle streamu)
+    let switches = lines.windows(2).filter(|w| w[0].src != w[1].src).count();
+    eprintln!("přepnutí mezi službami: {switches}");
+    assert!(switches >= 4, "{switches}");
+    // pořadí řádků v rámci služby zůstalo
+    for (src, prefix) in [(0u16, "web line "), (1, "worker line ")] {
+        let nums: Vec<u32> = lines.iter().filter(|l| l.src == src).filter_map(|l| l.text.strip_prefix(prefix)?.trim().parse().ok()).collect();
+        assert!(nums.windows(2).all(|w| w[1] == w[0] + 1), "{prefix}{nums:?}");
+    }
+    let all_now: Vec<crate::docker::Container> = d.get("/containers/json?all=1").unwrap();
+    assert!(!all_now.iter().any(|c| c.name().starts_with("wls-test-logs-")), "úklid");
 }
