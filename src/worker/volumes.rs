@@ -199,7 +199,7 @@ impl Worker {
         if self.volume_exists(name) {
             return Err(tf!("Volume {name} už existuje", "Volume {name} already exists"));
         }
-        self.docker().post_json("/volumes/create", serde_json::json!({ "Name": name })).map(|_| ())
+        self.docker().post_json("/volumes/create", serde_json::json!({ "Name": name })).map(|_| ()).map_err(String::from)
     }
 
     fn remove_volume(&self, name: &str) {

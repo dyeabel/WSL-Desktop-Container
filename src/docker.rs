@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::io::Read;
 use std::time::Duration;
+pub use crate::error::ApiError;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Port {
@@ -542,54 +543,24 @@ impl Docker {
         format!("{}{}", self.base, p)
     }
 
-    fn err(e: ureq::Error) -> String {
-        match e {
-            ureq::Error::Status(code, r) => {
-                let body = r.into_string().unwrap_or_default();
-                let msg = serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
-                    .unwrap_or(body);
-                format!("HTTP {code}: {}", msg.trim())
-            }
-            ureq::Error::Transport(t) => t.to_string(),
-        }
+    fn err(e: ureq::Error) -> ApiError {
+        ApiError::from(e)
     }
 
-    pub fn get<T: DeserializeOwned>(&self, p: &str) -> Result<T, String> {
-        self.agent
-            .get(&self.url(p))
-            .call()
-            .map_err(Self::err)?
-            .into_json()
-            .map_err(|e| e.to_string())
+    pub fn get<T: DeserializeOwned>(&self, p: &str) -> Result<T, ApiError> {
+        Ok(self.agent.get(&self.url(p)).call()?.into_json()?)
     }
 
-    pub fn post(&self, p: &str) -> Result<String, String> {
-        self.agent
-            .post(&self.url(p))
-            .call()
-            .map_err(Self::err)?
-            .into_string()
-            .map_err(|e| e.to_string())
+    pub fn post(&self, p: &str) -> Result<String, ApiError> {
+        Ok(self.agent.post(&self.url(p)).call()?.into_string()?)
     }
 
-    pub fn post_json(&self, p: &str, body: Value) -> Result<String, String> {
-        self.agent
-            .post(&self.url(p))
-            .send_json(body)
-            .map_err(Self::err)?
-            .into_string()
-            .map_err(|e| e.to_string())
+    pub fn post_json(&self, p: &str, body: Value) -> Result<String, ApiError> {
+        Ok(self.agent.post(&self.url(p)).send_json(body)?.into_string()?)
     }
 
-    pub fn delete(&self, p: &str) -> Result<String, String> {
-        self.agent
-            .delete(&self.url(p))
-            .call()
-            .map_err(Self::err)?
-            .into_string()
-            .map_err(|e| e.to_string())
+    pub fn delete(&self, p: &str) -> Result<String, ApiError> {
+        Ok(self.agent.delete(&self.url(p)).call()?.into_string()?)
     }
 
     pub fn ping(&self) -> bool {
@@ -643,12 +614,12 @@ impl Docker {
             Err(e) => errs.push(e),
         }
         if !errs.is_empty() {
-            s.error = Some(errs.join("; "));
+            s.error = Some(errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "));
         }
         s
     }
 
-    pub fn container_action(&self, id: &str, action: &str) -> Result<String, String> {
+    pub fn container_action(&self, id: &str, action: &str) -> Result<String, ApiError> {
         match action {
             "remove" => self.delete(&format!("/containers/{id}?force=1")),
             "stop" | "restart" => self.post(&format!("/containers/{id}/{action}?t=10")),

@@ -9,6 +9,7 @@ mod config;
 mod docker;
 mod dpapi;
 mod engine;
+mod error;
 mod fs;
 mod icon_art;
 mod notify;

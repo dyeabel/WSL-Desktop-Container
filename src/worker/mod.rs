@@ -459,7 +459,7 @@ impl Worker {
                 if matches!(action, "stop" | "restart" | "kill" | "remove") {
                     self.mark_intended(&id);
                 }
-                d.container_action(&id, action).map(|_| String::new())
+                d.container_action(&id, action).map(|_| String::new()).map_err(String::from)
             }
             Cmd::PruneContainers => d.prune("containers", None),
             Cmd::Run(spec) => self.run_container(spec),
@@ -478,10 +478,10 @@ impl Worker {
                 self.send(Msg::HubTags(repo, r));
                 Ok(String::new())
             }
-            Cmd::RemoveImage(id) => d.delete(&format!("/images/{}", crate::docker::enc(&id))).map(|_| t!("Image odstraněn", "Image removed").into()),
+            Cmd::RemoveImage(id) => d.delete(&format!("/images/{}", crate::docker::enc(&id))).map(|_| t!("Image odstraněn", "Image removed").into()).map_err(String::from),
             Cmd::PruneImages { all } => d.prune("images", Some(if all { r#"{"dangling":["false"]}"# } else { r#"{"dangling":["true"]}"# })),
-            Cmd::CreateVolume(n) => d.post_json("/volumes/create", serde_json::json!({ "Name": n })).map(|_| tf!("Volume {n} vytvořen", "Volume {n} created")),
-            Cmd::RemoveVolume(n) => d.delete(&format!("/volumes/{}", crate::docker::enc(&n))).map(|_| tf!("Volume {n} odstraněn", "Volume {n} removed")),
+            Cmd::CreateVolume(n) => d.post_json("/volumes/create", serde_json::json!({ "Name": n })).map(|_| tf!("Volume {n} vytvořen", "Volume {n} created")).map_err(String::from),
+            Cmd::RemoveVolume(n) => d.delete(&format!("/volumes/{}", crate::docker::enc(&n))).map(|_| tf!("Volume {n} odstraněn", "Volume {n} removed")).map_err(String::from),
             Cmd::PruneVolumes => d.prune("volumes", Some(r#"{"all":["true"]}"#)),
             Cmd::VolumeSizes => self.volume_sizes(),
             Cmd::BackupVolume { volume, target, stop } => self.backup_volume(volume, target, stop),
@@ -489,8 +489,8 @@ impl Worker {
             Cmd::CloneVolume { from, to } => self.clone_volume(from, to),
             Cmd::CreateNetwork(n, drv) => d
                 .post_json("/networks/create", serde_json::json!({ "Name": n, "Driver": drv }))
-                .map(|_| tf!("Síť {n} vytvořena", "Network {n} created")),
-            Cmd::RemoveNetwork(id) => d.delete(&format!("/networks/{id}")).map(|_| t!("Síť odstraněna", "Network removed").into()),
+                .map(|_| tf!("Síť {n} vytvořena", "Network {n} created")).map_err(String::from),
+            Cmd::RemoveNetwork(id) => d.delete(&format!("/networks/{id}")).map(|_| t!("Síť odstraněna", "Network removed").into()).map_err(String::from),
             Cmd::PruneNetworks => d.prune("networks", None),
             Cmd::Compose { dir, project, args } => {
                 if args.iter().any(|a| matches!(a.as_str(), "down" | "stop" | "restart" | "rm" | "kill")) {

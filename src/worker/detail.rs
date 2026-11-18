@@ -88,13 +88,13 @@ fn find_by_name(d: &Docker, name: &str) -> Result<Option<String>, String> {
             Ok(v.get("Id").and_then(|i| i.as_str()).map(String::from))
         }
         Ok(_) => Ok(None),
-        Err(e) if e.starts_with("HTTP 404") => Ok(None),
-        Err(e) => Err(e),
+        Err(e) if e.is_not_found() => Ok(None),
+        Err(e) => Err(e.into()),
     }
 }
 
 fn rename(d: &Docker, id: &str, name: &str) -> Result<String, String> {
-    d.post(&format!("/containers/{id}/rename?name={}", enc(name)))
+    Ok(d.post(&format!("/containers/{id}/rename?name={}", enc(name)))?)
 }
 
 /// Pro živé testy: znovuvytvoření stejnou cestou jako z UI (bez běžícího workeru).
@@ -123,7 +123,7 @@ impl Worker {
             }
             Box::new(det)
         });
-        self.send(Msg::Inspect(id, r));
+        self.send(Msg::Inspect(id, r.map_err(String::from)));
         Ok(String::new())
     }
 
@@ -142,11 +142,11 @@ impl Worker {
         let resp = match d.post_json(&url, body.clone()) {
             Ok(r) => r,
             // image (třeba nový tag) ještě není stažený
-            Err(e) if e.starts_with("HTTP 404") || e.contains("No such image") || e.contains("image not known") => {
+            Err(e) if e.is_not_found() || e.to_string().contains("No such image") || e.to_string().contains("image not known") => {
                 d.pull(&spec.image)?;
                 d.post_json(&url, body)?
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(e.into()),
         };
         let nid = serde_json::from_str::<Value>(&resp)
             .ok()

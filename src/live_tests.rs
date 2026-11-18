@@ -350,7 +350,7 @@ fn live_build_image() {
     });
     eprintln!("=> {res:?} ({} řádků výstupu)", lines.len());
 
-    let img: Result<serde_json::Value, String> = d.get("/images/wls-test-build:latest/json");
+    let img: Result<serde_json::Value, crate::docker::ApiError> = d.get("/images/wls-test-build:latest/json");
     let removed = d.delete("/images/wls-test-build:latest");
     eprintln!("odstranění image: {removed:?}");
     let _ = std::fs::remove_dir_all(&dir);
