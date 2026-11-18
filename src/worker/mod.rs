@@ -138,7 +138,7 @@ pub enum Cmd {
     /// detail kontejneru (inspect) -> Msg::Inspect
     Inspect(String),
     /// znovu vytvořit kontejner (id) s novými parametry
-    Recreate { id: String, spec: RunSpec },
+    Recreate { id: String, spec: RunSpec, net: crate::inspect::NetEdit },
 }
 
 impl Cmd {
@@ -576,7 +576,7 @@ impl Worker {
                     .map_err(|e| e.to_string())
             }
             Cmd::Inspect(id) => self.inspect_detail(id),
-            Cmd::Recreate { id, spec } => self.recreate(id, spec),
+            Cmd::Recreate { id, spec, net } => self.recreate(id, spec, net),
         }
     }
 }

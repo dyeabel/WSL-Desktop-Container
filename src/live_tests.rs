@@ -244,7 +244,7 @@ fn live_container_detail() {
     let mut changed = r.clone();
     changed.env.push_str("\nB=2");
     changed.ports = "18082:80".into();
-    let res = crate::worker::recreate_for_test(cfg.clone(), &det.id, changed);
+    let res = crate::worker::recreate_for_test(cfg.clone(), &det.id, changed, det.net_edit(engine == Engine::Podman));
     eprintln!("recreate: {res:?}");
     assert!(res.is_ok(), "{res:?}");
     let new = inspect(name);
@@ -256,7 +256,7 @@ fn live_container_detail() {
 
     // nový kontejner hned skončí -> odstraní se a původní se vrátí a znovu spustí
     let bad = RunSpec { command: "false".into(), restart: "no".into(), ..new.to_run_spec() };
-    let res = crate::worker::recreate_for_test(cfg.clone(), &new.id, bad);
+    let res = crate::worker::recreate_for_test(cfg.clone(), &new.id, bad, new.net_edit(engine == Engine::Podman));
     eprintln!("recreate (fail): {res:?}");
     assert!(res.is_err());
     let back = inspect(name);
@@ -267,6 +267,128 @@ fn live_container_detail() {
     assert_eq!(all.iter().filter(|c| c.name().starts_with(name)).count(), 1);
 
     cleanup();
+}
+
+/// Znovuvytvoření zachová všechny sítě (aliasy, pevnou IP) i anonymní volume s daty.
+/// Pracuje jen s vlastními objekty `wls-test-recreate`, `wls-test-net-a`, `wls-test-net-b`
+/// a anonymními volume tohoto kontejneru.
+/// `WLS_DISTRO=Debian cargo test live_recreate_networks -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn live_recreate_networks() {
+    use crate::engine::Engine;
+    use serde_json::{json, Value};
+    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let d = Docker::new(port);
+    assert!(d.ping(), "API na {port} neodpovídá");
+    let ver: Value = d.get("/version").unwrap();
+    let engine = if ver.to_string().contains("Podman") { Engine::Podman } else { Engine::Docker };
+    let cfg = crate::config::Config { distro: distro(), engine, port, ..Default::default() };
+    let name = "wls-test-recreate";
+    let (net_a, net_b, ip_b) = ("wls-test-net-a", "wls-test-net-b", "10.231.77.50");
+    // anonymní volume našich kontejnerů (podle inspectu, ať se nesáhne na cizí)
+    let anon_of = |c: &str| -> Vec<String> {
+        d.get::<Value>(&format!("/containers/{c}/json"))
+            .ok()
+            .and_then(|v| v.get("Mounts").cloned())
+            .and_then(|m| m.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|m| m.get("Name").and_then(|n| n.as_str()).map(String::from))
+            .filter(|n| crate::inspect::is_anonymous_volume(n))
+            .collect()
+    };
+    let cleanup = |extra: &[String]| {
+        let mut vols: Vec<String> = extra.to_vec();
+        for c in [name, "wls-test-recreate-wls-old"] {
+            vols.extend(anon_of(c));
+            let _ = d.container_action(c, "remove");
+        }
+        for v in vols {
+            let _ = d.delete(&format!("/volumes/{v}"));
+        }
+        for n in [net_a, net_b] {
+            let _ = d.delete(&format!("/networks/{n}"));
+        }
+    };
+    cleanup(&[]);
+
+    d.post_json("/networks/create", json!({"Name": net_a})).expect("síť a");
+    d.post_json("/networks/create", json!({"Name": net_b, "IPAM": {"Config": [{"Subnet": "10.231.77.0/24"}]}})).expect("síť b");
+    // první běh zapíše soubor do anonymního volume, další běh ho najde a vypíše
+    let script = "if [ -f /anon/f.txt ]; then echo found $(cat /anon/f.txt); else echo keep-me > /anon/f.txt; echo created; fi; sleep 600";
+    let create = json!({
+        "Image": "docker.io/library/alpine:3.20",
+        "Cmd": ["sh", "-c", script],
+        "Env": ["A=1"],
+        "Volumes": {"/anon": {}},
+        "HostConfig": {"NetworkMode": net_a},
+        "NetworkingConfig": {"EndpointsConfig": {net_a: {"Aliases": ["web"]}}}
+    });
+    let url = format!("/containers/create?name={name}");
+    if d.post_json(&url, create.clone()).is_err() {
+        d.pull("alpine:3.20").expect("pull");
+        d.post_json(&url, create).expect("create");
+    }
+    d.post_json(&format!("/networks/{net_b}/connect"), json!({"Container": name, "EndpointConfig": {"Aliases": ["dbc"], "IPAMConfig": {"IPv4Address": ip_b}}}))
+        .expect("connect b");
+    d.container_action(name, "start").expect("start");
+    let wait_log = |id: &str| {
+        let mut logs = String::new();
+        d.stream_logs(id, 10, |c| {
+            logs.push_str(c);
+            !(logs.contains("found") || logs.contains("created"))
+        })
+        .expect("logs");
+        logs
+    };
+    let first = wait_log(name);
+    assert!(first.contains("created"), "{first}");
+
+    let inspect = |id: &str| {
+        let v: Value = d.get(&format!("/containers/{id}/json")).expect("inspect");
+        let mut det = crate::inspect::parse(&v);
+        let img: Value = d.get(&format!("/images/{}/json", crate::docker::enc(&det.image_id))).expect("image");
+        crate::inspect::set_image_defaults(&mut det, &img);
+        det
+    };
+    let det = inspect(name);
+    let anon = anon_of(name);
+    eprintln!("původní: nets={:?} anon={anon:?}", det.networks);
+    assert_eq!(anon.len(), 1, "{:?}", det.mounts);
+
+    // formulář jako v UI + změna proměnné
+    let mut spec = det.to_run_spec();
+    assert!(spec.volumes.is_empty(), "anonymní volume se ve formuláři neuvádí: {}", spec.volumes);
+    assert_eq!(det.anonymous_volumes(&spec.volumes).len(), 1);
+    spec.env.push_str("\nB=2");
+    let edit = det.net_edit(engine == Engine::Podman);
+    eprintln!("formulář: network={} edit={edit:?}", spec.network);
+    assert!(edit.pin.iter().any(|n| n == net_b), "{edit:?}");
+    let res = crate::worker::recreate_for_test(cfg.clone(), &det.id, spec, edit);
+    eprintln!("recreate: {res:?}");
+    assert!(res.is_ok(), "{res:?}");
+
+    let new = inspect(name);
+    eprintln!("nový: nets={:?} mounts={:?}", new.networks, new.mounts);
+    assert_ne!(new.id, det.id);
+    assert!(new.running, "{}", new.status);
+    assert!(new.env.iter().any(|(k, v)| k == "B" && v == "2"));
+    let a = new.networks.iter().find(|n| n.name == net_a).expect("síť a");
+    let b = new.networks.iter().find(|n| n.name == net_b).expect("síť b");
+    assert!(a.aliases.iter().any(|x| x == "web"), "{a:?}");
+    assert!(b.aliases.iter().any(|x| x == "dbc"), "{b:?}");
+    assert_eq!(b.ip, ip_b);
+    assert_eq!(anon_of(name), anon, "stejné anonymní volume");
+    let second = wait_log(name);
+    eprintln!("log nového: {second:?}");
+    assert!(second.contains("found keep-me"), "{second}");
+    assert!(d.get::<Value>("/containers/wls-test-recreate-wls-old/json").is_err());
+    // anonymní volume po odstranění starého kontejneru stále existuje
+    assert!(d.get::<Value>(&format!("/volumes/{}", anon[0])).is_ok());
+
+    cleanup(&anon);
+    assert!(d.get::<Value>(&format!("/volumes/{}", anon[0])).is_err(), "volume uklizeno");
 }
 
 #[test]

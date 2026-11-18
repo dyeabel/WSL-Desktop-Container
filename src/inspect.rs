@@ -43,6 +43,56 @@ pub struct NetInfo {
     pub ip6: String,
     pub mac: String,
     pub aliases: Vec<String>,
+    /// pevné adresy z `IPAMConfig` (Docker; Podman 5.4 je v inspectu nehlásí)
+    pub static_ip4: String,
+    pub static_ip6: String,
+}
+
+impl NetInfo {
+    /// Pevná adresa známá z inspectu (`IPAMConfig`).
+    pub fn has_static(&self) -> bool {
+        !self.static_ip4.is_empty() || !self.static_ip6.is_empty()
+    }
+}
+
+impl MountInfo {
+    /// Anonymní volume (z `VOLUME` v image nebo `-v /cesta`) – název je vygenerovaný hash.
+    pub fn is_anonymous(&self) -> bool {
+        self.typ == "volume" && is_anonymous_volume(&self.name)
+    }
+}
+
+/// Vygenerovaný název anonymního volume (64 hex znaků – Docker i Podman).
+pub fn is_anonymous_volume(name: &str) -> bool {
+    name.len() == 64 && name.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Výchozí síť enginu (Docker `bridge`, Podman `podman`) – nepodporuje aliasy ani pevné IP.
+pub fn is_default_net(name: &str) -> bool {
+    matches!(name, "bridge" | "podman" | "default")
+}
+
+/// Cíl v kontejneru z řádku `-v` (`zdroj:/cil[:volby]`, `/cil`, `C:\data:/cil`), bez koncového `/`.
+pub fn bind_dest(line: &str) -> String {
+    let parts: Vec<&str> = line.trim().split(':').collect();
+    let dest = match parts.as_slice() {
+        [d] => *d,
+        // windowsová cesta s písmenem disku
+        [drive, _, d, ..] if drive.len() == 1 && d.starts_with('/') => *d,
+        [_, d, ..] => *d,
+        [] => "",
+    };
+    let t = dest.trim_end_matches('/');
+    if t.is_empty() { dest.to_string() } else { t.to_string() }
+}
+
+/// Úpravy sítí pro „Znovu vytvořit“ (hlavní síť je `RunSpec::network`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NetEdit {
+    /// další původní sítě, ke kterým se nový kontejner připojí (vedle hlavní)
+    pub keep: Vec<String>,
+    /// sítě, ve kterých se zachová současná adresa (IP, IPv6, MAC), i když ji engine nehlásí jako pevnou
+    pub pin: Vec<String>,
 }
 
 /// Rozebraný výsledek inspect.
@@ -235,6 +285,8 @@ pub fn parse(v: &Value) -> Detail {
                 ip6: s(n, "/GlobalIPv6Address"),
                 mac: s(n, "/MacAddress"),
                 aliases: strs(n, "/Aliases"),
+                static_ip4: s(n, "/IPAMConfig/IPv4Address"),
+                static_ip6: s(n, "/IPAMConfig/IPv6Address"),
             });
         }
     }
@@ -299,10 +351,12 @@ impl Detail {
             .collect()
     }
 
-    /// Volume / bind mounty pro `-v`.
+    /// Volume / bind mounty pro `-v` (bez anonymních volume – ty se při znovuvytvoření
+    /// připojí samy, viz `anonymous_volumes`).
     pub fn volume_specs(&self) -> Vec<String> {
         self.mounts
             .iter()
+            .filter(|m| !m.is_anonymous())
             .filter_map(|m| {
                 let src = match m.typ.as_str() {
                     "volume" if !m.name.is_empty() => &m.name,
@@ -312,6 +366,43 @@ impl Detail {
                 Some(format!("{src}:{}{}", m.destination, if m.rw { "" } else { ":ro" }))
             })
             .collect()
+    }
+
+    /// Anonymní volume, které se při znovuvytvoření připojí podle názvu – ty, jejichž cíl
+    /// formulář (`volumes`) sám neuvádí.
+    pub fn anonymous_volumes(&self, volumes: &str) -> Vec<&MountInfo> {
+        let dests: Vec<String> = volumes.lines().filter(|l| !l.trim().is_empty()).map(bind_dest).collect();
+        self.mounts.iter().filter(|m| m.is_anonymous() && !dests.contains(&bind_dest(&m.destination))).collect()
+    }
+
+    /// Síťový režim bez vlastních sítí (host, none, container:…).
+    pub fn special_network_mode(&self) -> bool {
+        let m = self.network_mode.as_str();
+        m == "host" || m == "none" || m.starts_with("container:")
+    }
+
+    /// Výchozí úpravy sítí: zachovat všechny původní sítě a adresy, které jsou známé jako
+    /// pevné. Podman pevné adresy v inspectu nehlásí – u něj se současná adresa ponechá
+    /// ve všech vlastních sítích.
+    pub fn net_edit(&self, podman: bool) -> NetEdit {
+        if self.special_network_mode() {
+            return NetEdit::default();
+        }
+        let primary = self.network_for_spec();
+        NetEdit {
+            keep: self
+                .networks
+                .iter()
+                .map(|n| n.name.clone())
+                .filter(|n| *n != primary && !(primary.is_empty() && is_default_net(n)))
+                .collect(),
+            pin: self
+                .networks
+                .iter()
+                .filter(|n| !is_default_net(&n.name) && (n.has_static() || (podman && !n.ip.is_empty())))
+                .map(|n| n.name.clone())
+                .collect(),
+        }
     }
 
     /// Příkaz liší od výchozího z image.
