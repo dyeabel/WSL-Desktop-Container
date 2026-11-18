@@ -5,21 +5,37 @@
 //! Obslužné rutiny traye běží na hlavním vlákně (ve smyčce zpráv), takže
 //! položky nabídky (které nejsou Send) držíme v thread_local.
 
+pub mod menu_model;
+
 use crate::config::Config;
 use crate::worker::{Cmd, EngineStatus, Shared, Term};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use menu_model::{Action, Model};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 /// HWND hlavního okna (0 = neznámé).
 static HWND: AtomicIsize = AtomicIsize::new(0);
 
+/// Požadavek z traye na zobrazení stránky Kontejnery (Some = i detail kontejneru: id, název).
+/// Vyzvedne ho `App::handle_tray` v dalším snímku.
+static SHOW_REQUEST: Mutex<Option<Option<(String, String)>>> = Mutex::new(None);
+
+/// Vyzvedne požadavek „Zobrazit v aplikaci“ z traye.
+pub fn take_show_request() -> Option<Option<(String, String)>> {
+    SHOW_REQUEST.lock().ok().and_then(|mut g| g.take())
+}
+
 struct Handles {
     tray: TrayIcon,
     status: MenuItem,
+    /// podnabídka se seznamem kontejnerů
+    containers: Submenu,
+    /// model, podle kterého je podnabídka postavená (None = přestavět)
+    built: Option<Model>,
     start: MenuItem,
     stop: MenuItem,
     restart: MenuItem,
@@ -146,6 +162,7 @@ pub fn init(
 ) -> Result<(), String> {
     let c = cfg.read().map(|c| c.clone()).unwrap_or_default();
     let status = MenuItem::with_id("status", t!("Zjišťuji stav…", "Checking status…"), false, None);
+    let containers = Submenu::with_id("containers", t!("Kontejnery", "Containers"), true);
     let open = MenuItem::with_id("open", t!("Otevřít WLS Desktop", "Open WLS Desktop"), true, None);
     let start = MenuItem::with_id("start", t!("Spustit / probudit engine", "Start / wake engine"), true, None);
     let stop = MenuItem::with_id("stop", t!("Zastavit Docker", "Stop Docker"), true, None);
@@ -162,6 +179,7 @@ pub fn init(
     let menu = Menu::new();
     menu.append_items(&[
         &status,
+        &containers,
         &PredefinedMenuItem::separator(),
         &open,
         &PredefinedMenuItem::separator(),
@@ -197,6 +215,8 @@ pub fn init(
         *t.borrow_mut() = Some(Handles {
             tray,
             status,
+            containers,
+            built: None,
             start,
             stop,
             restart,
@@ -243,6 +263,16 @@ pub fn init(
             }
         };
         let distro = cfg.read().map(|c| c.distro.clone()).unwrap_or_default();
+        if let Some(cmd) = container_cmd(e.id.0.as_str()) {
+            match cmd {
+                Some(c) => send(c),
+                None => {
+                    show_window();
+                    ctx.request_repaint();
+                }
+            }
+            return;
+        }
         match e.id.0.as_str() {
             "open" => {
                 show_window();
@@ -275,12 +305,74 @@ pub fn init(
     Ok(())
 }
 
+/// Zpracuje položku podnabídky kontejnerů (`c:…`).
+/// `None` = cizí id; `Some(None)` = jen zobrazit okno (požadavek na stránku je uložený);
+/// `Some(Some(cmd))` = poslat příkaz workeru.
+fn container_cmd(menu_id: &str) -> Option<Option<Cmd>> {
+    if menu_id == menu_model::MORE_ID {
+        if let Ok(mut g) = SHOW_REQUEST.lock() {
+            *g = Some(None);
+        }
+        return Some(None);
+    }
+    let (action, id) = menu_model::decode(menu_id)?;
+    if let Some(a) = action.container_action() {
+        // stop/restart/… přes Cmd::Container – worker je označí jako akci uživatele (notifikace)
+        return Some(Some(Cmd::Container(id.to_string(), a)));
+    }
+    let name = TRAY
+        .with(|t| t.borrow().as_ref().and_then(|h| h.built.as_ref()?.name_of(id).map(str::to_string)))
+        .unwrap_or_else(|| crate::docker::short_id(id).to_string());
+    let id = id.to_string();
+    Some(match action {
+        Action::Logs => Some(Cmd::Terminal(Term::Logs { id, name })),
+        Action::Console => Some(Cmd::Terminal(Term::Container { id, name })),
+        _ => {
+            if let Ok(mut g) = SHOW_REQUEST.lock() {
+                *g = Some(Some((id, name)));
+            }
+            None
+        }
+    })
+}
+
+/// Přestaví podnabídku kontejnerů, pokud se změnil model (sada kontejnerů nebo jejich stavy).
+fn refresh_containers(h: &mut Handles, connected: bool) {
+    let items = h.shared.tray_containers.lock().map(|v| v.clone()).unwrap_or_default();
+    let model = Model::build(connected, &items);
+    if h.built.as_ref().map(Model::signature) == Some(model.signature()) {
+        return;
+    }
+    let sub = &h.containers;
+    sub.set_text(model.title());
+    while sub.remove_at(0).is_some() {}
+    if let Some(text) = model.placeholder() {
+        let _ = sub.append(&MenuItem::with_id("c:none", text, false, None));
+    }
+    for item in &model.entries {
+        let entry = Submenu::new(item.label(), true);
+        for a in item.actions() {
+            if a == Action::Logs {
+                let _ = entry.append(&PredefinedMenuItem::separator());
+            }
+            let _ = entry.append(&MenuItem::with_id(menu_model::encode(a, &item.id), a.label(), true, None));
+        }
+        let _ = sub.append(&entry);
+    }
+    if model.more > 0 {
+        let _ = sub.append(&PredefinedMenuItem::separator());
+        let _ = sub.append(&MenuItem::with_id(menu_model::MORE_ID, model.more_label(), true, None));
+    }
+    h.built = Some(model);
+}
+
 /// Promítne aktuální stav enginu do ikony, tooltipu a nabídky (jen při změně).
 pub fn refresh() {
     TRAY.with(|t| {
         let mut b = t.borrow_mut();
         let Some(h) = b.as_mut() else { return };
         let st = h.shared.status.lock().map(|s| s.clone()).unwrap_or_default();
+        refresh_containers(h, st.connected);
         if h.last.as_ref() == Some(&st) {
             return;
         }
@@ -330,8 +422,9 @@ pub fn retranslate() {
             h.close_tray.set_text(t!("Zavírat do oznamovací oblasti", "Close to tray"));
             h.min_tray.set_text(t!("Minimalizovat do oznamovací oblasti", "Minimize to tray"));
             h.quit.set_text(t!("Ukončit", "Quit"));
-            // stavové texty a tooltip se přepočítají
+            // stavové texty, tooltip a podnabídka kontejnerů se přepočítají
             h.last = None;
+            h.built = None;
         }
     });
     refresh();

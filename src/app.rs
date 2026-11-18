@@ -243,6 +243,13 @@ impl App {
     /// Zavření / minimalizace do tray a synchronizace stavu traye.
     fn handle_tray(&mut self, ctx: &egui::Context) {
         crate::tray::refresh();
+        // „Zobrazit v aplikaci“ / „… a N dalších“ z podnabídky kontejnerů v trayi
+        if let Some(req) = crate::tray::take_show_request() {
+            self.page = Page::Containers;
+            if let Some((id, name)) = req {
+                ui::detail::open(self, ctx, id, name);
+            }
+        }
         let (close_to_tray, min_to_tray, start_hidden) = self
             .cfg
             .read()
