@@ -1,6 +1,7 @@
 //! Rychlá cesta shimu: jednoduché příkazy jen pro čtení (`ps`, `images`, `volume ls`,
-//! `network ls`, `version --format`, `info --format`) odpoví přímo z REST API enginu,
-//! bez spouštění `wsl.exe` (to stojí ~0,1–0,3 s).
+//! `network ls` – i s filtry a `--format json`, `inspect` / `container inspect` /
+//! `image inspect`, `logs` bez `-f`, `version --format`, `info --format`) odpoví přímo
+//! z REST API enginu, bez spouštění `wsl.exe` (to stojí ~0,1–0,3 s).
 //!
 //! Výstup napodobuje **Docker CLI** (shim se za něj vydává), ne `podman`:
 //! tabulka přes tabwriter (min. šířka 10, odsazení 3), 12znaková ID, COMMAND v uvozovkách
@@ -15,7 +16,11 @@
 //! - `docker images` má klasický tabulkový výstup (ne stromový pohled novějších CLI);
 //! - pořadí kontejnerů a obrazů je podle data vytvoření (nejnovější první), jak je vrací Docker;
 //! - zkratka časové zóny v `CreatedAt` se bere z tabulky podle názvu zóny Windows;
-//! - Podman v kompatibilním API přejmenovává síť `podman` na `bridge`.
+//! - Podman v kompatibilním API přejmenovává síť `podman` na `bridge`;
+//! - `inspect` vypisuje „raw“ JSON z API (jako Docker CLI bez šablony); `{{json .}}` je
+//!   kompaktní raw JSON, takže pořadí klíčů je podle enginu, ne podle struktur Dockeru;
+//!   pole šablon jen skalární (`{{.State.Pid}}`), mapy / pole / null -> CLI;
+//! - `logs`: `-n` znamená `--tail` jako v Docker CLI (Podman CLI by ho bral jako `--names`).
 
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -774,6 +779,10 @@ pub const IMAGE_HEADERS: &[(&str, &str)] = &[
     ("CreatedAt", "CREATED AT"),
     ("Size", "SIZE"),
     ("Containers", "CONTAINERS"),
+    ("Digest", "DIGEST"),
+    ("SharedSize", "SHARED SIZE"),
+    ("UniqueSize", "UNIQUE SIZE"),
+    ("VirtualSize", "VIRTUAL SIZE"),
 ];
 const IMAGE_TABLE: &str = r"{{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.CreatedSince}}\t{{.Size}}";
 
@@ -783,23 +792,29 @@ pub struct ImageRow {
     pub id: String,
     pub created: i64,
     pub size: i64,
+    pub shared: i64,
     pub containers: i64,
+    /// `<none>` u řádků s tagem a visících obrazů, prázdné u řádků jen s digestem
+    pub digest: String,
 }
 
-/// Řádky jako `docker images`: jeden na tag; obraz jen s digestem má tag `<none>`.
+/// Řádky jako `docker images` (bez `--digests`): jeden na tag; repozitář jen s digestem
+/// má jeden řádek s tagem `<none>` a prázdným digestem; visící obraz `<none>`/`<none>`.
 pub fn image_rows(images: &[Value]) -> Vec<ImageRow> {
     let mut imgs: Vec<&Value> = images.iter().collect();
     imgs.sort_by_key(|i| std::cmp::Reverse(n(i, "Created")));
     let mut out = Vec::new();
     for i in imgs {
         let strs = |k: &str| -> Vec<String> { i.get(k).and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() };
-        let row = |repo: &str, tag: &str| ImageRow {
+        let row = |repo: &str, tag: &str, digest: &str| ImageRow {
             repo: repo.to_string(),
             tag: tag.to_string(),
             id: s(i, "Id").to_string(),
             created: n(i, "Created"),
             size: n(i, "Size"),
+            shared: i.get("SharedSize").and_then(|c| c.as_i64()).unwrap_or(-1),
             containers: i.get("Containers").and_then(|c| c.as_i64()).unwrap_or(-1),
+            digest: digest.to_string(),
         };
         let (tags, digests) = (strs("RepoTags"), strs("RepoDigests"));
         let mut repos: Vec<(String, Vec<String>)> = Vec::new();
@@ -824,18 +839,15 @@ pub fn image_rows(images: &[Value]) -> Vec<ImageRow> {
         let before = out.len();
         for (repo, ts) in &repos {
             for t in ts {
-                out.push(row(repo, t));
+                out.push(row(repo, t, "<none>"));
             }
         }
         for repo in &digest_repos {
-            // jeden řádek na digest
-            let cnt = digests.iter().filter(|d| split_ref(d).is_some_and(|(nm, _, dg)| dg.is_some() && familiar_name(&nm) == *repo)).count();
-            for _ in 0..cnt {
-                out.push(row(repo, "<none>"));
-            }
+            // bez --digests jeden řádek na repozitář (Docker CLI 27: addImage(repo, "<none>", ""))
+            out.push(row(repo, "<none>", ""));
         }
         if out.len() == before {
-            out.push(row("<none>", "<none>"));
+            out.push(row("<none>", "<none>", "<none>"));
         }
     }
     out
@@ -856,18 +868,42 @@ pub fn image_field(r: &ImageRow, f: &str, x: &Ctx) -> String {
         "Containers" => {
             if r.containers == -1 { "N/A".into() } else { r.containers.to_string() }
         }
+        "Digest" => r.digest.clone(),
+        "SharedSize" => {
+            if r.shared == -1 { "N/A".into() } else { human_size(r.shared as f64, 4) }
+        }
+        "UniqueSize" => {
+            if r.shared == -1 || r.size == -1 { "N/A".into() } else { human_size((r.size - r.shared) as f64, 4) }
+        }
+        "VirtualSize" => human_size(r.size as f64, 4),
         _ => String::new(),
     }
 }
 
 // ================================================================ volume / network
 
-pub const VOLUME_HEADERS: &[(&str, &str)] = &[("Name", "VOLUME NAME"), ("Driver", "DRIVER"), ("Scope", "SCOPE"), ("Mountpoint", "MOUNTPOINT"), ("Labels", "LABELS")];
+pub const VOLUME_HEADERS: &[(&str, &str)] = &[
+    ("Name", "VOLUME NAME"),
+    ("Driver", "DRIVER"),
+    ("Scope", "SCOPE"),
+    ("Mountpoint", "MOUNTPOINT"),
+    ("Labels", "LABELS"),
+    ("Links", "LINKS"),
+    ("Size", "SIZE"),
+    ("Group", "GROUP"),
+    ("Availability", "AVAILABILITY"),
+    ("Status", "STATUS"),
+];
 const VOLUME_TABLE: &str = r"{{.Driver}}\t{{.Name}}";
 
 pub fn volume_field(v: &Value, f: &str) -> String {
+    let usage = v.get("UsageData").filter(|u| u.is_object());
     match f {
         "Labels" => v.get("Labels").map(labels_text).unwrap_or_default(),
+        "Links" => usage.map(|u| n(u, "RefCount").to_string()).unwrap_or_else(|| "N/A".into()),
+        "Size" => usage.map(|u| human_size(n(u, "Size") as f64, 4)).unwrap_or_else(|| "N/A".into()),
+        // jen pro clusterové svazky (Swarm CSI)
+        "Group" | "Availability" | "Status" => "N/A".into(),
         k => s(v, k).to_string(),
     }
 }
@@ -880,6 +916,7 @@ pub const NETWORK_HEADERS: &[(&str, &str)] = &[
     ("IPv6", "IPV6"),
     ("Internal", "INTERNAL"),
     ("Labels", "LABELS"),
+    ("CreatedAt", "CREATED AT"),
 ];
 const NETWORK_TABLE: &str = r"{{.ID}}\t{{.Name}}\t{{.Driver}}\t{{.Scope}}";
 
@@ -892,8 +929,59 @@ pub fn network_field(v: &Value, f: &str, x: &Ctx) -> String {
         "IPv6" => b("EnableIPv6"),
         "Internal" => b("Internal"),
         "Labels" => v.get("Labels").map(labels_text).unwrap_or_default(),
+        "CreatedAt" => go_time_rfc3339(s(v, "Created"), x.tz),
         k => s(v, k).to_string(),
     }
+}
+
+/// Go `time.Time.String()` pro čas z JSON (RFC 3339): `2026-11-18 20:15:52.769554013 +0100 CET`.
+/// Posun shodný s místní zónou dostane její zkratku, `Z` je `UTC`, jinak se zóna vypíše číselně.
+pub fn go_time_rfc3339(t: &str, tz: TzFn) -> String {
+    let parse = || -> Option<String> {
+        let b = t.as_bytes();
+        if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || (b[10] != b'T' && b[10] != b't') || b[13] != b':' || b[16] != b':' {
+            return None;
+        }
+        let num = |r: std::ops::Range<usize>| t.get(r)?.parse::<i64>().ok();
+        let (y, mo, d, h, mi, se) = (num(0..4)?, num(5..7)?, num(8..10)?, num(11..13)?, num(14..16)?, num(17..19)?);
+        let mut i = 19;
+        let mut frac = String::new();
+        if b.get(i) == Some(&b'.') {
+            i += 1;
+            while i < b.len() && b[i].is_ascii_digit() {
+                frac.push(b[i] as char);
+                i += 1;
+            }
+        }
+        let zone = &t[i..];
+        let (off, utc) = if zone == "Z" || zone == "z" {
+            (0, true)
+        } else {
+            let sign = match zone.as_bytes().first()? {
+                b'+' => 1,
+                b'-' => -1,
+                _ => return None,
+            };
+            let (zh, zm) = zone[1..].split_once(':')?;
+            (sign * (zh.parse::<i64>().ok()? * 3600 + zm.parse::<i64>().ok()? * 60), false)
+        };
+        let local = days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + se;
+        let unix = local - off;
+        let abbr = if utc {
+            "UTC".to_string()
+        } else {
+            let (loff, labbr) = tz(unix);
+            if loff as i64 == off && !labbr.is_empty() { labbr } else { String::new() }
+        };
+        let frac = frac.trim_end_matches('0');
+        let sign = if off < 0 { '-' } else { '+' };
+        let oa = off.abs() / 60;
+        let num_zone = format!("{sign}{:02}{:02}", oa / 60, oa % 60);
+        let zone_name = if abbr.is_empty() { num_zone.clone() } else { abbr };
+        let dot = if frac.is_empty() { "" } else { "." };
+        Some(format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{se:02}{dot}{frac} {num_zone} {zone_name}"))
+    };
+    parse().unwrap_or_else(|| t.to_string())
 }
 
 // ================================================================ version / info
@@ -947,16 +1035,29 @@ fn render_single(segs: &[Seg], lookup: impl Fn(&[String]) -> Option<String>) -> 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Cmd {
     Ps { all: bool, size: bool, limit: Option<i64>, filters: Vec<(String, String)>, trunc: bool, fmt: Fmt },
-    Images { all: bool, trunc: bool, fmt: Fmt },
-    Volumes { fmt: Fmt },
-    Networks { trunc: bool, fmt: Fmt },
+    Images { all: bool, trunc: bool, filters: Vec<(String, String)>, fmt: Fmt },
+    Volumes { filters: Vec<(String, String)>, fmt: Fmt },
+    Networks { trunc: bool, filters: Vec<(String, String)>, fmt: Fmt },
     Version(Vec<Seg>),
     Info(Vec<Seg>),
+    /// `inspect` / `container inspect` / `image inspect`; None = JSON pole
+    Inspect { kind: InspectKind, size: bool, names: Vec<String>, tmpl: Option<Vec<Seg>> },
+    /// `logs` bez `-f`
+    Logs { name: String, tail: Option<String>, timestamps: bool, since: Option<String>, until: Option<String> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InspectKind {
+    /// `docker inspect`: kontejner, jinak obraz
+    Any,
+    Container,
+    Image,
 }
 
 struct Flags {
     bools: Vec<String>,
     values: Vec<(String, String)>,
+    pos: Vec<String>,
 }
 
 impl Flags {
@@ -970,7 +1071,16 @@ impl Flags {
 
 /// pflag: `--x`, `--x=v`, `--x v`, `-abc`, `-n5`, `-n=5`, `-n 5`. Žádné poziční argumenty.
 fn parse_flags(args: &[String], bools: &[(Option<char>, &str)], values: &[(Option<char>, &str)]) -> Result<Flags, String> {
-    let mut f = Flags { bools: Vec::new(), values: Vec::new() };
+    let f = parse_flags_pos(args, bools, values)?;
+    match f.pos.first() {
+        Some(a) => Err(format!("unsupported argument {a:?}")),
+        None => Ok(f),
+    }
+}
+
+/// Jako `parse_flags`, ale poziční argumenty (kdekoli mezi přepínači) se sbírají do `pos`.
+fn parse_flags_pos(args: &[String], bools: &[(Option<char>, &str)], values: &[(Option<char>, &str)]) -> Result<Flags, String> {
+    let mut f = Flags { bools: Vec::new(), values: Vec::new(), pos: Vec::new() };
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
@@ -1026,7 +1136,7 @@ fn parse_flags(args: &[String], bools: &[(Option<char>, &str)], values: &[(Optio
                 }
             }
         } else {
-            return Err(format!("unsupported argument {a:?}"));
+            f.pos.push(a.clone());
         }
     }
     Ok(f)
@@ -1047,7 +1157,25 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
         ["version", ..] => ("version", &args[1..]),
         ["info", ..] => ("info", &args[1..]),
         ["system", "info", ..] => ("info", &args[2..]),
+        ["inspect", ..] => ("inspect", &args[1..]),
+        ["container", "inspect", ..] => ("container inspect", &args[2..]),
+        ["image", "inspect", ..] => ("image inspect", &args[2..]),
+        ["logs", ..] => ("logs", &args[1..]),
+        ["container", "logs", ..] => ("logs", &args[2..]),
         _ => return Err("command not handled by the fast path".into()),
+    };
+    // --filter klíč=hodnota; povolené klíče se předají API beze změny (jako Docker CLI)
+    let filters = |fl: &Flags, keys: &[&str]| -> Result<Vec<(String, String)>, String> {
+        let mut out = Vec::new();
+        for (_, v) in fl.values.iter().filter(|(k, _)| k == "filter") {
+            let (fk, fv) = v.split_once('=').ok_or("bad filter")?;
+            let fk = fk.trim().to_ascii_lowercase();
+            if !keys.contains(&fk.as_str()) {
+                return Err(format!("unsupported filter {fk}"));
+            }
+            out.push((fk, fv.trim().to_string()));
+        }
+        Ok(out)
     };
     match kind {
         "ps" => {
@@ -1064,33 +1192,79 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
                 limit = Some(1);
             }
             let limit = limit.filter(|l| *l > 0);
-            let mut filters = Vec::new();
-            for (_, v) in fl.values.iter().filter(|(k, _)| k == "filter") {
-                let (fk, fv) = v.split_once('=').ok_or("bad filter")?;
-                let fk = fk.trim().to_ascii_lowercase();
-                if !PS_FILTER_KEYS.contains(&fk.as_str()) {
-                    return Err(format!("unsupported filter {fk}"));
-                }
-                filters.push((fk, fv.trim().to_string()));
-            }
+            let filters = filters(&fl, PS_FILTER_KEYS)?;
             let fmt = resolve_format(fl.last("format"), fl.has("quiet"), &format!("{PS_TABLE}{}", if fl.has("size") { r"\t{{.Size}}" } else { "" }), "{{.ID}}", PS_HEADERS, true)?;
             let size = fl.has("size") || fmt.uses("Size");
             Ok(Cmd::Ps { all: fl.has("all") || limit.is_some(), size, limit, filters, trunc: !fl.has("no-trunc"), fmt })
         }
         "images" => {
-            let fl = parse_flags(rest, &[(Some('a'), "all"), (Some('q'), "quiet"), (None, "no-trunc")], &[(None, "format")])?;
-            let fmt = resolve_format(fl.last("format"), fl.has("quiet"), IMAGE_TABLE, "{{.ID}}", IMAGE_HEADERS, false)?;
-            Ok(Cmd::Images { all: fl.has("all"), trunc: !fl.has("no-trunc"), fmt })
+            let fl = parse_flags(rest, &[(Some('a'), "all"), (Some('q'), "quiet"), (None, "no-trunc")], &[(None, "format"), (Some('f'), "filter")])?;
+            let filters = filters(&fl, &["dangling", "reference", "label"])?;
+            let fmt = resolve_format(fl.last("format"), fl.has("quiet"), IMAGE_TABLE, "{{.ID}}", IMAGE_HEADERS, true)?;
+            Ok(Cmd::Images { all: fl.has("all"), trunc: !fl.has("no-trunc"), filters, fmt })
         }
         "volumes" => {
-            let fl = parse_flags(rest, &[(Some('q'), "quiet")], &[(None, "format")])?;
-            let fmt = resolve_format(fl.last("format"), fl.has("quiet"), VOLUME_TABLE, "{{.Name}}", VOLUME_HEADERS, false)?;
-            Ok(Cmd::Volumes { fmt })
+            let fl = parse_flags(rest, &[(Some('q'), "quiet")], &[(None, "format"), (Some('f'), "filter")])?;
+            let filters = filters(&fl, &["dangling", "name", "label", "driver"])?;
+            let fmt = resolve_format(fl.last("format"), fl.has("quiet"), VOLUME_TABLE, "{{.Name}}", VOLUME_HEADERS, true)?;
+            Ok(Cmd::Volumes { filters, fmt })
         }
         "networks" => {
-            let fl = parse_flags(rest, &[(Some('q'), "quiet"), (None, "no-trunc")], &[(None, "format")])?;
-            let fmt = resolve_format(fl.last("format"), fl.has("quiet"), NETWORK_TABLE, "{{.ID}}", NETWORK_HEADERS, false)?;
-            Ok(Cmd::Networks { trunc: !fl.has("no-trunc"), fmt })
+            let fl = parse_flags(rest, &[(Some('q'), "quiet"), (None, "no-trunc")], &[(None, "format"), (Some('f'), "filter")])?;
+            let filters = filters(&fl, &["name", "driver", "id"])?;
+            let fmt = resolve_format(fl.last("format"), fl.has("quiet"), NETWORK_TABLE, "{{.ID}}", NETWORK_HEADERS, true)?;
+            Ok(Cmd::Networks { trunc: !fl.has("no-trunc"), filters, fmt })
+        }
+        "inspect" | "container inspect" | "image inspect" => {
+            let fl = parse_flags_pos(rest, &[(Some('s'), "size")], &[(Some('f'), "format"), (None, "type")])?;
+            if fl.pos.is_empty() {
+                return Err("inspect needs a name".into());
+            }
+            let mut kind = match kind {
+                "container inspect" => InspectKind::Container,
+                "image inspect" => InspectKind::Image,
+                _ => InspectKind::Any,
+            };
+            if let Some(t) = fl.last("type") {
+                kind = match (kind, t) {
+                    (InspectKind::Any, "") => InspectKind::Any,
+                    (InspectKind::Any, "container") => InspectKind::Container,
+                    (InspectKind::Any, "image") => InspectKind::Image,
+                    _ => return Err(format!("unsupported --type {t}")),
+                };
+            }
+            // inspect šablonu nijak neupravuje (`\t` zůstává doslova, jako v Docker CLI)
+            let tmpl = match fl.last("format") {
+                None | Some("") => None,
+                Some(f) if f == "json" || f.starts_with("table") => return Err("format not supported".into()),
+                Some(f) => Some(parse_template(f)?),
+            };
+            Ok(Cmd::Inspect { kind, size: fl.has("size"), names: fl.pos, tmpl })
+        }
+        "logs" => {
+            let fl = parse_flags_pos(rest, &[(Some('t'), "timestamps")], &[(Some('n'), "tail"), (None, "since"), (None, "until")])?;
+            let [name] = fl.pos.as_slice() else {
+                return Err("logs needs exactly one container".into());
+            };
+            let tail = fl.last("tail").map(|t| t.trim().to_string());
+            if let Some(t) = &tail {
+                if t != "all" && t.parse::<i64>().is_err() {
+                    return Err(format!("bad --tail {t:?}"));
+                }
+            }
+            // --since / --until se převedou až při spuštění (potřebují aktuální čas); ověří se hned
+            for k in ["since", "until"] {
+                if let Some(v) = fl.last(k) {
+                    api_timestamp(v, 0)?;
+                }
+            }
+            Ok(Cmd::Logs {
+                name: name.clone(),
+                tail,
+                timestamps: fl.has("timestamps"),
+                since: fl.last("since").map(String::from),
+                until: fl.last("until").map(String::from),
+            })
         }
         _ => {
             // version / info: jen s jednoduchou šablonou (bez ní je potřeba i klientská část)
@@ -1141,7 +1315,31 @@ fn enc(s: &str) -> String {
         .collect()
 }
 
+fn with_query(base: &str, q: &[String]) -> String {
+    if q.is_empty() { base.to_string() } else { format!("{base}?{}", q.join("&")) }
+}
+
+fn filter_query(filters: &[(String, String)]) -> Vec<String> {
+    if filters.is_empty() { Vec::new() } else { vec![format!("filters={}", enc(&filters_json(filters)))] }
+}
+
+/// Název objektu v cestě URL (lomítka a dvojtečky referencí obrazů zůstávají, jako u Go klienta).
+fn enc_name(s: &str) -> String {
+    s.split('/').map(|p| p.split(':').map(enc).collect::<Vec<_>>().join(":")).collect::<Vec<_>>().join("/")
+}
+
+fn by_name(a: &Value, b: &Value) -> std::cmp::Ordering {
+    if natural_less(s(a, "Name"), s(b, "Name")) {
+        std::cmp::Ordering::Less
+    } else if natural_less(s(b, "Name"), s(a, "Name")) {
+        std::cmp::Ordering::Greater
+    } else {
+        std::cmp::Ordering::Equal
+    }
+}
+
 impl Cmd {
+    /// Cesta API pro příkazy s jedním dotazem (seznamy, version, info).
     pub fn api_path(&self) -> String {
         match self {
             Cmd::Ps { all, size, limit, filters, .. } => {
@@ -1155,16 +1353,22 @@ impl Cmd {
                 if *size {
                     q.push("size=1".into());
                 }
-                if !filters.is_empty() {
-                    q.push(format!("filters={}", enc(&filters_json(filters))));
-                }
-                if q.is_empty() { "/containers/json".into() } else { format!("/containers/json?{}", q.join("&")) }
+                q.extend(filter_query(filters));
+                with_query("/containers/json", &q)
             }
-            Cmd::Images { all, .. } => if *all { "/images/json?all=1" } else { "/images/json" }.into(),
-            Cmd::Volumes { .. } => "/volumes".into(),
-            Cmd::Networks { .. } => "/networks".into(),
+            Cmd::Images { all, filters, .. } => {
+                let mut q = Vec::new();
+                if *all {
+                    q.push("all=1".to_string());
+                }
+                q.extend(filter_query(filters));
+                with_query("/images/json", &q)
+            }
+            Cmd::Volumes { filters, .. } => with_query("/volumes", &filter_query(filters)),
+            Cmd::Networks { filters, .. } => with_query("/networks", &filter_query(filters)),
             Cmd::Version(_) => "/version".into(),
             Cmd::Info(_) => "/info".into(),
+            Cmd::Inspect { .. } | Cmd::Logs { .. } => String::new(),
         }
     }
 
@@ -1183,21 +1387,320 @@ impl Cmd {
                 let x = Ctx { trunc: *trunc, now, tz };
                 Ok(emit(fmt, IMAGE_HEADERS, &rows, |r, f| image_field(r, f, &x)))
             }
-            Cmd::Volumes { fmt } => {
-                let mut rows = body.get("Volumes").map(arr).unwrap_or_else(|| Ok(Vec::new()))?;
-                rows.sort_by(|a, b| if natural_less(s(a, "Name"), s(b, "Name")) { std::cmp::Ordering::Less } else if natural_less(s(b, "Name"), s(a, "Name")) { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Equal });
-                Ok(emit(fmt, VOLUME_HEADERS, &rows, |v, f| volume_field(v, f)))
+            Cmd::Volumes { fmt, .. } => {
+                let mut rows = match body.get("Volumes") {
+                    Some(Value::Null) | None => Vec::new(),
+                    Some(v) => arr(v)?,
+                };
+                rows.sort_by(by_name);
+                Ok(emit(fmt, VOLUME_HEADERS, &rows, volume_field))
             }
-            Cmd::Networks { trunc, fmt } => {
+            Cmd::Networks { trunc, fmt, .. } => {
                 let mut rows = arr(body)?;
-                rows.sort_by(|a, b| if natural_less(s(a, "Name"), s(b, "Name")) { std::cmp::Ordering::Less } else if natural_less(s(b, "Name"), s(a, "Name")) { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Equal });
+                rows.sort_by(by_name);
                 let x = Ctx { trunc: *trunc, now, tz };
                 Ok(emit(fmt, NETWORK_HEADERS, &rows, |v, f| network_field(v, f, &x)))
             }
             Cmd::Version(segs) => render_single(segs, |p| version_lookup(body, p)),
             Cmd::Info(segs) => render_single(segs, |p| info_lookup(body, p)),
+            Cmd::Inspect { .. } | Cmd::Logs { .. } => Err("needs execute()".into()),
         }
     }
+}
+
+// ================================================================ inspect
+
+/// Go `json.Indent(dst, src, "", indent)`: přeformátuje JSON beze změny řetězců
+/// (escapování z API zůstává), prázdné `{}` / `[]` zůstanou na jednom řádku.
+/// `indent == None` = kompaktní výstup (bez mezer).
+pub fn json_reformat(src: &[u8], indent: Option<&str>) -> Result<String, String> {
+    let mut out: Vec<u8> = Vec::with_capacity(src.len() * 2);
+    let mut depth = 0usize;
+    let mut need_indent = false;
+    let newline = |out: &mut Vec<u8>, depth: usize| {
+        if let Some(ind) = indent {
+            out.push(b'\n');
+            for _ in 0..depth {
+                out.extend_from_slice(ind.as_bytes());
+            }
+        }
+    };
+    let mut i = 0;
+    while i < src.len() {
+        let c = src[i];
+        match c {
+            b' ' | b'\t' | b'\r' | b'\n' => {
+                i += 1;
+                continue;
+            }
+            b'{' | b'[' => {
+                if need_indent {
+                    newline(&mut out, depth);
+                }
+                out.push(c);
+                depth += 1;
+                need_indent = true;
+            }
+            b'}' | b']' => {
+                depth = depth.checked_sub(1).ok_or("bad JSON")?;
+                if need_indent {
+                    need_indent = false;
+                } else {
+                    newline(&mut out, depth);
+                }
+                out.push(c);
+            }
+            b',' => {
+                out.push(c);
+                newline(&mut out, depth);
+            }
+            b':' => {
+                out.push(c);
+                if indent.is_some() {
+                    out.push(b' ');
+                }
+            }
+            _ => {
+                if need_indent {
+                    newline(&mut out, depth);
+                    need_indent = false;
+                }
+                if c == b'"' {
+                    // řetězec beze změny
+                    let start = i;
+                    i += 1;
+                    while i < src.len() && src[i] != b'"' {
+                        if src[i] == b'\\' {
+                            i += 1;
+                        }
+                        i += 1;
+                    }
+                    if i >= src.len() {
+                        return Err("unterminated string".into());
+                    }
+                    out.extend_from_slice(&src[start..=i]);
+                } else {
+                    out.push(c);
+                }
+            }
+        }
+        i += 1;
+    }
+    if depth != 0 {
+        return Err("bad JSON".into());
+    }
+    String::from_utf8(out).map_err(|_| "bad UTF-8".into())
+}
+
+/// Hodnota pro `{{.A.B}}` v šabloně inspect: jen skaláry (řetězec, bool, celé číslo),
+/// jinak None (Go by vypsal `map[…]`, `[…]`, `<nil>` – to nechá na skutečném CLI).
+fn inspect_lookup(v: &Value, path: &[String]) -> Option<String> {
+    let mut cur = v;
+    for (i, k) in path.iter().enumerate() {
+        let obj = cur.as_object()?;
+        cur = match obj.get(k.as_str()) {
+            Some(x) => x,
+            // typovaná struktura Dockeru má `ID` (JSON `Id`)
+            None if i == 0 && k == "ID" => obj.get("Id")?,
+            None => return None,
+        };
+    }
+    scalar(cur)
+}
+
+/// Výstup `docker inspect` z „raw“ JSON objektů (jak je vrátilo API).
+pub fn inspect_output(raws: &[Vec<u8>], tmpl: Option<&[Seg]>) -> Result<String, String> {
+    match tmpl {
+        None => {
+            if raws.is_empty() {
+                return Ok("[]\n".into());
+            }
+            let mut joined = Vec::new();
+            joined.push(b'[');
+            for (i, r) in raws.iter().enumerate() {
+                if i > 0 {
+                    joined.push(b',');
+                }
+                joined.extend_from_slice(r);
+            }
+            joined.push(b']');
+            Ok(json_reformat(&joined, Some("    "))? + "\n")
+        }
+        Some(segs) => {
+            let mut out = String::new();
+            for r in raws {
+                let v: Value = serde_json::from_slice(r).map_err(|e| format!("bad JSON: {e}"))?;
+                for seg in segs {
+                    match seg {
+                        Seg::Lit(l) => out.push_str(l),
+                        Seg::JsonDot => out.push_str(&json_reformat(r, None)?),
+                        Seg::Field(p) => out.push_str(&inspect_lookup(&v, p).ok_or_else(|| format!("unsupported field .{}", p.join(".")))?),
+                    }
+                }
+                out.push('\n');
+            }
+            Ok(out)
+        }
+    }
+}
+
+// ================================================================ logs
+
+/// Go `time.ParseDuration` -> nanosekundy (bez přetečení pro rozumné hodnoty).
+pub fn go_duration_ns(v: &str) -> Option<i128> {
+    let (neg, mut rest) = match v.as_bytes().first()? {
+        b'-' => (true, &v[1..]),
+        b'+' => (false, &v[1..]),
+        _ => (false, v),
+    };
+    if rest == "0" {
+        return Some(0);
+    }
+    if rest.is_empty() {
+        return None;
+    }
+    let mut total: f64 = 0.0;
+    while !rest.is_empty() {
+        let num_end = rest.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(rest.len());
+        let num = &rest[..num_end];
+        if num.is_empty() || num == "." {
+            return None;
+        }
+        let x: f64 = num.parse().ok()?;
+        rest = &rest[num_end..];
+        let unit_end = rest.find(|c: char| c.is_ascii_digit() || c == '.').unwrap_or(rest.len());
+        let mult = match &rest[..unit_end] {
+            "ns" => 1.0,
+            "us" | "µs" | "μs" => 1e3,
+            "ms" => 1e6,
+            "s" => 1e9,
+            "m" => 60e9,
+            "h" => 3600e9,
+            _ => return None,
+        };
+        rest = &rest[unit_end..];
+        total += x * mult;
+    }
+    let ns = total.round() as i128;
+    Some(if neg { -ns } else { ns })
+}
+
+/// `timetypes.GetTimestamp` z Docker CLI pro `--since` / `--until`: doba trvání (`10m`)
+/// -> unixové sekundy před `now_ns`, číslo (`1700000000[.5]`) beze změny.
+/// Data (RFC 3339 apod.) -> Err (použije se CLI).
+pub fn api_timestamp(v: &str, now_ns: i128) -> Result<String, String> {
+    if v != "0" {
+        if let Some(d) = go_duration_ns(v) {
+            return Ok((now_ns - d).div_euclid(1_000_000_000).to_string());
+        }
+    }
+    let (secs, frac) = v.split_once('.').unwrap_or((v, ""));
+    let digits = |x: &str| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit());
+    if digits(secs) && (frac.is_empty() && !v.ends_with('.') || digits(frac)) {
+        return Ok(v.to_string());
+    }
+    Err(format!("timestamp {v:?} not supported by the fast path"))
+}
+
+/// Rozdělí multiplexovaný stream logů (8bajtové hlavičky) na (1 = stdout, 2 = stderr, data).
+pub fn demux(mut b: &[u8]) -> Result<Vec<(u8, Vec<u8>)>, String> {
+    let mut out: Vec<(u8, Vec<u8>)> = Vec::new();
+    while !b.is_empty() {
+        if b.len() < 8 {
+            return Err("truncated log frame header".into());
+        }
+        let stream = match b[0] {
+            0 | 1 => 1,
+            2 => 2,
+            _ => return Err("log stream error frame".into()),
+        };
+        let size = u32::from_be_bytes([b[4], b[5], b[6], b[7]]) as usize;
+        if b.len() < 8 + size {
+            return Err("truncated log frame".into());
+        }
+        let data = &b[8..8 + size];
+        match out.last_mut() {
+            Some((st, d)) if *st == stream => d.extend_from_slice(data),
+            _ => out.push((stream, data.to_vec())),
+        }
+        b = &b[8 + size..];
+    }
+    Ok(out)
+}
+
+// ================================================================ spuštění
+
+/// Výstup rychlé cesty: úseky pro stdout (1) / stderr (2) v pořadí + dotazy API (pro ladění).
+#[derive(Debug, Default, PartialEq)]
+pub struct Output {
+    pub chunks: Vec<(u8, Vec<u8>)>,
+    pub paths: Vec<String>,
+}
+
+/// Provede příkaz; `fetch(cesta)` vrací tělo odpovědi při HTTP 200, jinak Err.
+pub fn execute(cmd: &Cmd, fetch: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>, now_ns: i128, tz: TzFn) -> Result<Output, String> {
+    let mut paths = Vec::new();
+    let mut get = |p: String| {
+        let r = fetch(&p);
+        paths.push(p);
+        r
+    };
+    let chunks = match cmd {
+        Cmd::Inspect { kind, size, names, tmpl } => {
+            let mut raws = Vec::new();
+            for name in names {
+                let kinds: &[InspectKind] = match kind {
+                    InspectKind::Any => &[InspectKind::Container, InspectKind::Image],
+                    k => std::slice::from_ref(k),
+                };
+                let mut found = None;
+                for k in kinds {
+                    let p = match k {
+                        InspectKind::Image => format!("/images/{}/json", enc_name(name)),
+                        _ => format!("/containers/{}/json{}", enc_name(name), if *size { "?size=1" } else { "" }),
+                    };
+                    if let Ok(b) = get(p) {
+                        found = Some(b);
+                        break;
+                    }
+                }
+                // neexistující objekt: chybovou hlášku a návratový kód ať vypíše CLI
+                raws.push(found.ok_or_else(|| format!("no such object {name:?}"))?);
+            }
+            vec![(1, inspect_output(&raws, tmpl.as_deref())?.into_bytes())]
+        }
+        Cmd::Logs { name, tail, timestamps, since, until } => {
+            let info: Value = serde_json::from_slice(&get(format!("/containers/{}/json", enc_name(name)))?).map_err(|e| format!("bad JSON: {e}"))?;
+            let id = s(&info, "Id");
+            if id.is_empty() {
+                return Err("container without Id".into());
+            }
+            let tty = info.get("Config").and_then(|c| c.get("Tty")).and_then(|t| t.as_bool()).unwrap_or(false);
+            let mut q = vec!["stdout=1".to_string(), "stderr=1".to_string()];
+            if let Some(v) = since {
+                q.push(format!("since={}", enc(&api_timestamp(v, now_ns)?)));
+            }
+            if let Some(v) = until {
+                q.push(format!("until={}", enc(&api_timestamp(v, now_ns)?)));
+            }
+            if *timestamps {
+                q.push("timestamps=1".into());
+            }
+            q.push(format!("tail={}", enc(tail.as_deref().unwrap_or("all"))));
+            let body = get(with_query(&format!("/containers/{id}/logs"), &q))?;
+            if tty {
+                vec![(1, body)]
+            } else {
+                demux(&body)?
+            }
+        }
+        _ => {
+            let body: Value = serde_json::from_slice(&get(cmd.api_path())?).map_err(|e| format!("bad JSON: {e}"))?;
+            let now = now_ns.div_euclid(1_000_000_000) as i64;
+            vec![(1, cmd.output(&body, now, tz)?.into_bytes())]
+        }
+    };
+    Ok(Output { chunks, paths })
 }
 
 // ================================================================ HTTP
@@ -1272,8 +1775,8 @@ fn read_all(r: &mut impl Read) -> Result<Vec<u8>, String> {
     }
 }
 
-/// GET na API enginu (http, nebo https s klientským certifikátem).
-pub fn http_get(port: u16, tls: Option<Arc<rustls::ClientConfig>>, path: &str) -> Result<Value, String> {
+/// GET na API enginu (http, nebo https s klientským certifikátem); tělo při HTTP 200.
+pub fn http_get_raw(port: u16, tls: Option<Arc<rustls::ClientConfig>>, path: &str) -> Result<Vec<u8>, String> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let tcp = TcpStream::connect_timeout(&addr, Duration::from_millis(200)).map_err(|e| e.to_string())?;
     let _ = tcp.set_nodelay(true);
@@ -1295,12 +1798,18 @@ pub fn http_get(port: u16, tls: Option<Arc<rustls::ClientConfig>>, path: &str) -
             read_all(&mut t)?
         }
     };
-    let body = parse_http(&raw)?;
+    parse_http(&raw)
+}
+
+/// GET s JSON odpovědí.
+#[cfg(test)]
+pub fn http_get(port: u16, tls: Option<Arc<rustls::ClientConfig>>, path: &str) -> Result<Value, String> {
+    let body = http_get_raw(port, tls, path)?;
     serde_json::from_slice(&body).map_err(|e| format!("bad JSON: {e}"))
 }
 
-/// Celá rychlá cesta: rozbor, dotaz na API, výstup. `Err(důvod)` = použij wsl.exe.
-pub fn try_run(args: &[String], port: u16, tls: bool) -> Result<(String, String), String> {
+/// Celá rychlá cesta: rozbor, dotazy na API, výstup. `Err(důvod)` = použij wsl.exe.
+pub fn try_run(args: &[String], port: u16, tls: bool) -> Result<Output, String> {
     let cmd = parse(args)?;
     let tls = if tls {
         let dir = crate::apitls::tls_dir().ok_or("APPDATA not set")?;
@@ -1308,10 +1817,8 @@ pub fn try_run(args: &[String], port: u16, tls: bool) -> Result<(String, String)
     } else {
         None
     };
-    let path = cmd.api_path();
-    let body = http_get(port, tls, &path)?;
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-    Ok((cmd.output(&body, now, local_tz)?, path))
+    let now_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i128).unwrap_or(0);
+    execute(&cmd, &mut |p| http_get_raw(port, tls.clone(), p), now_ns, local_tz)
 }
 
 // ================================================================ testy
@@ -1531,6 +2038,18 @@ nginx             latest    c05939e13a61   13 days ago          167MB
             &["version", "-f", "{{.Server.APIVersion}}"],
             &["info", "--format", "{{.ServerVersion}}"],
             &["system", "info", "-f", "{{.NCPU}}"],
+            &["images", "--filter", "dangling=true", "-f", "reference=ngi*", "--filter=label=a=b"],
+            &["images", "--format", "json"],
+            &["volume", "ls", "-f", "dangling=true", "--filter", "name=x", "-f", "label=a", "-f", "driver=local"],
+            &["volume", "ls", "--format", "{{.Size}} {{.Links}}"],
+            &["network", "ls", "--filter", "driver=bridge", "-f", "name=x", "-f", "id=abc", "--format", "json"],
+            &["inspect", "web"],
+            &["inspect", "-s", "--type=container", "web", "db"],
+            &["container", "inspect", "--format", "{{.State.Status}}", "web"],
+            &["image", "inspect", "-f", "{{json .}}", "nginx"],
+            &["logs", "web"],
+            &["logs", "-n", "5", "-t", "--since", "10m", "--until", "1700000000.5", "web"],
+            &["container", "logs", "--tail=all", "web"],
         ] {
             assert!(parse(&a(args)).is_ok(), "{args:?}: {:?}", parse(&a(args)));
         }
@@ -1558,13 +2077,23 @@ nginx             latest    c05939e13a61   13 days ago          167MB
             &["ps", "--"],
             &["images", "nginx"],
             &["images", "--digests"],
-            &["images", "--filter", "dangling=true"],
-            &["images", "--format", "json"],
-            &["images", "--format", "{{.Digest}}"],
-            &["volume", "ls", "-f", "dangling=true"],
-            &["volume", "ls", "--format", "{{.Size}}"],
-            &["network", "ls", "--filter", "driver=bridge"],
+            &["images", "--format", "{{.Foo}}"],
             &["volume", "inspect", "x"],
+            &["images", "--filter", "before=nginx"],
+            &["volume", "ls", "--filter", "scope=local"],
+            &["network", "ls", "--filter", "type=custom"],
+            &["inspect"],
+            &["inspect", "--type", "volume", "x"],
+            &["inspect", "--format", "json", "x"],
+            &["inspect", "-f", "{{index .Config.Labels \"a\"}}", "x"],
+            &["image", "inspect", "--platform", "linux/amd64", "x"],
+            &["logs", "-f", "web"],
+            &["logs", "--follow", "web"],
+            &["logs", "--details", "web"],
+            &["logs"],
+            &["logs", "a", "b"],
+            &["logs", "--tail", "x", "web"],
+            &["logs", "--since", "2024-01-01T00:00:00Z", "web"],
             &["version"],
             &["version", "--format", "{{.Client.Version}}"],
             &["version", "--format", "json"],
@@ -1607,6 +2136,148 @@ nginx             latest    c05939e13a61   13 days ago          167MB
         assert!(parse_http(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n[]").is_err());
     }
 
+    #[test]
+    fn images_json_and_filters() {
+        let imgs = json!([
+            {"Id":"sha256:c05939e13a616cd46ade","RepoTags":["docker.io/library/nginx:latest"],"RepoDigests":["docker.io/library/nginx@sha256:1"],"Created":NOW - 3600,"Size":166_931_294,"SharedSize":0,"Containers":1},
+            {"Id":"sha256:aaaaaaaaaaaabbbb","RepoTags":null,"RepoDigests":["quay.io/x/y@sha256:2","quay.io/x/y@sha256:3"],"Created":NOW - 60,"Size":1000,"SharedSize":-1}
+        ]);
+        let cmd = parse(&a(&["images", "--format", "json"])).unwrap();
+        let out = cmd.output(&imgs, NOW, utc).unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        // repozitář jen s digesty = jeden řádek s prázdným digestem
+        assert_eq!(lines.len(), 2, "{out}");
+        assert_eq!(
+            lines[0],
+            r#"{"Containers":"N/A","CreatedAt":"2026-11-18 19:25:40 +0000 UTC","CreatedSince":"About a minute ago","Digest":"","ID":"aaaaaaaaaaaa","Repository":"quay.io/x/y","SharedSize":"N/A","Size":"1kB","Tag":"\u003cnone\u003e","UniqueSize":"N/A","VirtualSize":"1kB"}"#
+        );
+        assert!(lines[1].contains(r#""Containers":"1","#) && lines[1].contains(r#""Digest":"\u003cnone\u003e""#) && lines[1].contains(r#""SharedSize":"0B","Size":"167MB","Tag":"latest","UniqueSize":"166.9MB","VirtualSize":"166.9MB"}"#), "{}", lines[1]);
+        let cmd = parse(&a(&["images", "-a", "-f", "dangling=true", "--filter", "reference=ngi*"])).unwrap();
+        assert_eq!(cmd.api_path(), "/images/json?all=1&filters=%7B%22dangling%22%3A%7B%22true%22%3Atrue%7D%2C%22reference%22%3A%7B%22ngi%2A%22%3Atrue%7D%7D");
+    }
+
+    #[test]
+    fn volumes_networks_json_and_filters() {
+        let vols = json!({"Volumes":[{"Name":"data","Driver":"local","Mountpoint":"/v/data","Labels":{"a":"1"},"Scope":"local"}]});
+        let out = parse(&a(&["volume", "ls", "--format", "json"])).unwrap().output(&vols, NOW, utc).unwrap();
+        assert_eq!(out, "{\"Availability\":\"N/A\",\"Driver\":\"local\",\"Group\":\"N/A\",\"Labels\":\"a=1\",\"Links\":\"N/A\",\"Mountpoint\":\"/v/data\",\"Name\":\"data\",\"Scope\":\"local\",\"Size\":\"N/A\",\"Status\":\"N/A\"}\n");
+        assert_eq!(parse(&a(&["volume", "ls"])).unwrap().output(&json!({"Volumes":null}), NOW, utc).unwrap(), "DRIVER    VOLUME NAME\n");
+        let cmd = parse(&a(&["volume", "ls", "-f", "dangling=true", "-f", "driver=local"])).unwrap();
+        assert_eq!(cmd.api_path(), "/volumes?filters=%7B%22dangling%22%3A%7B%22true%22%3Atrue%7D%2C%22driver%22%3A%7B%22local%22%3Atrue%7D%7D");
+        let nets = json!([{"Name":"bridge","Id":"2f259bab93aaaaa2542ba43ef","Driver":"bridge","Scope":"local","Internal":false,"EnableIPv6":false,"Created":"2026-11-18T20:15:52.769554013+01:00","Labels":{}}]);
+        let out = parse(&a(&["network", "ls", "--format", "json"])).unwrap().output(&nets, NOW, cet).unwrap();
+        assert_eq!(out, "{\"CreatedAt\":\"2026-11-18 20:15:52.769554013 +0100 CET\",\"Driver\":\"bridge\",\"ID\":\"2f259bab93aa\",\"IPv6\":\"false\",\"Internal\":\"false\",\"Labels\":\"\",\"Name\":\"bridge\",\"Scope\":\"local\"}\n");
+        assert_eq!(parse(&a(&["network", "ls", "-f", "name=br"])).unwrap().api_path(), "/networks?filters=%7B%22name%22%3A%7B%22br%22%3Atrue%7D%7D");
+        assert_eq!(go_time_rfc3339("2026-11-18T19:15:52Z", cet), "2026-11-18 19:15:52 +0000 UTC");
+        assert_eq!(go_time_rfc3339("2026-11-18T19:15:52.500+05:30", cet), "2026-11-18 19:15:52.5 +0530 +0530");
+        assert_eq!(go_time_rfc3339("garbage", cet), "garbage");
+    }
+
+    #[test]
+    fn json_indent_like_go() {
+        let raw = br#"{"Id":"abc","Args":[],"Labels":{},"State":{"Running":true,"Pid":7},"Env":["A=\u003cb\u003e","Q=\"x\" , {"],"N":null}"#;
+        let exp = "[\n    {\n        \"Id\": \"abc\",\n        \"Args\": [],\n        \"Labels\": {},\n        \"State\": {\n            \"Running\": true,\n            \"Pid\": 7\n        },\n        \"Env\": [\n            \"A=\\u003cb\\u003e\",\n            \"Q=\\\"x\\\" , {\"\n        ],\n        \"N\": null\n    }\n]\n";
+        assert_eq!(inspect_output(&[raw.to_vec()], None).unwrap(), exp);
+        assert_eq!(inspect_output(&[], None).unwrap(), "[]\n");
+        assert_eq!(json_reformat(b" { \"a\" : [ 1 , 2 ] }\n", None).unwrap(), "{\"a\":[1,2]}");
+        assert!(json_reformat(b"{\"a\":1", None).is_err());
+    }
+
+    #[test]
+    fn inspect_execute() {
+        let ctr = br#"{"Id":"502bc544a072","Name":"/db","State":{"Status":"running","Pid":42,"Running":true},"Config":{"Tty":false,"Labels":{"a":"b"}},"SizeRw":null}
+"#.to_vec();
+        let img = br#"{"Id":"sha256:9782","RepoTags":["docker.io/library/redis:latest"],"Size":148588077}"#.to_vec();
+        let mut fetch = |p: &str| -> Result<Vec<u8>, String> {
+            match p {
+                "/containers/db/json" | "/containers/db/json?size=1" => Ok(ctr.clone()),
+                "/images/docker.io/library/redis:latest/json" => Ok(img.clone()),
+                _ => Err("HTTP 404".into()),
+            }
+        };
+        let run = |args: &[&str], f: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>| execute(&parse(&a(args)).unwrap(), f, 0, utc).map(|o| (String::from_utf8(o.chunks[0].1.clone()).unwrap(), o.paths));
+        let (out, _) = run(&["inspect", "-f", "{{.Name}} {{.ID}} {{.State.Status}} {{.State.Pid}} {{.State.Running}}", "db"], &mut fetch).unwrap();
+        assert_eq!(out, "/db 502bc544a072 running 42 true
+");
+        // druhý objekt je obraz bez pole .Name -> fallback
+        assert!(run(&["inspect", "-f", "{{.Name}}", "db", "docker.io/library/redis:latest"], &mut fetch).is_err());
+        let (out, paths) = run(&["inspect", "-f", "{{.Name}} {{.State.Pid}}", "db"], &mut fetch).unwrap();
+        assert_eq!((out.as_str(), paths), ("/db 42\n", vec!["/containers/db/json".to_string()]));
+        let (out, paths) = run(&["inspect", "--format", "{{.Id}}|{{.Size}}", "docker.io/library/redis:latest"], &mut fetch).unwrap();
+        assert_eq!(out, "sha256:9782|148588077\n");
+        assert_eq!(paths, vec!["/containers/docker.io/library/redis:latest/json".to_string(), "/images/docker.io/library/redis:latest/json".to_string()]);
+        let (out, _) = run(&["container", "inspect", "-s", "db"], &mut fetch).unwrap();
+        assert!(out.starts_with("[\n    {\n        \"Id\": \"502bc544a072\",\n"), "{out}");
+        assert!(out.ends_with("        \"SizeRw\": null\n    }\n]\n"), "{out}");
+        let (out, _) = run(&["image", "inspect", "-f", "{{json .}}", "docker.io/library/redis:latest"], &mut fetch).unwrap();
+        assert_eq!(out, format!("{}\n", String::from_utf8(img.clone()).unwrap()));
+        // neexistující objekt, kontejner jako obraz, nebo neskalární pole -> wsl.exe
+        assert!(run(&["inspect", "db", "nope"], &mut fetch).is_err());
+        assert!(run(&["image", "inspect", "db"], &mut fetch).is_err());
+        assert!(run(&["inspect", "-f", "{{.Config.Labels}}", "db"], &mut fetch).is_err());
+        assert!(run(&["inspect", "-f", "{{.SizeRw}}", "db"], &mut fetch).is_err());
+        assert!(run(&["inspect", "-f", "{{.Nope}}", "db"], &mut fetch).is_err());
+    }
+
+    fn frame(stream: u8, data: &[u8]) -> Vec<u8> {
+        let mut v = vec![stream, 0, 0, 0];
+        v.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        v.extend_from_slice(data);
+        v
+    }
+
+    #[test]
+    fn logs_execute() {
+        let mut body = frame(1, b"out1\n");
+        body.extend(frame(1, b"out2\n"));
+        body.extend(frame(2, b"err1\n"));
+        body.extend(frame(1, b"out3\n"));
+        assert_eq!(demux(&body).unwrap(), vec![(1, b"out1\nout2\n".to_vec()), (2, b"err1\n".to_vec()), (1, b"out3\n".to_vec())]);
+        assert!(demux(&body[..body.len() - 1]).is_err());
+        assert!(demux(&frame(3, b"boom")).is_err());
+        assert_eq!(demux(b"").unwrap(), vec![]);
+
+        let now_ns: i128 = 1_700_000_600 * 1_000_000_000 + 250_000_000;
+        for (tty, expect) in [(false, vec![(1u8, b"out1\nout2\n".to_vec()), (2, b"err1\n".to_vec()), (1, b"out3\n".to_vec())]), (true, vec![(1u8, body.clone())])] {
+            let info = format!(r#"{{"Id":"abc123","Config":{{"Tty":{tty}}}}}"#).into_bytes();
+            let mut seen = Vec::new();
+            let mut fetch = |p: &str| -> Result<Vec<u8>, String> {
+                seen.push(p.to_string());
+                if p == "/containers/web/json" {
+                    Ok(info.clone())
+                } else if p.starts_with("/containers/abc123/logs?") {
+                    Ok(body.clone())
+                } else {
+                    Err("HTTP 404".into())
+                }
+            };
+            let o = execute(&parse(&a(&["logs", "-n", "5", "-t", "--since", "10m", "--until", "1700000000.5", "web"])).unwrap(), &mut fetch, now_ns, utc).unwrap();
+            assert_eq!(o.chunks, expect);
+            assert_eq!(o.paths[1], "/containers/abc123/logs?stdout=1&stderr=1&since=1700000000&until=1700000000.5&timestamps=1&tail=5");
+        }
+        let mut missing = |_: &str| -> Result<Vec<u8>, String> { Err("HTTP 404".into()) };
+        assert!(execute(&parse(&a(&["logs", "nope"])).unwrap(), &mut missing, 0, utc).is_err());
+    }
+
+    #[test]
+    fn timestamps_and_durations() {
+        assert_eq!(go_duration_ns("10m"), Some(600_000_000_000));
+        assert_eq!(go_duration_ns("1h30m"), Some(5_400_000_000_000));
+        assert_eq!(go_duration_ns("1.5s"), Some(1_500_000_000));
+        assert_eq!(go_duration_ns("300ms"), Some(300_000_000));
+        assert_eq!(go_duration_ns("0"), Some(0));
+        assert_eq!(go_duration_ns("10"), None);
+        assert_eq!(go_duration_ns("2024-01-01"), None);
+        let now: i128 = 1_000_000_000 * 1_000_000_000;
+        assert_eq!(api_timestamp("1m", now).unwrap(), "999999940");
+        assert_eq!(api_timestamp("0", now).unwrap(), "0");
+        assert_eq!(api_timestamp("1700000000", now).unwrap(), "1700000000");
+        assert_eq!(api_timestamp("1700000000.123", now).unwrap(), "1700000000.123");
+        assert!(api_timestamp("2024-01-01", now).is_err());
+        assert!(api_timestamp("17.", now).is_err());
+        assert!(api_timestamp("", now).is_err());
+    }
+
     // ------------------------------------------------------------ živý test
 
     fn live_cli(args: &[&str]) -> (Vec<String>, f64) {
@@ -1632,9 +2303,10 @@ nginx             latest    c05939e13a61   13 days ago          167MB
         let mut out = Vec::new();
         for _ in 0..5 {
             let t = std::time::Instant::now();
-            let (o, _) = try_run(&a(args), port, false).expect("fast path");
+            let o = try_run(&a(args), port, false).expect("fast path");
             times.push(t.elapsed().as_secs_f64() * 1000.0);
-            out = o.lines().map(String::from).collect();
+            let text: Vec<u8> = o.chunks.iter().filter(|(st, _)| *st == 1).flat_map(|(_, d)| d.clone()).collect();
+            out = String::from_utf8_lossy(&text).lines().map(String::from).collect();
         }
         times.sort_by(|a, b| a.partial_cmp(b).unwrap());
         (out, times[2])
@@ -1711,9 +2383,81 @@ set -e
             println!("{name:14} wsl.exe median {tc:7.1} ms | fast path median {tf:6.1} ms | {} items", fs.len());
             assert_eq!(cs, fs, "{name}");
         }
+        // filtry (jen čtení, existující objekty)
+        let filtered: &[(&str, &[&str])] = &[
+            ("images dangling", &["images", "--filter", "dangling=false", "--format", "{{.ID}}"]),
+            ("images label", &["images", "--filter", "label=maintainer", "--format", "{{.ID}}"]),
+            ("volumes dangling", &["volume", "ls", "--filter", "dangling=true", "--format", "{{.Name}}"]),
+            ("volumes driver", &["volume", "ls", "--filter", "driver=local", "--format", "{{.Name}}"]),
+            ("networks driver", &["network", "ls", "--filter", "driver=bridge", "--format", "{{.ID}}"]),
+        ];
+        for (name, args) in filtered {
+            let (c, tc) = live_cli(args);
+            let (f, tf) = live_fast(args);
+            let cs: BTreeSet<String> = c.into_iter().collect();
+            let fs: BTreeSet<String> = f.into_iter().collect();
+            println!("{name:16} wsl.exe median {tc:7.1} ms | fast path median {tf:6.1} ms | {} items", fs.len());
+            assert_eq!(cs, fs, "{name}");
+        }
+
+        // inspect a logs nad existujícími kontejnery / obrazy
+        let (ctrs, _) = live_fast(&["ps", "-a", "--format", "{{.Names}}"]);
+        for ctr in ctrs.iter().take(3) {
+            // .Name: Docker má "/název", Podman CLI bez lomítka – neporovnává se
+            let tmpl = "{{.Id}} {{.State.Status}} {{.State.Running}} {{.Config.Image}} {{.State.Pid}}";
+            let (c, tc) = live_cli(&["container", "inspect", "--format", tmpl, ctr]);
+            let (f, tf) = live_fast(&["container", "inspect", "--format", tmpl, ctr]);
+            println!("inspect {ctr:12} wsl.exe {tc:7.1} ms | fast {tf:6.1} ms | {}", f.join(" "));
+            assert_eq!(c, f, "inspect {ctr}");
+            // celé JSON: pole s jedním objektem, správné Id
+            let (j, _) = live_fast(&["inspect", ctr]);
+            let v: Value = serde_json::from_str(&j.join("\n")).expect("inspect JSON");
+            assert_eq!(v.as_array().map(|a| a.len()), Some(1));
+            assert!(c[0].starts_with(v[0]["Id"].as_str().unwrap()), "{ctr}");
+            assert!(j[1].starts_with("    {") && j[2].starts_with("        \""), "4-space indent");
+
+            for args in [&["logs", "--tail", "20", ctr.as_str()][..], &["logs", "--tail", "5", "-t", ctr.as_str()], &["logs", "--since", "24h", "--tail", "3", ctr.as_str()]] {
+                let (c, tc) = live_cli(args);
+                let (f, tf) = live_fast(args);
+                println!("{:30} wsl.exe {tc:7.1} ms | fast {tf:6.1} ms | {} lines", args.join(" "), f.len());
+                assert_eq!(c, f, "{args:?}");
+            }
+            // stderr kontejneru musí jít na stderr (nginx loguje přístupy na stdout, chyby na stderr)
+            let distro = std::env::var("WLS_DISTRO").unwrap_or_else(|_| "Debian".into());
+            let url = format!("tcp://127.0.0.1:{}", std::env::var("WLS_PORT").unwrap_or_else(|_| "2375".into()));
+            let o = std::process::Command::new("wsl.exe").args(["-d", &distro, "-e", "podman", "--url", &url, "logs", "--tail", "50", ctr]).output().expect("wsl.exe");
+            let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+            let fo = try_run(&a(&["logs", "--tail", "50", ctr]), port, false).expect("fast logs");
+            let pick = |st: u8| -> Vec<u8> { fo.chunks.iter().filter(|(x, _)| *x == st).flat_map(|(_, d)| d.clone()).collect() };
+            println!("logs streams {ctr}: stdout {} B, stderr {} B", pick(1).len(), pick(2).len());
+            assert_eq!(String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&pick(1)), "stdout {ctr}");
+            assert_eq!(String::from_utf8_lossy(&o.stderr), String::from_utf8_lossy(&pick(2)), "stderr {ctr}");
+        }
+        let (imgs, _) = live_fast(&["images", "--format", "{{.Repository}}:{{.Tag}}"]);
+        for img in imgs.iter().filter(|i| !i.contains("<none>")).take(3) {
+            // Podman CLI vypisuje Id bez `sha256:` – porovnávají se pole shodná v obou formátech
+            let tmpl = "{{.Os}} {{.Architecture}} {{.Size}}";
+            let (c, _) = live_cli(&["image", "inspect", "--format", tmpl, img]);
+            let (f, _) = live_fast(&["image", "inspect", "--format", tmpl, img]);
+            println!("image inspect {img}: {}", f.join(" "));
+            assert_eq!(c, f, "image inspect {img}");
+        }
+        // JSON formát seznamů: každý řádek je JSON objekt se všemi poli
+        for (args, n) in [(&["images", "--format", "json"][..], IMAGE_HEADERS.len()), (&["network", "ls", "--format", "json"], NETWORK_HEADERS.len()), (&["volume", "ls", "--format", "json"], VOLUME_HEADERS.len())] {
+            let (f, _) = live_fast(args);
+            for l in &f {
+                let v: Value = serde_json::from_str(l).expect("json line");
+                assert_eq!(v.as_object().unwrap().len(), n, "{l}");
+            }
+        }
+        // neexistující objekt -> fallback (chybu vypíše CLI)
+        assert!(try_run(&a(&["inspect", "wls-test-does-not-exist"]), std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375), false).is_err());
+
         let (t, _) = live_fast(&["ps", "-a"]);
         println!("{}", t.join("\n"));
         let (t, _) = live_fast(&["images"]);
+        println!("{}", t.join("\n"));
+        let (t, _) = live_fast(&["network", "ls", "--format", "json"]);
         println!("{}", t.join("\n"));
     }
 }
