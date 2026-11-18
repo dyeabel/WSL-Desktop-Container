@@ -2,20 +2,24 @@
 
 A list of ideas for future work, grouped by area. **★ = recommended next steps.**
 
+## Done
+
+- Live updates via the engine event stream (`/events`), polling only as a fallback.
+- Windows notifications: crash, out of memory, unhealthy, restart loop.
+- Container detail: inspect, CPU / memory history, logs, actions, *Recreate with changes*.
+- Securing the API: mutual TLS proxy (opt-in) – see README *API security* and
+  [SECURITY.md](SECURITY.md).
+- Start with Windows; `worker.rs` split into modules; build from a Dockerfile.
+
 ## Recommended next steps
 
-1. ★ **Live updates via the engine event stream** (`/events`) instead of polling every few
-   seconds – instant UI updates, less CPU, and the basis for notifications.
-2. ★ **Notifications** – Windows toast when a container crashes, becomes unhealthy or keeps
-   restarting; optionally from the tray even when the window is hidden.
-3. ★ **Container detail page** – inspect (env, mounts, ports, labels, command), CPU/memory
-   history graph, logs and console in one place, *Recreate with changes* (Docker cannot modify
-   a container, so this would recreate it with edited ports / volumes / env).
-4. ★ **Volume backup & restore** – export a volume to a `.tar` on Windows and import it back,
+1. ★ **Fixes from the security review** – see [SECURITY.md](SECURITY.md).
+2. ★ **Volume backup & restore** – export a volume to a `.tar` on Windows and import it back,
    show the size of each volume.
-5. ★ **Securing the API** – the TCP API on `127.0.0.1:2375` has no authentication, so any
-   local process can control the engine. Options: TLS with generated certificates, or a
-   named-pipe relay (`npipe://`) instead of TCP.
+3. ★ **TLS by default** for new installations, certificate rotation (*Regenerate certificates*),
+   and a named-pipe relay as an alternative for tools that cannot use client certificates.
+4. ★ **Recreate**: carry over entrypoint, labels, resource limits and all networks.
+5. ★ **Cancel a running build**, build output with BuildKit progress.
 
 ## Containers, images, compose
 
@@ -23,7 +27,7 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
   compose stack.
 - Embedded console (terminal inside the app) as an alternative to Windows Terminal.
 - File browser inside a container (`docker cp` up/download).
-- Images: build from a Dockerfile (folder picker), tag & push, registry login, layer history,
+- Images: tag & push, registry login, layer history,
   "newer version available" check for running images.
 - Compose: built-in YAML editor with validation, new stack from a template (Postgres, Redis,
   WordPress, …), scaling services, editing the `.env` file.
@@ -56,8 +60,6 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
 
 ## App
 
-- Start with Windows (autostart entry) – together with *Start hidden in the tray* and engine
-  autostart this makes a "background service".
 - Tray submenu with running containers (start / stop / logs).
 - Keyboard shortcuts (Ctrl+F filter, F5 refresh, Ctrl+1…8 pages), light theme, high contrast.
 - Czech plural forms (1 / 2–4 / 5+), more languages.
@@ -65,7 +67,7 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
 
 ## Code quality
 
-- Split `worker.rs` (large) into modules per area; typed errors instead of `String`.
+- Typed errors instead of `String`.
 - Async HTTP / event handling instead of a thread per action.
 - CI: `cargo clippy`, `cargo test`, release builds on tag.
 - Automated UI tests (egui_kittest) for key dialogs.
@@ -77,3 +79,5 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
 - Engine installation on Fedora / openSUSE / Arch WSL distributions (package helpers are
   tested in containers only).
 - Add distribution with *Use for the app* and engine installation (end-to-end).
+- TLS mode with the Docker engine (only the Podman path and the proxy were tested live).
+- Notifications for OOM and restart loops on a real workload.

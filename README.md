@@ -11,14 +11,14 @@ Docker Desktop and without the Docker CLI for Windows.
 | Page | What it does |
 |---|---|
 | **Overview** (Přehled) | engine status, container / image / volume counts, CPU and RAM available to WSL, disk usage with a *Clean up* menu (prune), live CPU, memory, network and disk stats per running container (with the image it runs from) |
-| **Containers** (Kontejnery) | grouped by compose project; start, stop, restart, pause, remove; colored state badges (running, stopped, error with exit code, health); live logs (filter, copy); console in Windows Terminal; *Run container* dialog |
-| **Images** | search Docker Hub (dialog with tag picker, size and update date), pull by exact name, remove, prune, run a container from an image, which containers use an image |
+| **Containers** (Kontejnery) | grouped by compose project; start, stop, restart, pause, remove; colored state badges (running, stopped, error with exit code, health); live logs (filter, copy); console in Windows Terminal; *Run container* dialog; **container detail** (see below) |
+| **Images** | **build from a Dockerfile** (see below), search Docker Hub (dialog with tag picker, size and update date), pull by exact name, remove, prune, run a container from an image, which containers use an image |
 | **Volumes** | create, remove, prune, which containers use a volume, browse its content (as root), *run a container with this volume* |
 | **Networks** (Sítě) | create (bridge, ipvlan, macvlan), remove, prune, subnets, attached containers |
 | **Compose** | stacks detected from container labels: up, stop, start, restart, pull, build, ps, logs, down; edit the compose file in Notepad; start a stack from any folder (Windows or Linux path) |
 | **Files** (Soubory) | file browser for the distribution: navigation, bookmarks, *New* menu (folder, file), *Upload from Windows* menu (files, folder), rename and move, delete, chmod, built-in text editor (Ctrl+S), download to Windows, *Work as root* mode; bulk actions appear only when something is selected, row actions live in a per-row ⋯ menu |
-| **WSL engine** | start, stop and restart the engine, put the distribution to sleep, terminal; distribution list (start, terminate, default, *use for the engine*); *Install & setup* section: Docker / Podman switch, install, API setup, uninstall, `docker` command in PATH, `DOCKER_HOST`; editor for `/etc/docker/daemon.json` (Docker only) |
-| **Settings** (Nastavení) | language (Czech / English), distribution (+ *Add distribution* wizard), API port, refresh interval, keep-alive, engine autostart, restoring containers that were running last time, tray behaviour, `docker` command in PATH, global `.wslconfig` (memory, CPU, swap, `vmIdleTimeout`, `networkingMode`) |
+| **WSL engine** | start, stop and restart the engine, put the distribution to sleep, terminal; distribution list (start, terminate, default, *use for the engine*); *Install & setup* section: Docker / Podman switch, install, API setup, uninstall, `docker` command in PATH, `DOCKER_HOST`, **API security (TLS)**; editor for `/etc/docker/daemon.json` (Docker only) |
+| **Settings** (Nastavení) | language (Czech / English), distribution (+ *Add distribution* wizard), API port, refresh interval, keep-alive, engine autostart, restoring containers that were running last time, **start with Windows**, **Windows notifications**, tray behaviour, `docker` command in PATH, global `.wslconfig` (memory, CPU, swap, `vmIdleTimeout`, `networkingMode`) |
 
 Less frequent and destructive actions (prune, pause all, …) live in the **⋯** menu next to
 the filter field, which is pinned to the right on every page.
@@ -32,6 +32,49 @@ the filter field, which is pinned to the right on every page.
 - **sleep infinity** keeps images without their own service (alpine, ubuntu, debian, …) running.
 - A few seconds after start the app checks the container state and reports immediately
   exited containers including the exit code.
+
+### Container detail
+
+The ⓘ icon in a container row opens a resizable window with tabs:
+
+- **Overview** – state and health, image, command and entrypoint, restart policy, ports, mounts,
+  networks with IPs, environment variables (values of keys containing PASS / SECRET / TOKEN / KEY
+  are masked until revealed), labels; *Copy JSON*.
+- **Stats** – CPU and memory history charts (sampled every ~2 s while the window is open,
+  last 5 minutes; 100 % CPU = one core).
+- **Logs** – live log with follow and a choice of the last 100 – 5000 lines.
+- **Recreate with changes** – a form prefilled from the container (name, image, ports, env,
+  volumes, network, restart policy, command). The old container is stopped and renamed to
+  `<name>-wls-old`, the new one is started; on success the old one is removed, on failure the new
+  one is removed and the old one renamed back and started again. Entrypoint, labels, resource
+  limits, capabilities, hostname, user and additional networks are not carried over (a warning
+  is shown).
+
+### Build from a Dockerfile
+
+*Images → Build…* builds an image with the engine CLI inside WSL: context folder (Windows or
+Linux path, folder picker), Dockerfile (relative to the context or absolute), tags, build
+arguments, target stage, *no cache* and *pull*. The command preview is shown in the dialog and
+the output streams into a log window that can be hidden while the build runs.
+
+### Live updates and notifications
+
+The app subscribes to the engine event stream (`/events`), so the UI updates immediately after
+any change – also changes made from the CLI or compose. Polling then runs only every 30 s as a
+fallback (the Overview page keeps the configured interval for live stats); when the stream drops,
+the app reconnects with a backoff and polls at the normal interval meanwhile.
+
+With *Settings → Windows notifications* the app shows a Windows toast when a container
+**crashes** (non-zero exit code), runs **out of memory**, becomes **unhealthy** or **keeps
+restarting** (3 starts within a minute). Stops initiated by the user – from the app, the
+`docker` command or `compose down` – and stopping the engine are not reported. Clicking the
+notification opens the window.
+
+### Start with Windows
+
+*Settings → Start with Windows* adds the app to `HKCU\…\CurrentVersion\Run` (no admin rights)
+with `--autostart`, which starts it hidden in the tray. Together with *Start the engine when the
+app starts* and *restore containers* this works like a background service.
 
 ### Add distribution
 
@@ -88,6 +131,30 @@ The engine is selected per distribution on the *WSL engine* page.
   Short image names are expanded to `docker.io/library/…`. `docker-compose` is installed as the
   compose provider. Setting up one engine disables the other so they don't fight over the port.
 
+### API security (TLS)
+
+By default the engine API on `tcp://127.0.0.1:2375` has **no authentication** – any process that
+can reach localhost can control the (rootful) engine, including other WSL distributions and
+containers with host networking, because all WSL 2 distributions share one network namespace.
+
+*WSL engine → Install & setup → API security → Turn TLS on* switches to mutual TLS:
+
+- the engine listens only on a unix socket inside the distribution (Docker `/var/run/docker.sock`,
+  Podman `/run/wls-podman/podman.sock`); access is granted to the group `docker` / `wls-api`,
+  which the default user of the distribution is added to;
+- a CA, a server certificate (`127.0.0.1`, `localhost`) and a client certificate (EC P-256) are
+  generated in `/etc/wls-desktop/tls`; the client certificate, key and CA are copied to
+  `%APPDATA%\WLS_Desktop\tls` (`ca.pem`, `cert.pem`, `key.pem` – usable as `DOCKER_CERT_PATH`);
+- the systemd service `wls-tls-proxy` (`socat`, installed if missing) listens on
+  `127.0.0.1:2376` and accepts only clients presenting the client certificate; it starts and
+  stops together with the engine;
+- the app connects over HTTPS with the client certificate (rustls); the CLI inside WSL and the
+  `docker` shim use the unix socket.
+
+*Turn TLS off* switches back to the plain API on port 2375 and removes the proxy (the
+certificates are kept and reused). See [docs/SECURITY.md](docs/SECURITY.md) for the security
+review.
+
 ### `docker` command for Windows (shim)
 
 The project also builds a small `docker.exe` (`src/shim/docker.rs`) that forwards commands to
@@ -113,7 +180,8 @@ To behave as close to the Docker CLI as possible:
   that WSL cannot see produce a warning.
 - **`DOCKER_HOST` for tools** that talk to the API directly instead of calling the CLI
   (VS Code Dev Containers, Testcontainers, SDKs): the *WSL engine* page can set the user
-  variable `DOCKER_HOST=tcp://127.0.0.1:<port>`.
+  variable `DOCKER_HOST=tcp://127.0.0.1:<port>` (with TLS also `DOCKER_TLS_VERIFY=1` and
+  `DOCKER_CERT_PATH`).
 
 Debugging: `WLS_SHIM_DEBUG=1` prints the executed command; `WLS_ENGINE=podman|docker`,
 `WLS_PORT` and `WLS_DISTRO` override the settings.
@@ -131,7 +199,9 @@ console window when it is not available.
   For Docker this is a systemd override
   `/etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf`, for Podman the unit
   `/etc/systemd/system/wls-podman-api.service`. WSL forwards the port to `localhost` on Windows
-  automatically. The API has no authentication and is reachable only locally.
+  automatically. Without TLS the API has no authentication (see *API security*).
+- **Live updates:** a background thread reads the engine event stream (`/events`) and triggers a
+  debounced refresh; the same events drive the Windows notifications.
 - **WSL operations** (starting / stopping the distribution, `systemctl`, compose, file
   operations) run via `wsl.exe -d <distro> [-u root] -e …`.
 - **Switching distributions:** pick another distribution in Settings (or *Use for the engine*
@@ -167,7 +237,11 @@ Integration tests against a real WSL distribution and engine (distribution from 
 default `Ubuntu`; the Podman test expects an API on `WLS_PODMAN_PORT`, default 2376).
 `live_add_distro` installs and removes a temporary Debian (`WLS-Test-Debian`),
 `live_pkg_helpers` checks install / detect / remove in throwaway Fedora, openSUSE and Arch
-containers (needs the Podman API on `WLS_PORT`, default 2375):
+containers (needs the Podman API on `WLS_PORT`, default 2375). `live_events_stream`,
+`live_build_image` and `live_container_detail` work with throwaway `wls-test-*` containers and
+images, `live_tls_proxy` runs a temporary Podman socket with the TLS proxy on port 2377 and checks
+that only a client with the certificate gets through, `live_autostart_roundtrip` writes and
+removes the Run registry value:
 
 ```bash
 cargo test -- --ignored --test-threads=1
@@ -176,8 +250,9 @@ cargo test -- --ignored --test-threads=1
 For debugging and screenshots: `WLS_START_PAGE` selects the start page (`containers`, `images`,
 `volumes`, `networks`, `compose`, `files`, `engine`, `settings`), `WLS_DEBUG_DIALOG=1` shows a
 sample confirmation dialog, `WLS_DEBUG_HUB=<image>` opens the Docker Hub dialog,
-`WLS_DEBUG_EXPAND=1` expands the engine setup section, `WLS_LANG=en|cs` overrides the language
-without saving it.
+`WLS_DEBUG_EXPAND=1` expands the engine setup section, `WLS_DEBUG_BUILD=1` opens the build
+dialog, `WLS_DEBUG_DETAIL=<container>[:overview|stats|logs|recreate]` opens the container detail,
+`WLS_LANG=en|cs` overrides the language without saving it.
 
 ## UI conventions
 
@@ -204,8 +279,22 @@ Ideas for future improvements are collected in [docs/ROADMAP.md](docs/ROADMAP.md
 src/
   main.rs          entry point, window, single instance
   app.rs           app state, navigation, dialogs, toasts
-  worker.rs        background thread: refresh and actions
-  docker.rs        Docker Engine API client (ureq), Docker Hub search and tags
+  worker/          background thread: refresh and actions
+    mod.rs         commands, messages, refresh loop, dispatcher
+    events.rs      engine event stream (/events), debounced refresh
+    notify.rs      crash / OOM / unhealthy / restart-loop detection for notifications
+    tracking.rs    remembering and restoring running containers
+    engine_ops.rs  engine start / stop, install, API setup, TLS, keep-alive, daemon.json
+    distro.rs      adding a distribution
+    containers.rs  run, compose, pause all, terminal
+    detail.rs      container detail: inspect, stats feed, recreate
+    build.rs       building images from a Dockerfile
+    fs_ops.rs      file operations
+    spec.rs        RunSpec, BuildSpec, AddDistroSpec
+  docker.rs        Docker Engine API client (ureq, optional mutual TLS), events, Docker Hub
+  inspect.rs       parsing container inspect data
+  notify.rs        Windows toast notifications (AUMID registration)
+  autostart.rs     start with Windows (HKCU Run key)
   engine.rs        Docker / Podman: setup, install and uninstall scripts, CLI
   wsl.rs           wsl.exe: distributions, commands, terminal, keep-alive
   fs.rs            file operations inside the distribution

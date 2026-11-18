@@ -323,7 +323,8 @@ pub fn hub_tags(repo: &str) -> Result<Vec<HubTag>, String> {
 
 pub fn short_id(id: &str) -> &str {
     let id = id.trim_start_matches("sha256:");
-    &id[..id.len().min(12)]
+    // po znacích – ID z API nemusí být ASCII (řez bajtů by mohl panikařit)
+    id.char_indices().nth(12).map(|(i, _)| &id[..i]).unwrap_or(id)
 }
 
 pub fn enc(s: &str) -> String {
@@ -434,17 +435,28 @@ pub fn tls_config(dir: &std::path::Path) -> Result<rustls::ClientConfig, String>
 }
 
 /// Zapne / vypne TLS pro všechna další spojení s enginem.
+/// Když se certifikáty nepodaří načíst, zůstane HTTPS s prázdnou sadou CA – spojení pak selže,
+/// ale nikdy se tiše nepřejde na nešifrované HTTP.
 pub fn configure_tls(on: bool) -> Result<(), String> {
-    let cfg = if on {
-        let dir = tls_dir().ok_or("APPDATA")?;
-        Some(std::sync::Arc::new(tls_config(&dir)?))
+    let (cfg, res) = if on {
+        match tls_dir().ok_or_else(|| "APPDATA".to_string()).and_then(|d| tls_config(&d)) {
+            Ok(c) => (Some(std::sync::Arc::new(c)), Ok(())),
+            Err(e) => {
+                let deny = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
+                    .with_safe_default_protocol_versions()
+                    .map_err(|e| e.to_string())?
+                    .with_root_certificates(rustls::RootCertStore::empty())
+                    .with_no_client_auth();
+                (Some(std::sync::Arc::new(deny)), Err(e))
+            }
+        }
     } else {
-        None
+        (None, Ok(()))
     };
     if let Ok(mut g) = TLS.write() {
         *g = cfg;
     }
-    Ok(())
+    res
 }
 
 fn tls() -> Option<std::sync::Arc<rustls::ClientConfig>> {
@@ -689,6 +701,10 @@ impl Docker {
                     break;
                 }
                 let size = u32::from_be_bytes([h[4], h[5], h[6], h[7]]) as usize;
+                // ochrana před nesmyslnou velikostí rámce (až 4 GiB)
+                if size > 16 * 1024 * 1024 {
+                    return Err(format!("log frame too large: {size} B"));
+                }
                 let mut data = vec![0u8; size];
                 r.read_exact(&mut data).map_err(|e| e.to_string())?;
                 if !on_chunk(&String::from_utf8_lossy(&data)) {
@@ -847,6 +863,13 @@ mod tests {
         assert!(!e.triggers_refresh());
         let v: Event = serde_json::from_str(r#"{"Type":"volume","Action":"create","Actor":{"ID":"data"}}"#).unwrap();
         assert!(v.triggers_refresh());
+    }
+
+    #[test]
+    fn short_id_is_char_safe() {
+        assert_eq!(short_id("sha256:0123456789abcdef"), "0123456789ab");
+        assert_eq!(short_id("ěščřžýáíéůúěščř"), "ěščřžýáíéůúě");
+        assert_eq!(short_id("abc"), "abc");
     }
 
     #[test]

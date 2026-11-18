@@ -252,6 +252,11 @@ pub fn install_distro(distro: &str, name: &str) -> Result<String, String> {
 #[cfg(test)]
 mod online_tests {
     #[test]
+    fn wt_escapes_semicolons() {
+        assert_eq!(super::wt_escape("a; calc.exe"), r"a\; calc.exe");
+    }
+
+    #[test]
     fn parse() {
         let t = "Následuje seznam…\n\nNAME                            FRIENDLY NAME\nUbuntu                          Ubuntu\nDebian                          Debian GNU/Linux\nFedoraLinux-44                  Fedora Linux 44\n";
         let v = super::parse_online(t);
@@ -281,14 +286,27 @@ pub fn keepalive(distro: &str) -> Result<Child, String> {
 
 /// Otevře nový tab ve Windows Terminalu (fallback: nové okno konzole).
 pub fn open_terminal(title: &str, wsl_args: &[String]) -> Result<String, String> {
+    // wt.exe bere `;` jako oddělovač vlastních příkazů – v argumentech (název kontejneru,
+    // složka z labelu compose…) ho musíme escapovat, jinak by šlo spustit cokoli ve Windows
     let mut wt = Command::new("wt.exe");
-    wt.args(["-w", "0", "nt", "--title", title, "wsl.exe"]).args(wsl_args);
+    wt.args(["-w", "0", "nt", "--title", &wt_escape(title), "wsl.exe"]).args(wsl_args.iter().map(|a| wt_escape(a)));
     if wt.spawn().is_ok() {
         return Ok(String::new());
     }
-    let mut c = Command::new("cmd.exe");
-    c.args(["/c", "start", title, "wsl.exe"]).args(wsl_args);
+    // fallback bez cmd.exe (to by vykládalo & | > …): wsl.exe přímo v novém okně konzole
+    let mut c = Command::new("wsl.exe");
+    c.args(wsl_args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
+    }
     c.spawn().map(|_| String::new()).map_err(|e| e.to_string())
+}
+
+/// Escapuje `;` pro příkazovou řádku Windows Terminalu.
+fn wt_escape(s: &str) -> String {
+    s.replace(';', "\\;")
 }
 
 /// Linuxová cesta -> UNC cesta pro Windows (\\wsl.localhost\Distro\...).

@@ -39,7 +39,9 @@ impl Worker {
                 return Err(t!("Příprava distribuce selhala – viz výstup", "Distribution preparation failed – see output").into());
             }
         }
-        if !user.is_empty() && !spec.password.is_empty() {
+        if spec.password.contains(['\n', '\r']) {
+            log.push_str(t!("Heslo obsahuje konec řádku – nenastaveno\n", "The password contains a line break – not set\n"));
+        } else if !user.is_empty() && !spec.password.is_empty() {
             match wsl::run_stdin(&name, Some("root"), &["chpasswd"], &format!("{user}:{}\n", spec.password)) {
                 Ok(_) => log.push_str(t!("Heslo nastaveno\n", "Password set\n")),
                 Err(e) => log.push_str(&tf!("Heslo se nepodařilo nastavit: {e}\n", "Failed to set the password: {e}\n")),
