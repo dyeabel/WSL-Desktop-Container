@@ -437,6 +437,7 @@ fn live_fs_root_symlink_safe() {
     assert!(p.is_ok(), "{p:?}");
     assert!(state.contains("tajne") && state.contains("600 secret") && state.contains("640 plain") && state.contains("b\n"), "{state}");
     assert!(!state.contains(".wls-edit"), "{state}");
+}
 
 /// Záloha, obnova a klon volume + velikosti (jen volume `wls-test-*`).
 /// `WLS_DISTRO=Debian cargo test live_volume_backup_restore -- --ignored --nocapture`
