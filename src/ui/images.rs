@@ -318,6 +318,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 app.send(Cmd::Pull(app.pull_input.trim().to_string()));
                 app.pull_input.clear();
             }
+            gap(ui);
+            crate::ui::build::toolbar_button(app, ui);
         } else {
             more_menu(ui, |ui| {
                 if ui

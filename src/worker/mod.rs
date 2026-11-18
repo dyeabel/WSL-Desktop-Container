@@ -1,6 +1,7 @@
 //! Práce na pozadí: periodické obnovování stavu a provádění akcí,
 //! aby UI vlákno nikdy neblokovalo.
 
+pub(crate) mod build;
 mod containers;
 mod distro;
 mod engine_ops;
@@ -8,7 +9,7 @@ mod fs_ops;
 mod spec;
 mod tracking;
 
-pub use spec::{AddDistroSpec, RunSpec};
+pub use spec::{is_windows_path, AddDistroSpec, BuildSpec, RunSpec};
 
 use crate::config::Config;
 use crate::engine::Engine;
@@ -61,6 +62,8 @@ pub enum Cmd {
     Container(String, &'static str),
     PruneContainers,
     Run(RunSpec),
+    /// sestavení image z Dockerfile (výstup průběžně jako Msg::BuildOutput)
+    Build(BuildSpec),
     Pull(String),
     /// hledání na Docker Hubu
     HubSearch(String),
@@ -119,6 +122,10 @@ pub enum Msg {
     OnlineDistros(Result<Vec<(String, String)>, String>),
     /// worker změnil konfiguraci (např. přepnul distribuci) – UI si má obnovit koncept nastavení
     ConfigChanged,
+    /// řádek výstupu probíhajícího sestavení image
+    BuildOutput(String),
+    /// sestavení skončilo (text úspěchu / chyba)
+    BuildDone(Result<String, String>),
 }
 
 /// Souhrnný stav pro tray (zapisuje worker, čte vlákno UI/traye).
@@ -313,6 +320,7 @@ impl Worker {
             Cmd::Container(id, action) => d.container_action(&id, action).map(|_| String::new()),
             Cmd::PruneContainers => d.prune("containers", None),
             Cmd::Run(spec) => self.run_container(spec),
+            Cmd::Build(spec) => self.build_image(spec),
             Cmd::Pull(r) => {
                 self.send(Msg::Toast(true, tf!("Stahuji {r}…", "Pulling {r}…")));
                 d.pull(&r)

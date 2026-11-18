@@ -176,3 +176,46 @@ fn live_docker_snapshot() {
     let df = Docker::new(2375).df();
     assert!(df.is_some());
 }
+
+/// Sestavení image z Dockerfile stejnou cestou jako aplikace (`worker::build::run_build`):
+/// dočasná složka v %TEMP% (windowsová cesta -> wslpath), engine a distribuce z konfigurace
+/// (WLS_DISTRO ji přepíše), API na portu WLS_PORT (výchozí 2375). Image `wls-test-build:latest`
+/// a složka se na konci smažou.
+#[test]
+#[ignore]
+fn live_build_image() {
+    let cfg = crate::config::Config::load();
+    let distro = std::env::var("WLS_DISTRO").unwrap_or(cfg.distro.clone());
+    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let d = Docker::new(port);
+    assert!(d.ping(), "API na {port} neodpovídá");
+
+    let dir = std::env::temp_dir().join(format!("wls-test-build-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("Dockerfile"), "FROM docker.io/library/alpine:3.20\nRUN echo ok\n").unwrap();
+
+    let spec = crate::worker::BuildSpec {
+        context: dir.to_string_lossy().to_string(),
+        tags: "wls-test-build:latest".into(),
+        ..Default::default()
+    };
+    let mut lines = Vec::new();
+    let res = crate::worker::build::run_build(&distro, cfg.engine, port, &spec, |l| {
+        eprintln!("| {l}");
+        lines.push(l.to_string());
+    });
+    eprintln!("=> {res:?} ({} řádků výstupu)", lines.len());
+
+    let img: Result<serde_json::Value, String> = d.get("/images/wls-test-build:latest/json");
+    let removed = d.delete("/images/wls-test-build:latest");
+    eprintln!("odstranění image: {removed:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(res.is_ok(), "{res:?}");
+    assert!(lines.len() > 2, "výstup se nestreamoval: {lines:?}");
+    let img = img.expect("image v API");
+    eprintln!("image Id: {}", img.get("Id").and_then(|v| v.as_str()).unwrap_or("?"));
+    assert!(removed.is_ok(), "{removed:?}");
+    assert!(d.get::<serde_json::Value>("/images/wls-test-build:latest/json").is_err(), "image zůstal");
+    assert!(!dir.exists());
+}
