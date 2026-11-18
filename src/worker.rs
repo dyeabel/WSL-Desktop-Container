@@ -546,7 +546,7 @@ impl Worker {
             if wsl::run(&distro, Some("root"), None, &["test", "-d", "/run/systemd/system"]).is_err() {
                 log.push_str(t!(
                     "systemd stále neběží – zkus „Vypnout celé WSL“ a znovu.\n",
-                    "systemd is still not running – try “Shut down WSL” and retry.\n"
+                    "systemd is still not running – try “Shut down all of WSL” and retry.\n"
                 ));
                 return Err(t!("systemd se nepodařilo zapnout", "Failed to enable systemd").into());
             }
@@ -629,7 +629,7 @@ impl Worker {
         log.push_str(if systemd {
             t!("systemd běží\n", "systemd is running\n")
         } else {
-            t!("systemd zatím neběží – může pomoci „Vypnout celé WSL“\n", "systemd is not running yet – “Shut down WSL” may help\n")
+            t!("systemd zatím neběží – může pomoci „Vypnout celé WSL“\n", "systemd is not running yet – “Shut down all of WSL” may help\n")
         });
 
         // 4) přepnout aplikaci a/nebo nainstalovat engine
@@ -843,8 +843,8 @@ impl Worker {
                 } else {
                     self.check_engine();
                     Err(tf!(
-                        "{name} se nespustil nebo API na 127.0.0.1:{} neodpovídá. Použij „Nastavit TCP API“ nebo „Nainstalovat a nastavit“ na stránce WSL engine.",
-                        "{name} did not start or the API on 127.0.0.1:{} is not responding. Use “Set up TCP API” or “Install and configure” on the WSL engine page.",
+                        "{name} se nespustil nebo API na 127.0.0.1:{} neodpovídá. Použij „Nastavit jen API“ nebo „Nainstalovat a nastavit“ na stránce WSL engine.",
+                        "{name} did not start or the API on 127.0.0.1:{} is not responding. Use “Set up API only” or “Install and set up” on the WSL engine page.",
                         cfg.port
                     ))
                 }

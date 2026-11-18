@@ -28,15 +28,15 @@ impl Page {
     pub const BOTTOM: [Page; 2] = [Page::Engine, Page::Settings];
     pub fn label(self) -> &'static str {
         match self {
-            Page::Dashboard => "\u{E2C2}  Přehled",
-            Page::Containers => "\u{E1DA}  Kontejnery",
-            Page::Images => "\u{E2CA}  Image",
-            Page::Volumes => "\u{E2A0}  Volume",
-            Page::Networks => "\u{E408}  Sítě",
+            Page::Dashboard => t!("\u{E2C2}  Přehled", "\u{E2C2}  Overview"),
+            Page::Containers => t!("\u{E1DA}  Kontejnery", "\u{E1DA}  Containers"),
+            Page::Images => t!("\u{E2CA}  Image", "\u{E2CA}  Images"),
+            Page::Volumes => t!("\u{E2A0}  Volume", "\u{E2A0}  Volumes"),
+            Page::Networks => t!("\u{E408}  Sítě", "\u{E408}  Networks"),
             Page::Compose => "\u{E466}  Compose",
-            Page::Files => "\u{E260}  Soubory",
+            Page::Files => t!("\u{E260}  Soubory", "\u{E260}  Files"),
             Page::Engine => "\u{EB02}  WSL engine",
-            Page::Settings => "\u{E270}  Nastavení",
+            Page::Settings => t!("\u{E270}  Nastavení", "\u{E270}  Settings"),
         }
     }
 }
@@ -123,6 +123,10 @@ impl App {
         theme::apply(&cc.egui_ctx);
         let cfg = Config::load();
         crate::i18n::set_language(&cfg.language);
+        // pro ladění/screenshoty: WLS_LANG=en|cs přepíše jazyk (bez uložení do konfigurace)
+        if let Ok(l) = std::env::var("WLS_LANG") {
+            crate::i18n::set_language(&l);
+        }
         let cfg_draft = cfg.clone();
         let cfg = Arc::new(RwLock::new(cfg));
         let (tx, rx, shared) = worker::spawn(cc.egui_ctx.clone(), cfg.clone());
@@ -139,7 +143,7 @@ impl App {
         }
         let mut startup_toasts = Vec::new();
         if let Err(e) = crate::tray::init(cc.egui_ctx.clone(), tx.clone(), shared.clone(), cfg.clone()) {
-            startup_toasts.push(Toast { ok: false, text: format!("Ikonu v oznamovací oblasti nelze vytvořit: {e}"), until: 0.0 });
+            startup_toasts.push(Toast { ok: false, text: tf!("Ikonu v oznamovací oblasti nelze vytvořit: {e}", "Cannot create the tray icon: {e}"), until: 0.0 });
         }
         let logo = cc.egui_ctx.load_texture(
             "logo",
@@ -172,8 +176,8 @@ impl App {
             toasts: Vec::new(),
             // pro ladění vzhledu dialogu: WLS_DEBUG_DIALOG=1
             confirm: std::env::var("WLS_DEBUG_DIALOG").ok().map(|_| Confirm {
-                title: "Odstranit nginx:alpine?".into(),
-                text: "Image bude odstraněn (pokud ho nepoužívá žádný kontejner).".into(),
+                title: t!("Odstranit nginx:alpine?", "Remove nginx:alpine?").into(),
+                text: t!("Image bude odstraněn (pokud ho nepoužívá žádný kontejner).", "The image will be removed (if no container uses it).").into(),
                 cmd: Cmd::Refresh,
             }),
             output: None,
@@ -299,8 +303,8 @@ impl App {
             self.send(Cmd::SetKeepAlive(c.keep_alive));
         }
         match c.save() {
-            Ok(()) => self.toast(true, "Nastavení uloženo"),
-            Err(e) => self.toast(false, format!("Nastavení nelze uložit: {e}")),
+            Ok(()) => self.toast(true, t!("Nastavení uloženo", "Settings saved")),
+            Err(e) => self.toast(false, tf!("Nastavení nelze uložit: {e}", "Cannot save settings: {e}")),
         }
         if let Ok(mut g) = self.cfg.write() {
             *g = c;
@@ -339,7 +343,7 @@ impl App {
             });
             if let Err(e) = res {
                 if let Ok(mut g) = b.lock() {
-                    g.push_str(&format!("\n[chyba streamu logů: {e}]\n"));
+                    g.push_str(&tf!("\n[chyba streamu logů: {e}]\n", "\n[log stream error: {e}]\n"));
                 }
             }
         });
@@ -453,11 +457,11 @@ impl App {
                 .as_ref()
                 .map(|i| (i.containers_running, i.containers))
                 .unwrap_or((0, 0));
-            (theme::GREEN, format!("{e} běží ({d}) · {r}/{t} kontejnerů"))
+            (theme::GREEN, tf!("{e} běží ({d}) · {r}/{t} kontejnerů", "{e} running ({d}) · {r}/{t} containers"))
         } else if self.current_distro().map(|x| x.running()).unwrap_or(false) {
-            (theme::YELLOW, format!("{d} běží, {e} API nedostupné"))
+            (theme::YELLOW, tf!("{d} běží, {e} API nedostupné", "{d} running, {e} API unavailable"))
         } else {
-            (theme::GREY, format!("{d} zastavena"))
+            (theme::GREY, tf!("{d} zastavena", "{d} stopped"))
         }
     }
 
@@ -479,11 +483,11 @@ impl App {
                         let distro_running = self.current_distro().map(|d| d.running()).unwrap_or(false);
                         let (state, detail) = if connected {
                             let (r, t) = self.snap.info.as_ref().map(|i| (i.containers_running, i.containers)).unwrap_or((0, 0));
-                            ("běží", format!("{distro} · {r}/{t} kontejnerů"))
+                            (t!("běží", "running"), tf!("{distro} · {r}/{t} kontejnerů", "{distro} · {r}/{t} containers"))
                         } else if distro_running {
-                            ("API nedostupné", format!("{distro} běží"))
+                            (t!("API nedostupné", "API unavailable"), tf!("{distro} běží", "{distro} running"))
                         } else {
-                            ("zastaven", format!("{distro} zastavena"))
+                            (t!("zastaven", "stopped"), tf!("{distro} zastavena", "{distro} stopped"))
                         };
                         egui::Frame::new()
                             .fill(theme::CARD)
@@ -517,15 +521,15 @@ impl App {
                                             self.send(Cmd::EngineStop);
                                         }
                                         if ui
-                                            .add(egui::Button::new("\u{E330} Uspat").min_size(half))
-                                            .on_hover_text("Ukončí distribuci a uvolní paměť")
+                                            .add(egui::Button::new(t!("\u{E330} Uspat", "\u{E330} Sleep")).min_size(half))
+                                            .on_hover_text(t!("Ukončí distribuci a uvolní paměť", "Terminates the distribution and frees memory"))
                                             .clicked()
                                         {
                                             self.send(Cmd::Sleep);
                                         }
                                     } else if ui
                                         .add(
-                                            egui::Button::new(RichText::new(format!("\u{E3D0} Spustit {ename}")).color(theme::ACCENT_TEXT))
+                                            egui::Button::new(RichText::new(tf!("\u{E3D0} Spustit {ename}", "\u{E3D0} Start {ename}")).color(theme::ACCENT_TEXT))
                                                 .fill(theme::ACCENT)
                                                 .min_size(egui::vec2(w, 26.0)),
                                         )
@@ -600,7 +604,7 @@ impl App {
                         ui.label(RichText::new(format!("tcp://127.0.0.1:{port}")).small().color(theme::MUTED));
                         if self.shared.busy.load(Ordering::Relaxed) > 0 {
                             ui.spinner();
-                            ui.label(RichText::new("Pracuji…").small());
+                            ui.label(RichText::new(t!("Pracuji…", "Working…")).small());
                         }
                     });
                 });
@@ -614,7 +618,7 @@ impl App {
         if let Some(c) = &self.confirm {
             let (_, esc) = ui::modal(ctx, "confirm", &c.title, 440.0, |ui| {
                 ui.label(RichText::new(&c.text).color(egui::Color32::from_gray(210)));
-                let (ok, cancel) = ui::dialog_buttons(ui, "Potvrdit", true, true);
+                let (ok, cancel) = ui::dialog_buttons(ui, t!("Potvrdit", "Confirm"), true, true);
                 if ok {
                     run_cmd = Some(c.cmd.clone());
                 }
@@ -632,7 +636,7 @@ impl App {
         // výstup příkazu
         let mut open = self.output.is_some();
         if let Some((title, text)) = &self.output {
-            egui::Window::new(format!("Výstup: {title}"))
+            egui::Window::new(tf!("Výstup: {title}", "Output: {title}"))
                 .open(&mut open)
                 .default_size([720.0, 400.0])
                 .show(ctx, |ui| {

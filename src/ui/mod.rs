@@ -281,7 +281,7 @@ pub fn dialog_buttons(ui: &mut egui::Ui, ok: &str, danger: bool, enabled: bool) 
                 let b = if danger { danger_button(ui, ok) } else { accent_button(ui, ok) };
                 res.0 = b.clicked();
             });
-            res.1 = ui.button("Zrušit").clicked();
+            res.1 = ui.button(t!("Zrušit", "Cancel")).clicked();
         });
     });
     res
@@ -331,7 +331,7 @@ pub fn toolbar_lr(ui: &mut egui::Ui, right_width: f32, mut content: impl FnMut(&
 
 /// Pole filtru (pevná šířka) – patří do pravé části `toolbar_lr`.
 pub fn filter_field(ui: &mut egui::Ui, text: &mut String) {
-    ui.add(field(text).hint_text("\u{E30C} Filtr…").desired_width(190.0));
+    ui.add(field(text).hint_text(t!("\u{E30C} Filtr…", "\u{E30C} Filter…")).desired_width(190.0));
 }
 
 /// Nabídka „⋯“ pro méně častné akce (úklid apod.).
@@ -342,7 +342,7 @@ pub fn more_menu(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
         add(ui);
     })
     .response
-    .on_hover_text("Další akce");
+    .on_hover_text(t!("Další akce", "More actions"));
 }
 
 /// Mezera mezi skupinami v liště.
@@ -387,11 +387,11 @@ pub fn fmt_ago(ts: i64) -> String {
         .unwrap_or(0);
     let s = (now - ts).max(0);
     match s {
-        0..=59 => "právě teď".into(),
-        60..=3599 => format!("před {} min", s / 60),
-        3600..=86_399 => format!("před {} h", s / 3600),
-        86_400..=2_591_999 => format!("před {} dny", s / 86_400),
-        _ => format!("před {} měs.", s / 2_592_000),
+        0..=59 => t!("právě teď", "just now").into(),
+        60..=3599 => tf!("před {} min", "{} min ago", s / 60),
+        3600..=86_399 => tf!("před {} h", "{} h ago", s / 3600),
+        86_400..=2_591_999 => tf!("před {} dny", "{} days ago", s / 86_400),
+        _ => tf!("před {} měs.", "{} mo. ago", s / 2_592_000),
     }
 }
 
@@ -405,14 +405,14 @@ pub fn need_engine(app: &mut crate::app::App, ui: &mut egui::Ui) -> bool {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             dot(ui, theme::GREY);
-            ui.label(RichText::new(format!("{ename} není dostupný")).strong());
+            ui.label(RichText::new(tf!("{ename} není dostupný", "{ename} is not available")).strong());
         });
         if let Some(e) = &app.snap.error {
             ui.label(muted(e));
         }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            if accent_button(ui, "\u{E3D0} Spustit engine").clicked() {
+            if accent_button(ui, t!("\u{E3D0} Spustit engine", "\u{E3D0} Start engine")).clicked() {
                 app.send(crate::worker::Cmd::EngineStart);
             }
             if ui.button("\u{EB02} WSL engine").clicked() {

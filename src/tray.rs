@@ -145,19 +145,19 @@ pub fn init(
     cfg: Arc<RwLock<Config>>,
 ) -> Result<(), String> {
     let c = cfg.read().map(|c| c.clone()).unwrap_or_default();
-    let status = MenuItem::with_id("status", "Zjišťuji stav…", false, None);
-    let open = MenuItem::with_id("open", "Otevřít WLS Desktop", true, None);
-    let start = MenuItem::with_id("start", "Spustit / probudit engine", true, None);
-    let stop = MenuItem::with_id("stop", "Zastavit Docker", true, None);
-    let restart = MenuItem::with_id("restart", "Restartovat Docker", true, None);
-    let sleep = MenuItem::with_id("sleep", "Uspat distribuci (uvolnit RAM)", true, None);
-    let pause = MenuItem::with_id("pause", "Pozastavit všechny kontejnery", true, None);
-    let unpause = MenuItem::with_id("unpause", "Obnovit pozastavené kontejnery", true, None);
-    let term = MenuItem::with_id("term", "Terminál distribuce", true, None);
-    let explorer = MenuItem::with_id("explorer", "Soubory distribuce v Průzkumníku", true, None);
-    let close_tray = CheckMenuItem::with_id("close_tray", "Zavírat do oznamovací oblasti", true, c.close_to_tray, None);
-    let min_tray = CheckMenuItem::with_id("min_tray", "Minimalizovat do oznamovací oblasti", true, c.minimize_to_tray, None);
-    let quit = MenuItem::with_id("quit", "Ukončit", true, None);
+    let status = MenuItem::with_id("status", t!("Zjišťuji stav…", "Checking status…"), false, None);
+    let open = MenuItem::with_id("open", t!("Otevřít WLS Desktop", "Open WLS Desktop"), true, None);
+    let start = MenuItem::with_id("start", t!("Spustit / probudit engine", "Start / wake engine"), true, None);
+    let stop = MenuItem::with_id("stop", t!("Zastavit Docker", "Stop Docker"), true, None);
+    let restart = MenuItem::with_id("restart", t!("Restartovat Docker", "Restart Docker"), true, None);
+    let sleep = MenuItem::with_id("sleep", t!("Uspat distribuci (uvolnit RAM)", "Put distribution to sleep (free RAM)"), true, None);
+    let pause = MenuItem::with_id("pause", t!("Pozastavit všechny kontejnery", "Pause all containers"), true, None);
+    let unpause = MenuItem::with_id("unpause", t!("Obnovit pozastavené kontejnery", "Resume paused containers"), true, None);
+    let term = MenuItem::with_id("term", t!("Terminál distribuce", "Distribution terminal"), true, None);
+    let explorer = MenuItem::with_id("explorer", t!("Soubory distribuce v Průzkumníku", "Distribution files in Explorer"), true, None);
+    let close_tray = CheckMenuItem::with_id("close_tray", t!("Zavírat do oznamovací oblasti", "Close to tray"), true, c.close_to_tray, None);
+    let min_tray = CheckMenuItem::with_id("min_tray", t!("Minimalizovat do oznamovací oblasti", "Minimize to tray"), true, c.minimize_to_tray, None);
+    let quit = MenuItem::with_id("quit", t!("Ukončit", "Quit"), true, None);
 
     let menu = Menu::new();
     menu.append_items(&[
@@ -183,8 +183,8 @@ pub fn init(
     ])
     .map_err(|e| e.to_string())?;
 
-    let icon_off = tray_icon([0x80, 0x80, 0x80]).ok_or("ikona")?;
-    let icon_on = tray_icon([0x3F, 0xC2, 0x5A]).ok_or("ikona")?;
+    let icon_off = tray_icon([0x80, 0x80, 0x80]).ok_or(t!("ikona", "icon"))?;
+    let icon_on = tray_icon([0x3F, 0xC2, 0x5A]).ok_or(t!("ikona", "icon"))?;
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
