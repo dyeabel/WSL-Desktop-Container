@@ -75,10 +75,20 @@ pub fn portable_dir() -> Option<PathBuf> {
 /// Složka s daty aplikace (konfigurace, certifikáty, seznam kontejnerů…):
 /// v portable režimu `<složka aplikace>\data`, jinak `%APPDATA%\WLS_Desktop`.
 pub fn data_dir() -> Option<PathBuf> {
+    // WLS_DATA_DIR: oddělená datová složka (testy, zkušební instance) – nic se nezapíše
+    // do skutečné konfigurace a uživatelské proměnné prostředí (DOCKER_HOST) se nemění
+    if let Some(d) = std::env::var_os("WLS_DATA_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(d));
+    }
     if let Some(d) = portable_dir() {
         return Some(d.join("data"));
     }
     std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("WLS_Desktop"))
+}
+
+/// Běží aplikace s oddělenou datovou složkou (`WLS_DATA_DIR`)? Pak se nemění nic mimo ni.
+pub fn isolated() -> bool {
+    std::env::var_os("WLS_DATA_DIR").is_some_and(|d| !d.is_empty())
 }
 
 fn path() -> Option<PathBuf> {

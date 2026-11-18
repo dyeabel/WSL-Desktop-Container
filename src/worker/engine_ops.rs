@@ -412,6 +412,9 @@ pub fn api_port(tls: bool, port: u16) -> u16 {
 /// Uživatelská proměnná DOCKER_HOST míří na TCP API (nastavila ji aplikace) – při změně
 /// režimu nebo certifikátů se má převést. npipe://… se nemění.
 fn docker_host_is_tcp() -> bool {
+    if crate::config::isolated() {
+        return false;
+    }
     crate::shim_install::status().docker_host.is_some_and(|h| h.starts_with("tcp://"))
 }
 

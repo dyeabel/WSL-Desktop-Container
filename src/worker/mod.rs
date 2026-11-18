@@ -14,6 +14,8 @@ mod fs_ops;
 mod notify;
 mod recreate_body;
 mod spec;
+#[cfg(test)]
+pub mod testkit;
 mod tracking;
 mod volumes;
 

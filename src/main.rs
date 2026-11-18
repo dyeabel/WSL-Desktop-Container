@@ -28,6 +28,8 @@ mod worker;
 mod wsl;
 mod wslconfig;
 #[cfg(test)]
+mod live_docker;
+#[cfg(test)]
 mod live_tests;
 
 /// Vytvoří pojmenovaný mutex pro aktuální relaci; false = aplikace už běží.
