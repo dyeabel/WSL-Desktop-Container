@@ -229,7 +229,7 @@ fn dialog(app: &mut App, ctx: &egui::Context) {
                     "\u{E4E0} Dockerfile {} does not exist.",
                     windows_dockerfile_path(s).map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
                 ))
-                .color(theme::YELLOW)
+                .color(theme::yellow())
                 .small(),
             );
         }
@@ -239,18 +239,18 @@ fn dialog(app: &mut App, ctx: &egui::Context) {
         }
         if running {
             ui.add_space(4.0);
-            ui.label(RichText::new(t!("Sestavení už běží – počkej na jeho dokončení.", "A build is already running – wait for it to finish.")).color(theme::YELLOW).small());
+            ui.label(RichText::new(t!("Sestavení už běží – počkej na jeho dokončení.", "A build is already running – wait for it to finish.")).color(theme::yellow()).small());
         }
 
         // náhled příkazu
         ui.add_space(10.0);
         egui::Frame::new()
-            .fill(theme::BG)
+            .fill(theme::bg())
             .corner_radius(6)
             .inner_margin(egui::Margin::same(8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.add(egui::Label::new(RichText::new(s.args().join(" ")).monospace().small().color(theme::MUTED)).wrap());
+                ui.add(egui::Label::new(RichText::new(s.args().join(" ")).monospace().small().color(theme::muted())).wrap());
             });
         let valid = !s.context.trim().is_empty() && !running;
         (ok, cancel) = dialog_buttons(ui, &tf!("{HAMMER} Sestavit", "{HAMMER} Build"), false, valid);
@@ -283,10 +283,10 @@ fn log_window(app: &mut App, ctx: &egui::Context) {
                         ui.label(t!("Sestavuji…", "Building…"));
                     }
                     Some(Ok(t)) => {
-                        ui.label(RichText::new(format!("\u{E184} {t}")).color(theme::GREEN).strong());
+                        ui.label(RichText::new(format!("\u{E184} {t}")).color(theme::green()).strong());
                     }
                     Some(Err(e)) => {
-                        ui.label(RichText::new(format!("\u{E4F8} {e}")).color(theme::RED).strong());
+                        ui.label(RichText::new(format!("\u{E4F8} {e}")).color(theme::red()).strong());
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

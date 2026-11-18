@@ -174,7 +174,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button(RichText::new(t!("\u{E4A6} Odstranit…", "\u{E4A6} Remove…")).color(theme::RED)).clicked() {
+                        if ui.button(RichText::new(t!("\u{E4A6} Odstranit…", "\u{E4A6} Remove…")).color(theme::red())).clicked() {
                             app.ask(tf!("Odstranit volume {}?", "Remove volume {}?", v.name), t!("Data ve volume budou nenávratně smazána!", "Data in the volume will be permanently deleted!"), Cmd::RemoveVolume(v.name.clone()));
                             ui.close_menu();
                         }
@@ -274,7 +274,7 @@ fn pick_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
 }
 
 fn warn(ui: &mut egui::Ui, text: String) {
-    ui.add(egui::Label::new(RichText::new(format!("{WARN} {text}")).color(theme::YELLOW).small()).wrap());
+    ui.add(egui::Label::new(RichText::new(format!("{WARN} {text}")).color(theme::yellow()).small()).wrap());
 }
 
 /// Dialogy stránky (volá se každý snímek).

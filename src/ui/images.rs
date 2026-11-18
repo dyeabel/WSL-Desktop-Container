@@ -146,7 +146,7 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
         }
 
         if let Some(e) = &app.hub.error {
-            ui.label(RichText::new(format!("\u{E4E0} {e}")).color(theme::RED));
+            ui.label(RichText::new(format!("\u{E4E0} {e}")).color(theme::red()));
         }
 
         // --- oblíbené / výsledky
@@ -178,12 +178,12 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
                         body.row(32.0, |mut row| {
                             row.col(|ui| {
                                 let t = RichText::new(&r.name).strong();
-                                let t = if sel { t.color(theme::ACCENT) } else { t };
+                                let t = if sel { t.color(theme::accent()) } else { t };
                                 if ui.add(egui::Label::new(t).selectable(false).sense(egui::Sense::click())).clicked() {
                                     pick = Some((r.name.clone(), r.is_official));
                                 }
                                 if r.is_official {
-                                    ui.label(RichText::new(t!("\u{E606} oficiální", "\u{E606} official")).small().color(theme::GREEN));
+                                    ui.label(RichText::new(t!("\u{E606} oficiální", "\u{E606} official")).small().color(theme::green()));
                                 }
                             });
                             row.col(|ui| {
@@ -216,7 +216,7 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&repo).size(17.0).strong());
                 if app.hub.selected_official {
-                    ui.label(RichText::new(t!("\u{E606} oficiální", "\u{E606} official")).small().color(theme::GREEN));
+                    ui.label(RichText::new(t!("\u{E606} oficiální", "\u{E606} official")).small().color(theme::green()));
                 }
                 if app.hub.tags_loading {
                     ui.spinner();
@@ -257,7 +257,7 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
                             body.row(30.0, |mut row| {
                                 row.col(|ui| {
                                     let txt = RichText::new(&t.name).monospace();
-                                    let txt = if sel { txt.color(theme::ACCENT).strong() } else { txt };
+                                    let txt = if sel { txt.color(theme::accent()).strong() } else { txt };
                                     if ui.add(egui::Label::new(txt).selectable(false).sense(egui::Sense::click())).clicked() {
                                         chosen = Some(t.name.clone());
                                     }
@@ -370,7 +370,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 ui.label(RichText::new(shown.join(", ")).strong()).on_hover_text(tags.join("\n"));
             });
             r.col(|ui| {
-                ui.label(RichText::new(short_id(&img.id)).monospace().color(theme::MUTED));
+                ui.label(RichText::new(short_id(&img.id)).monospace().color(theme::muted()));
             });
             r.col(|ui| {
                 ui.label(fmt_bytes(img.size.max(0) as u64));

@@ -183,7 +183,7 @@ pub fn dialog(app: &mut App, ctx: &egui::Context) {
                             "Název: malá písmena, číslice, - a _ (začíná písmenem nebo číslicí).",
                             "Name: lowercase letters, digits, - and _ (starting with a letter or digit)."
                         ))
-                        .color(theme::YELLOW)
+                        .color(theme::yellow())
                         .small(),
                     );
                 }
@@ -220,7 +220,7 @@ pub fn dialog(app: &mut App, ctx: &egui::Context) {
                 if !missing.is_empty() {
                     ui.label(
                         RichText::new(tf!("\u{E4E0} V .env chybí: {}", "\u{E4E0} Missing in .env: {}", missing.join(", ")))
-                            .color(theme::YELLOW)
+                            .color(theme::yellow())
                             .small(),
                     );
                 }
@@ -234,7 +234,7 @@ pub fn dialog(app: &mut App, ctx: &egui::Context) {
         if let Some(e) = &st.error {
             ui.add_space(8.0);
             egui::ScrollArea::vertical().id_salt("compose-new-err").max_height(120.0).show(ui, |ui| {
-                ui.label(RichText::new(format!("\u{E4F8} {e}")).color(theme::RED).monospace().small());
+                ui.label(RichText::new(format!("\u{E4F8} {e}")).color(theme::red()).monospace().small());
             });
         }
 

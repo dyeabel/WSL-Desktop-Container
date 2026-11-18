@@ -17,7 +17,7 @@ pub fn uninstall_dialog(app: &mut App, ctx: &egui::Context) {
         ui.add_space(8.0);
         ui.checkbox(&mut purge, t!("Smazat i data (image, kontejnery, volume)", "Also delete data (images, containers, volumes)"));
         if purge {
-            ui.label(RichText::new(tf!("\u{E4E0} Nenávratně se smaže: {}", "\u{E4E0} Permanently deleted: {}", engine.data_dirs())).color(theme::RED).small());
+            ui.label(RichText::new(tf!("\u{E4E0} Nenávratně se smaže: {}", "\u{E4E0} Permanently deleted: {}", engine.data_dirs())).color(theme::red()).small());
         } else {
             ui.label(muted(tf!("Data zůstanou v {} – při nové instalaci se použijí znovu.", "Data stays in {} – it will be reused on a new install.", engine.data_dirs())).small());
         }
@@ -47,9 +47,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
         // hlavička: stav
         ui.horizontal(|ui| {
-            dot(ui, if running { theme::GREEN } else { theme::GREY });
+            dot(ui, if running { theme::green() } else { theme::grey() });
             ui.label(RichText::new(ename).size(20.0).strong());
-            badge(ui, if running { t!("běží", "running") } else { t!("zastaven", "stopped") }, if running { theme::GREEN } else { theme::GREY });
+            badge(ui, if running { t!("běží", "running") } else { t!("zastaven", "stopped") }, if running { theme::green() } else { theme::grey() });
             ui.label(muted(tf!("v distribuci {distro} ({dstate})", "in distribution {distro} ({dstate})")));
         });
         let mut info: Vec<String> = Vec::new();
@@ -64,8 +64,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 ui.label(muted("·"));
             }
             match app.tcp_configured {
-                Some(true) => ui.label(RichText::new(tf!("\u{E184} API na 127.0.0.1:{port}", "\u{E184} API on 127.0.0.1:{port}")).color(theme::GREEN)),
-                Some(false) => ui.label(RichText::new(t!("\u{E4E0} API není nastavené", "\u{E4E0} API is not configured")).color(theme::YELLOW)),
+                Some(true) => ui.label(RichText::new(tf!("\u{E184} API na 127.0.0.1:{port}", "\u{E184} API on 127.0.0.1:{port}")).color(theme::green())),
+                Some(false) => ui.label(RichText::new(t!("\u{E4E0} API není nastavené", "\u{E4E0} API is not configured")).color(theme::yellow())),
                 None => ui.label(muted(t!("kontroluji API…", "checking API…"))),
             };
         });
@@ -114,9 +114,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     for e in crate::engine::Engine::ALL {
                         let sel = engine == e;
-                        let text = RichText::new(e.name()).color(if sel { theme::ACCENT_TEXT } else { ui.visuals().text_color() });
+                        let text = RichText::new(e.name()).color(if sel { theme::accent_text() } else { ui.visuals().text_color() });
                         let b = egui::Button::new(text)
-                            .fill(if sel { theme::ACCENT } else { ui.visuals().widgets.inactive.weak_bg_fill })
+                            .fill(if sel { theme::accent() } else { ui.visuals().widgets.inactive.weak_bg_fill })
                             .min_size(egui::vec2(84.0, 26.0));
                         if ui.add(b).clicked() && !sel {
                             let mut c = app.cfg.read().map(|c| c.clone()).unwrap_or_default();
@@ -161,7 +161,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             Cmd::SetupEngine,
                         );
                     }
-                    if ui.button(RichText::new(t!("\u{E4A6} Odinstalovat…", "\u{E4A6} Uninstall…")).color(theme::RED)).clicked() {
+                    if ui.button(RichText::new(t!("\u{E4A6} Odinstalovat…", "\u{E4A6} Uninstall…")).color(theme::red())).clicked() {
                         app.uninstall = Some((engine, false));
                     }
                 });
@@ -185,9 +185,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         }
                         Some(s) => {
                             if s.installed && s.in_path {
-                                badge(ui, t!("v PATH", "in PATH"), theme::GREEN);
+                                badge(ui, t!("v PATH", "in PATH"), theme::green());
                             } else {
-                                badge(ui, t!("není v PATH", "not in PATH"), theme::GREY);
+                                badge(ui, t!("není v PATH", "not in PATH"), theme::grey());
                             }
                             ui.add_enabled_ui(!checking && s.source_ok, |ui| {
                                 let label = if s.installed && s.in_path { t!("\u{E094} Aktualizovat", "\u{E094} Update") } else { t!("\u{E3D4} Přidat do PATH", "\u{E3D4} Add to PATH") };
@@ -209,7 +209,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 ui.label(muted(tf!("Příkaz docker … ve Windows se provede přes {ename} v {distro}. Po změně otevři nový terminál.", "docker … in Windows runs via {ename} in {distro}. Open a new terminal after a change.")).small());
                 if let Some(s) = &st {
                     for o in &s.other_docker {
-                        ui.label(RichText::new(tf!("\u{E4E0} V PATH je i jiný docker: {o}", "\u{E4E0} Another docker is also in PATH: {o}")).color(theme::YELLOW).small());
+                        ui.label(RichText::new(tf!("\u{E4E0} V PATH je i jiný docker: {o}", "\u{E4E0} Another docker is also in PATH: {o}")).color(theme::yellow()).small());
                     }
                 }
 
@@ -224,13 +224,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     Some(s) => {
                         match s.docker_host.as_deref() {
                             Some(v) if v == want => {
-                                badge(ui, &format!("DOCKER_HOST={v}"), theme::GREEN);
+                                badge(ui, &format!("DOCKER_HOST={v}"), theme::green());
                             }
                             Some(v) => {
-                                badge(ui, &format!("DOCKER_HOST={v}"), theme::YELLOW).on_hover_text(tf!("Neodpovídá API aplikace ({want})", "Does not match the app API ({want})"));
+                                badge(ui, &format!("DOCKER_HOST={v}"), theme::yellow()).on_hover_text(tf!("Neodpovídá API aplikace ({want})", "Does not match the app API ({want})"));
                             }
                             None => {
-                                badge(ui, t!("nenastaveno", "not set"), theme::GREY);
+                                badge(ui, t!("nenastaveno", "not set"), theme::grey());
                             }
                         }
                         ui.add_enabled_ui(!checking && s.docker_host.as_deref() != Some(want.as_str()), |ui| {
@@ -252,7 +252,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 ui.label(RichText::new(t!("Zabezpečení API", "API security")).strong());
                 toolbar(ui, |ui| {
                     if tls {
-                        badge(ui, &tf!("\u{E40C} TLS s klientským certifikátem · port {port}", "\u{E40C} TLS with client certificate · port {port}"), theme::GREEN);
+                        badge(ui, &tf!("\u{E40C} TLS s klientským certifikátem · port {port}", "\u{E40C} TLS with client certificate · port {port}"), theme::green());
                         if ui.button(t!("\u{E306} Vypnout TLS", "\u{E306} Turn TLS off")).clicked() {
                             app.ask(
                                 t!("Vypnout zabezpečení API?", "Turn API security off?"),
@@ -281,7 +281,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             );
                         }
                     } else {
-                        badge(ui, &tf!("\u{E412} bez ověření · port {port}", "\u{E412} no authentication · port {port}"), theme::YELLOW);
+                        badge(ui, &tf!("\u{E412} bez ověření · port {port}", "\u{E412} no authentication · port {port}"), theme::yellow());
                         if ui.button(t!("\u{E2FA} Zapnout TLS", "\u{E2FA} Turn TLS on")).clicked() {
                             app.ask(
                                 t!("Zabezpečit API pomocí TLS?", "Secure the API with TLS?"),
@@ -343,7 +343,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     table(ui, "distros", &cols, |mut body| {
         for d in &distros {
           body.row(34.0, |mut r| {
-            r.col(|ui| dot(ui, if d.running() { theme::GREEN } else { theme::GREY }));
+            r.col(|ui| dot(ui, if d.running() { theme::green() } else { theme::grey() }));
             r.col(|ui| {
                 ui.label(RichText::new(&d.name).strong());
                 if d.default {
@@ -351,7 +351,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
                 if d.name == distro {
                     // štítek podle zvoleného enginu (Docker / Podman)
-                    ui.label(RichText::new(ename).small().color(theme::ACCENT));
+                    ui.label(RichText::new(ename).small().color(theme::accent()));
                 }
             });
             r.col(|ui| {
@@ -390,7 +390,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         super::distros::open_disk(app, &d.name);
                     }
                     ui.separator();
-                    if ui.button(RichText::new(t!("\u{E4A6} Odebrat distribuci…", "\u{E4A6} Remove distribution…")).color(theme::RED)).clicked() {
+                    if ui.button(RichText::new(t!("\u{E4A6} Odebrat distribuci…", "\u{E4A6} Remove distribution…")).color(theme::red())).clicked() {
                         ui.close_menu();
                         super::distros::open_remove(app, &d.name);
                     }
@@ -436,8 +436,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 app.send(Cmd::LoadDaemonJson);
             }
             match valid {
-                Ok(_) => ui.label(RichText::new(t!("\u{E182} platný JSON", "\u{E182} valid JSON")).small().color(theme::GREEN)),
-                Err(e) => ui.label(RichText::new(format!("\u{E4E0} {e}")).small().color(theme::RED)),
+                Ok(_) => ui.label(RichText::new(t!("\u{E182} platný JSON", "\u{E182} valid JSON")).small().color(theme::green())),
+                Err(e) => ui.label(RichText::new(format!("\u{E4E0} {e}")).small().color(theme::red())),
             };
         });
         ui.label(muted(t!("Příklady klíčů: \"log-driver\", \"log-opts\", \"dns\", \"registry-mirrors\", \"insecure-registries\", \"data-root\", \"default-address-pools\". Klíč \"hosts\" nepoužívej.", "Example keys: \"log-driver\", \"log-opts\", \"dns\", \"registry-mirrors\", \"insecure-registries\", \"data-root\", \"default-address-pools\". Do not use the \"hosts\" key.")).small());

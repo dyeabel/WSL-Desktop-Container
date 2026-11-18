@@ -129,13 +129,15 @@ pub struct App {
     first_frame: bool,
     /// spouštění s Windows (načte se při prvním zobrazení Nastavení)
     pub autostart: Option<bool>,
+    theme_checked: std::time::Instant,
     was_minimized: bool,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        theme::apply(&cc.egui_ctx);
         let cfg = Config::load();
+        // WLS_THEME=dark|light|system přepíše motiv (ladění, screenshoty)
+        theme::apply(&cc.egui_ctx, &std::env::var("WLS_THEME").unwrap_or_else(|_| cfg.theme.clone()));
         crate::i18n::set_language(&cfg.language);
         // pro ladění/screenshoty: WLS_LANG=en|cs přepíše jazyk (bez uložení do konfigurace)
         if let Ok(l) = std::env::var("WLS_LANG") {
@@ -233,6 +235,7 @@ impl App {
             logo,
             first_frame: true,
             autostart: None,
+            theme_checked: std::time::Instant::now(),
             was_minimized: false,
         }
         .with_toasts(startup_toasts)
@@ -250,6 +253,20 @@ impl App {
     }
 
     /// Zavření / minimalizace do tray a synchronizace stavu traye.
+    /// Motiv „podle Windows“: jednou za pár sekund zkontrolovat, jestli se nezměnil.
+    fn follow_system_theme(&mut self, ctx: &egui::Context) {
+        if self.cfg.read().map(|c| c.theme != "system").unwrap_or(true) || std::env::var("WLS_THEME").is_ok() {
+            return;
+        }
+        if self.theme_checked.elapsed() < std::time::Duration::from_secs(3) {
+            return;
+        }
+        self.theme_checked = std::time::Instant::now();
+        if theme::windows_uses_light() != theme::is_light() {
+            theme::set_mode(ctx, "system");
+        }
+    }
+
     fn handle_tray(&mut self, ctx: &egui::Context) {
         crate::tray::refresh();
         // „Zobrazit v aplikaci“ / „… a N dalších“ z podnabídky kontejnerů v trayi
@@ -501,11 +518,11 @@ impl App {
                 .as_ref()
                 .map(|i| (i.containers_running, i.containers))
                 .unwrap_or((0, 0));
-            (theme::GREEN, tf!("{e} běží ({d}) · {r}/{t} kontejnerů", "{e} running ({d}) · {r}/{t} containers"))
+            (theme::green(), tf!("{e} běží ({d}) · {r}/{t} kontejnerů", "{e} running ({d}) · {r}/{t} containers"))
         } else if self.current_distro().map(|x| x.running()).unwrap_or(false) {
-            (theme::YELLOW, tf!("{d} běží, {e} API nedostupné", "{d} running, {e} API unavailable"))
+            (theme::yellow(), tf!("{d} běží, {e} API nedostupné", "{d} running, {e} API unavailable"))
         } else {
-            (theme::GREY, tf!("{d} zastavena", "{d} stopped"))
+            (theme::grey(), tf!("{d} zastavena", "{d} stopped"))
         }
     }
 
@@ -513,7 +530,7 @@ impl App {
         egui::SidePanel::left("nav")
             .exact_width(220.0)
             .resizable(false)
-            .frame(egui::Frame::new().fill(theme::SIDEBAR).inner_margin(egui::Margin::same(10)))
+            .frame(egui::Frame::new().fill(theme::sidebar()).inner_margin(egui::Margin::same(10)))
             .show(ctx, |ui| {
                 // spodní část panelu: stav enginu + WSL engine / Nastavení – drží se spodního okraje
                 egui::TopBottomPanel::bottom("nav-bottom")
@@ -534,8 +551,8 @@ impl App {
                             (t!("zastaven", "stopped"), tf!("{distro} zastavena", "{distro} stopped"))
                         };
                         egui::Frame::new()
-                            .fill(theme::CARD)
-                            .stroke(egui::Stroke::new(1.0_f32, theme::CARD_STROKE))
+                            .fill(theme::card())
+                            .stroke(egui::Stroke::new(1.0_f32, theme::card_stroke()))
                             .corner_radius(8)
                             .inner_margin(egui::Margin::same(12))
                             .show(ui, |ui| {
@@ -552,7 +569,7 @@ impl App {
                                 // řádek 2: distribuce a kontejnery
                                 ui.horizontal(|ui| {
                                     ui.add_space(20.0);
-                                    ui.label(RichText::new(&detail).small().color(theme::MUTED)).on_hover_text(&detail);
+                                    ui.label(RichText::new(&detail).small().color(theme::muted())).on_hover_text(&detail);
                                 });
                                 ui.add_space(6.0);
                                 // řádek 3: stejně široká tlačítka
@@ -573,8 +590,8 @@ impl App {
                                         }
                                     } else if ui
                                         .add(
-                                            egui::Button::new(RichText::new(tf!("\u{E3D0} Spustit {ename}", "\u{E3D0} Start {ename}")).color(theme::ACCENT_TEXT))
-                                                .fill(theme::ACCENT)
+                                            egui::Button::new(RichText::new(tf!("\u{E3D0} Spustit {ename}", "\u{E3D0} Start {ename}")).color(theme::accent_text()))
+                                                .fill(theme::accent())
                                                 .min_size(egui::vec2(w, 26.0)),
                                         )
                                         .clicked()
@@ -603,7 +620,7 @@ impl App {
     fn nav_button(&mut self, ui: &mut egui::Ui, p: Page) {
         let sel = self.page == p;
         let text = RichText::new(p.label()).size(15.0);
-        let text = if sel { text.color(egui::Color32::WHITE) } else { text };
+        let text = if sel { text.color(theme::strong_text()) } else { text };
         let r = ui.add(
             egui::Button::new(text)
                 .selected(sel)
@@ -615,7 +632,7 @@ impl App {
             ui.painter().rect_filled(
                 egui::Rect::from_min_size(rect.left_top() + egui::vec2(0.0, 9.0), egui::vec2(3.0, 18.0)),
                 2.0,
-                theme::ACCENT,
+                theme::accent(),
             );
         }
         if r.clicked() {
@@ -632,7 +649,7 @@ impl App {
 
     fn status_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("status")
-            .frame(egui::Frame::new().fill(theme::SIDEBAR).inner_margin(egui::Margin::symmetric(12, 5)))
+            .frame(egui::Frame::new().fill(theme::sidebar()).inner_margin(egui::Margin::symmetric(12, 5)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let (c, t) = self.engine_status();
@@ -640,12 +657,12 @@ impl App {
                     ui.label(RichText::new(t).small());
                     if let Some(e) = &self.snap.error {
                         if self.snap.connected {
-                            ui.label(RichText::new(format!("· {e}")).small().color(theme::RED));
+                            ui.label(RichText::new(format!("· {e}")).small().color(theme::red()));
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let port = self.cfg.read().map(|c| c.port).unwrap_or(0);
-                        ui.label(RichText::new(format!("tcp://127.0.0.1:{port}")).small().color(theme::MUTED));
+                        ui.label(RichText::new(format!("tcp://127.0.0.1:{port}")).small().color(theme::muted()));
                         if self.shared.busy.load(Ordering::Relaxed) > 0 {
                             ui.spinner();
                             ui.label(RichText::new(t!("Pracuji…", "Working…")).small());
@@ -661,7 +678,7 @@ impl App {
         let mut run_cmd = None;
         if let Some(c) = &self.confirm {
             let (_, esc) = ui::modal(ctx, "confirm", &c.title, 440.0, |ui| {
-                ui.label(RichText::new(&c.text).color(egui::Color32::from_gray(210)));
+                ui.label(RichText::new(&c.text).color(theme::body_text()));
                 let (ok, cancel) = ui::dialog_buttons(ui, t!("Potvrdit", "Confirm"), true, true);
                 if ok {
                     run_cmd = Some(c.cmd.clone());
@@ -728,14 +745,14 @@ impl App {
                 let mut remove = None;
                 for (i, t) in self.toasts.iter().enumerate() {
                     egui::Frame::new()
-                        .fill(theme::CARD)
-                        .stroke(egui::Stroke::new(1.0_f32, if t.ok { theme::GREEN } else { theme::RED }))
+                        .fill(theme::card())
+                        .stroke(egui::Stroke::new(1.0_f32, if t.ok { theme::green() } else { theme::red() }))
                         .corner_radius(6)
                         .inner_margin(egui::Margin::same(10))
                         .show(ui, |ui| {
                             ui.set_max_width(420.0);
                             ui.horizontal_top(|ui| {
-                                ui.label(RichText::new(if t.ok { "\u{E182}" } else { "\u{E4E0}" }).color(if t.ok { theme::GREEN } else { theme::RED }));
+                                ui.label(RichText::new(if t.ok { "\u{E182}" } else { "\u{E4E0}" }).color(if t.ok { theme::green() } else { theme::red() }));
                                 // dlouhý text se zalomí (místo přetečení přes okno)
                                 // text v pevně širokém sloupci se zalomí, křížek vpravo
                                 ui.vertical(|ui| {
@@ -760,12 +777,13 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain();
+        self.follow_system_theme(ctx);
         self.handle_tray(ctx);
         self.shared.want_stats.store(self.page == Page::Dashboard, Ordering::Relaxed);
         self.sidebar(ctx);
         self.status_bar(ctx);
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin { left: 28, right: 28, top: 20, bottom: 12 }))
+            .frame(egui::Frame::new().fill(theme::bg()).inner_margin(egui::Margin { left: 28, right: 28, top: 20, bottom: 12 }))
             .show(ctx, |ui| {
                 let viewport_w = ui.available_width();
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

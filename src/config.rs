@@ -27,6 +27,8 @@ pub struct Config {
     pub restore_containers: bool,
     /// Jazyk rozhraní: "cs" nebo "en"
     pub language: String,
+    /// Motiv: "dark", "light" nebo "system" (podle Windows)
+    pub theme: String,
     /// Oznámení ve Windows při pádu kontejneru, selhání healthchecku, opakovaných restartech
     pub notifications: bool,
     /// API enginu jen přes TLS s klientským certifikátem (port 2376, certifikáty v %APPDATA%\WLS_Desktop\tls)
@@ -47,6 +49,7 @@ impl Default for Config {
             start_hidden: false,
             restore_containers: false,
             language: "cs".into(),
+            theme: "dark".into(),
             notifications: true,
             tls: false,
         }

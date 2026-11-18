@@ -57,7 +57,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     ui.label(RichText::new(&n.name).strong());
                 });
                 r.col(|ui| {
-                    ui.label(RichText::new(short_id(&n.id)).monospace().color(theme::MUTED));
+                    ui.label(RichText::new(short_id(&n.id)).monospace().color(theme::muted()));
                 });
                 r.col(|ui| {
                     ui.label(format!("{} · {}", n.driver, n.scope));

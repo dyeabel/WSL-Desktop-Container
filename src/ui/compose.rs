@@ -190,18 +190,18 @@ fn editor_window(app: &mut App, ctx: &egui::Context) {
                 ui.label(muted(t!("Soubor zatím neexistuje – vytvoří se uložením.", "The file does not exist yet – saving creates it.")).small());
             }
             if let Some(e) = &ed.error {
-                ui.label(RichText::new(format!("\u{E4F8} {e}")).color(theme::RED).small());
+                ui.label(RichText::new(format!("\u{E4F8} {e}")).color(theme::red()).small());
             }
             match &ed.check {
                 Some(Ok(w)) => {
-                    ui.label(RichText::new(t!("\u{E184} Konfigurace je v pořádku", "\u{E184} The configuration is valid")).color(theme::GREEN).small());
+                    ui.label(RichText::new(t!("\u{E184} Konfigurace je v pořádku", "\u{E184} The configuration is valid")).color(theme::green()).small());
                     if !w.trim().is_empty() {
-                        ui.label(RichText::new(w.trim()).color(theme::YELLOW).monospace().small());
+                        ui.label(RichText::new(w.trim()).color(theme::yellow()).monospace().small());
                     }
                 }
                 Some(Err(e)) => {
                     egui::ScrollArea::vertical().id_salt("compose-check").max_height(140.0).show(ui, |ui| {
-                        ui.label(RichText::new(format!("\u{E4F8} {e}")).color(theme::RED).monospace().small());
+                        ui.label(RichText::new(format!("\u{E4F8} {e}")).color(theme::red()).monospace().small());
                     });
                 }
                 None => {}
@@ -237,7 +237,7 @@ fn scale_dialog(app: &mut App, ctx: &egui::Context) {
             .small(),
         );
         ui.add_space(4.0);
-        ui.label(RichText::new(format!("compose up -d --scale {}={} --no-recreate", sd.service, sd.replicas)).monospace().small().color(theme::MUTED));
+        ui.label(RichText::new(format!("compose up -d --scale {}={} --no-recreate", sd.service, sd.replicas)).monospace().small().color(theme::muted()));
         (ok, cancel) = dialog_buttons(ui, &tf!("{SCALE} Škálovat", "{SCALE} Scale"), false, true);
     });
     if ok {
@@ -324,12 +324,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 dot(
                     ui,
-                    if running == total { theme::GREEN } else if running > 0 { theme::YELLOW } else { theme::GREY },
+                    if running == total { theme::green() } else if running > 0 { theme::yellow() } else { theme::grey() },
                 );
                 ui.label(RichText::new(&s.name).size(18.0).strong());
                 ui.label(muted(tf!("{running}/{total} běží", "{running}/{total} running")));
             });
-            ui.label(RichText::new(&s.dir).monospace().small().color(theme::MUTED));
+            ui.label(RichText::new(&s.dir).monospace().small().color(theme::muted()));
             ui.add_space(4.0);
             let dir = s.dir.clone();
             let proj = Some(s.name.clone());
@@ -399,7 +399,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             table_in(ui, &format!("svc-{}", s.name), &cols, |mut body| {
                 for ct in &s.containers {
                   body.row(32.0, |mut r| {
-                    r.col(|ui| dot(ui, if ct.running() { theme::GREEN } else if ct.paused() { theme::YELLOW } else { theme::GREY }));
+                    r.col(|ui| dot(ui, if ct.running() { theme::green() } else if ct.paused() { theme::yellow() } else { theme::grey() }));
                     r.col(|ui| {
                         ui.label(RichText::new(ct.label("com.docker.compose.service").unwrap_or("?")).strong());
                     });

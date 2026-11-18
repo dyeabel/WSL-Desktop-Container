@@ -19,7 +19,7 @@ use eframe::egui::{self, Color32, RichText};
 pub fn header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
     ui.label(RichText::new(title).size(28.0).strong());
     if !subtitle.is_empty() {
-        ui.label(RichText::new(subtitle).color(theme::MUTED));
+        ui.label(RichText::new(subtitle).color(theme::muted()));
     }
     ui.add_space(10.0);
 }
@@ -31,11 +31,11 @@ pub fn section(ui: &mut egui::Ui, title: &str) {
 }
 
 pub fn accent_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(egui::Button::new(RichText::new(text).color(theme::ACCENT_TEXT)).fill(theme::ACCENT))
+    ui.add(egui::Button::new(RichText::new(text).color(theme::accent_text())).fill(theme::accent()))
 }
 
 pub fn danger_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(egui::Button::new(RichText::new(text).color(Color32::WHITE)).fill(theme::RED.linear_multiply(0.85)))
+    ui.add(egui::Button::new(RichText::new(text).color(Color32::WHITE)).fill(theme::red().linear_multiply(0.85)))
 }
 
 /// Ikonové tlačítko bez rámečku s tooltipem (šířka 26 px).
@@ -60,8 +60,8 @@ pub fn dot(ui: &mut egui::Ui, c: Color32) {
 
 pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     egui::Frame::new()
-        .fill(theme::CARD)
-        .stroke(egui::Stroke::new(1.0_f32, theme::CARD_STROKE))
+        .fill(theme::card())
+        .stroke(egui::Stroke::new(1.0_f32, theme::card_stroke()))
         .corner_radius(8)
         .inner_margin(egui::Margin::same(14))
         .show(ui, add)
@@ -119,9 +119,9 @@ impl TableBody<'_> {
         let (rect, resp) = self.ui.allocate_exact_size(egui::vec2(total, height), egui::Sense::hover());
         if self.ui.is_rect_visible(rect) {
             let fill = if resp.hovered() {
-                Some(egui::Color32::from_gray(0x3A))
+                Some(theme::row_hover())
             } else if self.n % 2 == 1 {
-                Some(egui::Color32::from_gray(0x2F))
+                Some(theme::row_stripe())
             } else {
                 None
             };
@@ -224,7 +224,7 @@ fn build_table(ui: &mut egui::Ui, cols: &[(&str, W)], widths: Vec<f32>, body: im
     b.row(30.0, |mut h| {
         for (t, _) in cols {
             h.col(|ui| {
-                ui.label(RichText::new(*t).small().strong().color(theme::MUTED));
+                ui.label(RichText::new(*t).small().strong().color(theme::muted()));
             });
         }
     });
@@ -259,8 +259,8 @@ pub fn modal<R>(ctx: &egui::Context, id: &str, title: &str, width: f32, add: imp
     let r = egui::Modal::new(egui::Id::new(id))
         .frame(
             egui::Frame::new()
-                .fill(theme::DIALOG)
-                .stroke(egui::Stroke::new(1.0_f32, theme::CARD_STROKE))
+                .fill(theme::dialog())
+                .stroke(egui::Stroke::new(1.0_f32, theme::card_stroke()))
                 .corner_radius(10)
                 .inner_margin(egui::Margin::same(22)),
         )
@@ -384,7 +384,7 @@ pub fn area(s: &mut String) -> egui::TextEdit<'_> {
 }
 
 pub fn muted(text: impl Into<String>) -> RichText {
-    RichText::new(text.into()).color(theme::MUTED)
+    RichText::new(text.into()).color(theme::muted())
 }
 
 
@@ -423,7 +423,7 @@ pub fn need_engine(app: &mut crate::app::App, ui: &mut egui::Ui) -> bool {
     card(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            dot(ui, theme::GREY);
+            dot(ui, theme::grey());
             ui.label(RichText::new(tf!("{ename} není dostupný", "{ename} is not available")).strong());
         });
         if let Some(e) = &app.snap.error {

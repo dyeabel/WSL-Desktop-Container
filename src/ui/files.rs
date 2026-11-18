@@ -196,7 +196,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             });
             filter_field(ui, &mut app.files.filter);
-            if app.files.root && badge(ui, "root", theme::YELLOW).on_hover_text(t!("Pracuješ jako root – kliknutím vypneš", "Working as root – click to turn off")).interact(egui::Sense::click()).clicked() {
+            if app.files.root && badge(ui, "root", theme::yellow()).on_hover_text(t!("Pracuješ jako root – kliknutím vypneš", "Working as root – click to turn off")).interact(egui::Sense::click()).clicked() {
                 app.files.root = false;
                 reload(app);
             }
@@ -228,8 +228,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if nsel > 0 {
         ui.add_space(4.0);
         egui::Frame::new()
-            .fill(theme::ACCENT.gamma_multiply(0.12))
-            .stroke(egui::Stroke::new(1.0_f32, theme::ACCENT.gamma_multiply(0.4)))
+            .fill(theme::accent().gamma_multiply(0.12))
+            .stroke(egui::Stroke::new(1.0_f32, theme::accent().gamma_multiply(0.4)))
             .corner_radius(6)
             .inner_margin(egui::Margin::symmetric(10, 4))
             .show(ui, |ui| {
@@ -243,7 +243,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             fs(app, FsOp::Download(items, dir.display().to_string()));
                         }
                     }
-                    if ui.button(RichText::new(t!("\u{E4A6} Smazat…", "\u{E4A6} Delete…")).color(theme::RED)).clicked() {
+                    if ui.button(RichText::new(t!("\u{E4A6} Smazat…", "\u{E4A6} Delete…")).color(theme::red())).clicked() {
                         let items: Vec<String> = app.files.selected.iter().map(|n| join(&cur, n)).collect();
                         let list = app.files.selected.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
                         app.ask(
@@ -263,7 +263,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if let Some(e) = app.files.error.clone() {
         card(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new(format!("\u{E4E0} {e}")).color(theme::RED));
+            ui.label(RichText::new(format!("\u{E4E0} {e}")).color(theme::red()));
             if !app.files.root {
                 ui.label(muted(t!("Nedostatečná práva? Zapni „Jako root“.", "Insufficient permissions? Turn on “As root”.")));
             }
@@ -364,7 +364,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button(RichText::new(t!("\u{E4A6} Smazat…", "\u{E4A6} Delete…")).color(theme::RED)).clicked() {
+                        if ui.button(RichText::new(t!("\u{E4A6} Smazat…", "\u{E4A6} Delete…")).color(theme::red())).clicked() {
                             app.ask(
                                 tf!("Smazat {}?", "Delete {}?", e.name),
                                 tf!("{} bude nenávratně smazán{}.", "{} will be permanently deleted{}.", path, if e.is_dir() { t!("a včetně obsahu", " including its contents") } else { "" }),

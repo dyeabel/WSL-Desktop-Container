@@ -1,39 +1,151 @@
+//! Vzhled: tmavý a světlý motiv (případně podle nastavení Windows), písma, rozměry.
+//! Barvy jsou funkce, protože se mění za běhu s přepnutím motivu.
+
 use eframe::egui::{self, Color32, FontId, TextStyle};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Výška všech ovládacích prvků v lištách (tlačítka, vstupní pole, rozbalovací seznamy).
 pub const CONTROL_H: f32 = 30.0;
 
-pub const ACCENT: Color32 = Color32::from_rgb(0xDB, 0xB4, 0x7C);
-pub const ACCENT_TEXT: Color32 = Color32::from_rgb(0x1E, 0x1A, 0x14);
-pub const BG: Color32 = Color32::from_rgb(0x1F, 0x1F, 0x1F);
-pub const SIDEBAR: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
-pub const DIALOG: Color32 = Color32::from_rgb(0x2C, 0x2C, 0x2C);
-pub const CARD: Color32 = Color32::from_rgb(0x2B, 0x2B, 0x2B);
-pub const CARD_STROKE: Color32 = Color32::from_rgb(0x38, 0x38, 0x38);
-pub const MUTED: Color32 = Color32::from_rgb(0x9A, 0x9A, 0x9A);
-pub const GREEN: Color32 = Color32::from_rgb(0x3F, 0xC2, 0x5A);
-pub const RED: Color32 = Color32::from_rgb(0xE5, 0x5B, 0x4F);
-pub const YELLOW: Color32 = Color32::from_rgb(0xE3, 0xB3, 0x41);
-pub const GREY: Color32 = Color32::from_rgb(0x80, 0x80, 0x80);
+static LIGHT: AtomicBool = AtomicBool::new(false);
 
-pub fn apply(ctx: &egui::Context) {
+/// Je aktivní světlý motiv?
+pub fn is_light() -> bool {
+    LIGHT.load(Ordering::Relaxed)
+}
+
+const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
+    Color32::from_rgb(r, g, b)
+}
+
+fn pick(dark: Color32, light: Color32) -> Color32 {
+    if is_light() { light } else { dark }
+}
+
+pub fn accent() -> Color32 {
+    pick(rgb(0xDB, 0xB4, 0x7C), rgb(0xC8, 0x95, 0x4E))
+}
+/// Text na akcentové výplni.
+pub fn accent_text() -> Color32 {
+    rgb(0x1E, 0x1A, 0x14)
+}
+pub fn bg() -> Color32 {
+    pick(rgb(0x1F, 0x1F, 0x1F), rgb(0xF6, 0xF5, 0xF2))
+}
+pub fn sidebar() -> Color32 {
+    pick(rgb(0x1A, 0x1A, 0x1A), rgb(0xEC, 0xEA, 0xE5))
+}
+pub fn dialog() -> Color32 {
+    pick(rgb(0x2C, 0x2C, 0x2C), rgb(0xFF, 0xFF, 0xFF))
+}
+pub fn card() -> Color32 {
+    pick(rgb(0x2B, 0x2B, 0x2B), rgb(0xFF, 0xFF, 0xFF))
+}
+pub fn card_stroke() -> Color32 {
+    pick(rgb(0x38, 0x38, 0x38), rgb(0xDD, 0xDA, 0xD3))
+}
+pub fn muted() -> Color32 {
+    pick(rgb(0x9A, 0x9A, 0x9A), rgb(0x6A, 0x68, 0x63))
+}
+pub fn green() -> Color32 {
+    pick(rgb(0x3F, 0xC2, 0x5A), rgb(0x1E, 0x8E, 0x3E))
+}
+pub fn red() -> Color32 {
+    pick(rgb(0xE5, 0x5B, 0x4F), rgb(0xC8, 0x3A, 0x2E))
+}
+pub fn yellow() -> Color32 {
+    pick(rgb(0xE3, 0xB3, 0x41), rgb(0xA8, 0x74, 0x00))
+}
+pub fn grey() -> Color32 {
+    pick(rgb(0x80, 0x80, 0x80), rgb(0x8A, 0x87, 0x80))
+}
+/// Výplň řádku tabulky pod myší / sudého řádku.
+pub fn row_hover() -> Color32 {
+    pick(Color32::from_gray(0x3A), rgb(0xEA, 0xE7, 0xE0))
+}
+pub fn row_stripe() -> Color32 {
+    pick(Color32::from_gray(0x2F), rgb(0xF4, 0xF2, 0xEE))
+}
+/// Výrazný text (vybraná položka navigace, text potvrzovacího dialogu).
+pub fn strong_text() -> Color32 {
+    pick(Color32::WHITE, rgb(0x1C, 0x1B, 0x19))
+}
+pub fn body_text() -> Color32 {
+    pick(Color32::from_gray(210), rgb(0x2E, 0x2C, 0x29))
+}
+
+/// Režim z nastavení: "dark", "light" nebo "system" (podle Windows).
+pub fn resolve(mode: &str) -> bool {
+    match mode {
+        "light" => true,
+        "dark" => false,
+        _ => windows_uses_light(),
+    }
+}
+
+/// Windows: HKCU\…\Themes\Personalize\AppsUseLightTheme (1 = světlý režim aplikací).
+#[cfg(windows)]
+pub fn windows_uses_light() -> bool {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+    let w = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (k, n) = (w(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"), w("AppsUseLightTheme"));
+    let mut v: u32 = 0;
+    let mut len = 4u32;
+    // SAFETY: platné nulou ukončené řetězce, výstup do lokální u32 s velikostí 4 B
+    let r = unsafe {
+        RegGetValueW(HKEY_CURRENT_USER, k.as_ptr(), n.as_ptr(), RRF_RT_REG_DWORD, std::ptr::null_mut(), (&mut v as *mut u32).cast(), &mut len)
+    };
+    r == 0 && v == 1
+}
+
+#[cfg(not(windows))]
+pub fn windows_uses_light() -> bool {
+    false
+}
+
+/// Nastaví motiv ("dark" / "light" / "system") a styl egui. Lze volat kdykoli za běhu.
+pub fn set_mode(ctx: &egui::Context, mode: &str) {
+    LIGHT.store(resolve(mode), Ordering::Relaxed);
+    style(ctx);
+}
+
+pub fn apply(ctx: &egui::Context, mode: &str) {
     // ikonový font Phosphor jako záložní font – ikony se pak dají psát přímo do textu
     let mut fonts = egui::FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
     ctx.set_fonts(fonts);
-    ctx.set_theme(egui::Theme::Dark);
+    set_mode(ctx, mode);
+}
+
+fn style(ctx: &egui::Context) {
+    let light = is_light();
+    ctx.set_theme(if light { egui::Theme::Light } else { egui::Theme::Dark });
     ctx.style_mut(|s| {
+        s.visuals = if light { egui::Visuals::light() } else { egui::Visuals::dark() };
         let v = &mut s.visuals;
-        v.panel_fill = BG;
-        v.window_fill = Color32::from_rgb(0x27, 0x27, 0x27);
-        v.extreme_bg_color = Color32::from_rgb(0x16, 0x16, 0x16);
-        v.faint_bg_color = Color32::from_rgb(0x26, 0x26, 0x26);
-        v.selection.bg_fill = ACCENT.linear_multiply(0.35);
-        v.selection.stroke.color = ACCENT;
-        v.hyperlink_color = ACCENT;
-        v.widgets.inactive.weak_bg_fill = Color32::from_rgb(0x33, 0x33, 0x33);
-        v.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x3D, 0x3D, 0x3D);
-        v.widgets.active.weak_bg_fill = Color32::from_rgb(0x48, 0x48, 0x48);
+        v.panel_fill = bg();
+        if light {
+            v.window_fill = rgb(0xFB, 0xFA, 0xF8);
+            v.extreme_bg_color = rgb(0xFF, 0xFF, 0xFF);
+            v.faint_bg_color = rgb(0xF0, 0xEE, 0xE9);
+            v.widgets.inactive.weak_bg_fill = rgb(0xE7, 0xE4, 0xDE);
+            v.widgets.hovered.weak_bg_fill = rgb(0xDD, 0xD9, 0xD1);
+            v.widgets.active.weak_bg_fill = rgb(0xD2, 0xCD, 0xC3);
+            v.widgets.inactive.bg_fill = rgb(0xE7, 0xE4, 0xDE);
+            v.widgets.noninteractive.bg_stroke.color = card_stroke();
+            v.window_stroke.color = card_stroke();
+            v.override_text_color = None;
+        } else {
+            v.window_fill = rgb(0x27, 0x27, 0x27);
+            v.extreme_bg_color = rgb(0x16, 0x16, 0x16);
+            v.faint_bg_color = rgb(0x26, 0x26, 0x26);
+            v.widgets.inactive.weak_bg_fill = rgb(0x33, 0x33, 0x33);
+            v.widgets.hovered.weak_bg_fill = rgb(0x3D, 0x3D, 0x3D);
+            v.widgets.active.weak_bg_fill = rgb(0x48, 0x48, 0x48);
+        }
+        v.selection.bg_fill = accent().linear_multiply(if light { 0.45 } else { 0.35 });
+        v.selection.stroke.color = if light { rgb(0x6B, 0x4A, 0x16) } else { accent() };
+        v.hyperlink_color = if light { rgb(0x8A, 0x5E, 0x1E) } else { accent() };
         v.window_corner_radius = egui::CornerRadius::same(10);
         v.widgets.inactive.corner_radius = egui::CornerRadius::same(5);
         v.widgets.hovered.corner_radius = egui::CornerRadius::same(5);

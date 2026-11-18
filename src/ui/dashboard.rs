@@ -54,7 +54,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         title: ename.into(),
         big: if app.snap.connected { t!("Běží", "Running") } else { t!("Zastaven", "Stopped") }.into(),
         sub: format!("{distro} ({dstate}){ver}"),
-        dot: Some(if app.snap.connected { theme::GREEN } else { theme::GREY }),
+        dot: Some(if app.snap.connected { theme::green() } else { theme::grey() }),
     }];
     if let Some(i) = &app.snap.info {
         let s = |t: &str, b: String, sub: String| Stat { title: t.into(), big: b, sub, dot: None };
@@ -171,7 +171,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui.label(RichText::new(t!("Celkové CPU", "Total CPU")).strong());
             ui.label(format!("{total_cpu:.1} %"));
         });
-        ui.add(egui::ProgressBar::new((total_cpu / (ncpu * 100.0)) as f32).desired_height(6.0).fill(theme::ACCENT));
+        ui.add(egui::ProgressBar::new((total_cpu / (ncpu * 100.0)) as f32).desired_height(6.0).fill(theme::accent()));
     });
     ui.add_space(8.0);
     let cols = [
@@ -198,14 +198,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 row.col(|ui| {
                     ui.vertical(|ui| {
                         ui.label(format!("{:.2} %", r.cpu));
-                        ui.add(egui::ProgressBar::new((r.cpu / (ncpu * 100.0)) as f32).desired_width(ui.available_width() - 12.0).desired_height(4.0).fill(theme::ACCENT));
+                        ui.add(egui::ProgressBar::new((r.cpu / (ncpu * 100.0)) as f32).desired_width(ui.available_width() - 12.0).desired_height(4.0).fill(theme::accent()));
                     });
                 });
                 row.col(|ui| {
                     ui.vertical(|ui| {
                         ui.label(format!("{} / {}", fmt_bytes(r.mem), fmt_bytes(r.mem_limit)));
                         let f = if r.mem_limit > 0 { r.mem as f32 / r.mem_limit as f32 } else { 0.0 };
-                        ui.add(egui::ProgressBar::new(f).desired_width(ui.available_width() - 12.0).desired_height(4.0).fill(theme::ACCENT));
+                        ui.add(egui::ProgressBar::new(f).desired_width(ui.available_width() - 12.0).desired_height(4.0).fill(theme::accent()));
                     });
                 });
                 row.col(|ui| {

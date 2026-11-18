@@ -176,7 +176,7 @@ fn remove_dialog(app: &mut App, ctx: &egui::Context) {
                     "\u{E4E0} {} is used by the app for the engine. Switch the engine distribution in Settings first.",
                     d.name
                 ))
-                .color(theme::YELLOW),
+                .color(theme::yellow()),
             );
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -192,7 +192,7 @@ fn remove_dialog(app: &mut App, ctx: &egui::Context) {
                     "\u{E4E0} wsl --unregister permanently deletes all data in the distribution {} (files, users, installed software, containers).",
                     d.name
                 ))
-                .color(theme::RED),
+                .color(theme::red()),
             );
             ui.add_space(8.0);
             ui.checkbox(&mut d.backup, t!("Nejdřív exportovat zálohu (.tar)", "Export a backup first (.tar)"));
@@ -285,7 +285,7 @@ fn import_dialog(app: &mut App, ctx: &egui::Context) {
         ui.add_space(8.0);
         let problems = import_problems(&d.name, &existing, &d.file);
         for p in &problems {
-            ui.label(RichText::new(format!("\u{E4E0} {p}")).color(theme::YELLOW).small());
+            ui.label(RichText::new(format!("\u{E4E0} {p}")).color(theme::yellow()).small());
         }
         let folder = if d.folder.trim().is_empty() { crate::worker::default_import_folder(d.name.trim()) } else { d.folder.trim().to_string() };
         ui.label(muted(tf!("Disk distribuce bude ve složce {folder}.", "The distribution disk will be stored in {folder}.")).small());
@@ -314,13 +314,13 @@ fn disk_dialog(app: &mut App, ctx: &egui::Context) {
                 });
             }
             Some(Err(e)) => {
-                ui.label(RichText::new(format!("\u{E4E0} {e}")).color(theme::RED));
+                ui.label(RichText::new(format!("\u{E4E0} {e}")).color(theme::red()));
             }
             Some(Ok(info)) => {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(fmt_bytes(info.size)).size(20.0).strong());
                     if info.sparse {
-                        badge(ui, "sparse", theme::GREEN).on_hover_text(t!("Zhuštěný disk – uvolněné místo se vrací automaticky", "Sparse disk – freed space is returned automatically"));
+                        badge(ui, "sparse", theme::green()).on_hover_text(t!("Zhuštěný disk – uvolněné místo se vrací automaticky", "Sparse disk – freed space is returned automatically"));
                     }
                 });
                 ui.label(muted(info.path.as_str()).small());
@@ -349,7 +349,7 @@ fn disk_dialog(app: &mut App, ctx: &egui::Context) {
             .small(),
         );
         if is_engine && (sparse || compact) {
-            ui.label(RichText::new(t!("\u{E4E0} Zastaví se engine i všechny kontejnery.", "\u{E4E0} The engine and all containers will stop.")).color(theme::YELLOW).small());
+            ui.label(RichText::new(t!("\u{E4E0} Zastaví se engine i všechny kontejnery.", "\u{E4E0} The engine and all containers will stop.")).color(theme::yellow()).small());
         }
         ui.add_space(16.0);
         ui.horizontal(|ui| {

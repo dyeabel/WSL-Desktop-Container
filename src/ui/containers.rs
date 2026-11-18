@@ -100,7 +100,7 @@ fn row(app: &mut App, r: &mut TableRow<'_>, c: &Container) {
     let st = state_info(&c.state, &c.status);
     let color = st.color;
     r.col(|ui| dot(ui, color));
-    r.col(|ui| two_line(ui, RichText::new(c.name()).strong(), RichText::new(short_id(&c.id)).small().monospace().color(theme::MUTED)));
+    r.col(|ui| two_line(ui, RichText::new(c.name()).strong(), RichText::new(short_id(&c.id)).small().monospace().color(theme::muted())));
     r.col(|ui| {
         ui.label(crate::engine::short_image(&c.image)).on_hover_text(&c.image);
     });
@@ -209,11 +209,11 @@ pub fn cz_duration(s: &str) -> String {
 /// „Up 2 hours (healthy)“) na český štítek, barvu a doplňující text.
 pub fn state_info(state: &str, status: &str) -> StateInfo {
     let health = if status.contains("(healthy)") {
-        Some((t!("zdravý", "healthy").to_string(), theme::GREEN))
+        Some((t!("zdravý", "healthy").to_string(), theme::green()))
     } else if status.contains("(unhealthy)") {
-        Some((t!("nezdravý", "unhealthy").to_string(), theme::RED))
+        Some((t!("nezdravý", "unhealthy").to_string(), theme::red()))
     } else if status.contains("health: starting") {
-        Some((t!("startuje", "starting").to_string(), theme::YELLOW))
+        Some((t!("startuje", "starting").to_string(), theme::yellow()))
     } else {
         None
     };
@@ -224,9 +224,9 @@ pub fn state_info(state: &str, status: &str) -> StateInfo {
         cz_duration(rest)
     };
     let (label, color, detail) = match state {
-        "running" => (t!("Běží", "Running").to_string(), theme::GREEN, tf!("běží {}", "up {}", up_for())),
-        "paused" => (t!("Pozastaven", "Paused").to_string(), theme::YELLOW, tf!("běží {}", "up {}", up_for())),
-        "restarting" => (t!("Restartuje", "Restarting").to_string(), theme::YELLOW, String::new()),
+        "running" => (t!("Běží", "Running").to_string(), theme::green(), tf!("běží {}", "up {}", up_for())),
+        "paused" => (t!("Pozastaven", "Paused").to_string(), theme::yellow(), tf!("běží {}", "up {}", up_for())),
+        "restarting" => (t!("Restartuje", "Restarting").to_string(), theme::yellow(), String::new()),
         "exited" => {
             // „Exited (1) 6 seconds ago“
             let code = status
@@ -241,7 +241,7 @@ pub fn state_info(state: &str, status: &str) -> StateInfo {
                 .unwrap_or_default();
             let detail = if ago.is_empty() { String::new() } else { tf!("ukončen před {ago}", "exited {ago} ago") };
             if code.is_empty() || code == "0" {
-                (t!("Zastaven", "Stopped").to_string(), theme::GREY, detail)
+                (t!("Zastaven", "Stopped").to_string(), theme::grey(), detail)
             } else {
                 let why = match code.as_str() {
                     "137" => t!(" – zabit (SIGKILL / nedostatek paměti)", " – killed (SIGKILL / out of memory)"),
@@ -249,13 +249,13 @@ pub fn state_info(state: &str, status: &str) -> StateInfo {
                     "139" => t!(" – pád (SIGSEGV)", " – crashed (SIGSEGV)"),
                     _ => "",
                 };
-                (tf!("Chyba ({code})", "Error ({code})"), theme::RED, format!("{detail}{why}"))
+                (tf!("Chyba ({code})", "Error ({code})"), theme::red(), format!("{detail}{why}"))
             }
         }
-        "created" => (t!("Vytvořen", "Created").to_string(), theme::GREY, t!("zatím nespuštěn", "not started yet").to_string()),
-        "dead" => (t!("Mrtvý", "Dead").to_string(), theme::RED, String::new()),
-        "removing" => (t!("Odstraňuje se", "Removing").to_string(), theme::YELLOW, String::new()),
-        other => (other.to_string(), theme::GREY, String::new()),
+        "created" => (t!("Vytvořen", "Created").to_string(), theme::grey(), t!("zatím nespuštěn", "not started yet").to_string()),
+        "dead" => (t!("Mrtvý", "Dead").to_string(), theme::red(), String::new()),
+        "removing" => (t!("Odstraňuje se", "Removing").to_string(), theme::yellow(), String::new()),
+        other => (other.to_string(), theme::grey(), String::new()),
     };
     StateInfo { label, color, detail, health }
 }
@@ -419,18 +419,18 @@ pub fn run_dialog(app: &mut App, ctx: &egui::Context) {
                         "\u{E4E0} {base} nemá vlastní službu – na pozadí bez příkazu hned skončí. Zaškrtni „Interaktivně“ nebo dej příkaz (sleep infinity).",
                         "\u{E4E0} {base} has no service of its own – in the background without a command it exits immediately. Tick “Interactive” or set a command (sleep infinity)."
                     ))
-                    .color(theme::YELLOW)
+                    .color(theme::yellow())
                     .small(),
                 );
             }
             ui.add_space(10.0);
             egui::Frame::new()
-                .fill(theme::BG)
+                .fill(theme::bg())
                 .corner_radius(6)
                 .inner_margin(egui::Margin::same(8))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.add(egui::Label::new(RichText::new(r.args().join(" ")).monospace().small().color(theme::MUTED)).wrap());
+                    ui.add(egui::Label::new(RichText::new(r.args().join(" ")).monospace().small().color(theme::muted())).wrap());
                 });
             let (ok, c) = dialog_buttons(ui, t!("\u{E3D0} Spustit", "\u{E3D0} Run"), false, !r.image.trim().is_empty());
             submit = ok;

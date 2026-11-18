@@ -194,7 +194,7 @@ fn body(ui: &mut egui::Ui, dv: &mut DetailView, c: Option<&Container>, nets: &[S
     let paused = state == "paused";
     toolbar(ui, |ui| {
         if dv.gone {
-            badge(ui, t!("Neexistuje", "Gone"), theme::GREY);
+            badge(ui, t!("Neexistuje", "Gone"), theme::grey());
         } else if !state.is_empty() {
             let st = containers::state_info(&state, &status);
             badge(ui, &st.label, st.color);
@@ -307,14 +307,14 @@ fn loading(ui: &mut egui::Ui) {
 }
 
 fn error(ui: &mut egui::Ui, e: &str) {
-    ui.label(RichText::new(e).color(theme::RED));
+    ui.label(RichText::new(e).color(theme::red()));
 }
 
 /// Řádek mřížky klíč – hodnota (hodnota jde označit a kopírovat).
 fn kv(ui: &mut egui::Ui, k: &str, v: impl Into<String>, mono: bool) {
     ui.label(muted(k));
     let v = v.into();
-    let text = if v.is_empty() { RichText::new("—").color(theme::MUTED) } else if mono { RichText::new(v).monospace() } else { RichText::new(v) };
+    let text = if v.is_empty() { RichText::new("—").color(theme::muted()) } else if mono { RichText::new(v).monospace() } else { RichText::new(v) };
     ui.add(egui::Label::new(text).selectable(true).wrap());
     ui.end_row();
 }
@@ -389,7 +389,7 @@ fn overview(ui: &mut egui::Ui, d: &Detail, reveal: &mut bool) {
                 let src = if m.typ == "volume" && !m.name.is_empty() { m.name.clone() } else { m.source.clone() };
                 ui.add(egui::Label::new(RichText::new(src).monospace()).selectable(true).wrap()).on_hover_text(&m.source);
                 ui.add(egui::Label::new(RichText::new(&m.destination).monospace()).selectable(true).wrap());
-                ui.label(if m.rw { muted("rw") } else { RichText::new(t!("jen čtení", "read-only")).color(theme::YELLOW) });
+                ui.label(if m.rw { muted("rw") } else { RichText::new(t!("jen čtení", "read-only")).color(theme::yellow()) });
                 ui.end_row();
             }
         });
@@ -476,7 +476,7 @@ fn stats(ui: &mut egui::Ui, feed: &StatsFeed, running: bool) {
         });
         let cmax = cpu.iter().map(|p| p.1).fold(0.0, f64::max);
         let ymax = if cmax <= 100.0 { 100.0 } else { (cmax * 1.15 / 50.0).ceil() * 50.0 };
-        chart(ui, &cpu, now, ymax, theme::ACCENT, |v| format!("{v:.1} %"));
+        chart(ui, &cpu, now, ymax, theme::accent(), |v| format!("{v:.1} %"));
 
         ui.add_space(12.0);
         ui.horizontal(|ui| {
@@ -488,7 +488,7 @@ fn stats(ui: &mut egui::Ui, feed: &StatsFeed, running: bool) {
         });
         let mmax = mem.iter().map(|p| p.1).fold(0.0, f64::max);
         let ymax = (mmax * 1.25).max(16.0 * 1024.0 * 1024.0);
-        chart(ui, &mem, now, ymax, theme::GREEN, |v| fmt_bytes(v as u64));
+        chart(ui, &mem, now, ymax, theme::green(), |v| fmt_bytes(v as u64));
         ui.add_space(4.0);
         ui.label(muted(t!("Vzorek každé ~2 s po dobu otevření okna, posledních 5 minut.", "Sampled every ~2 s while this window is open, last 5 minutes.")).small());
     });
@@ -499,8 +499,8 @@ fn chart(ui: &mut egui::Ui, pts: &[(f64, f64)], now: f64, ymax: f64, color: egui
     let w = ui.available_width().max(200.0);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 150.0), egui::Sense::hover());
     let p = ui.painter_at(rect);
-    p.rect_filled(rect, 6.0, theme::BG);
-    p.rect_stroke(rect, 6.0, egui::Stroke::new(1.0_f32, theme::CARD_STROKE), egui::StrokeKind::Inside);
+    p.rect_filled(rect, 6.0, theme::bg());
+    p.rect_stroke(rect, 6.0, egui::Stroke::new(1.0_f32, theme::card_stroke()), egui::StrokeKind::Inside);
     let plot = egui::Rect::from_min_max(rect.min + egui::vec2(8.0, 18.0), rect.max - egui::vec2(8.0, 18.0));
     let x0 = now - STATS_WINDOW;
     let to_screen = |t: f64, v: f64| {
@@ -511,13 +511,13 @@ fn chart(ui: &mut egui::Ui, pts: &[(f64, f64)], now: f64, ymax: f64, color: egui
     let small = egui::FontId::proportional(11.0);
     for f in [0.0, 0.5, 1.0] {
         let y = plot.bottom() - f * plot.height();
-        p.line_segment([egui::pos2(plot.left(), y), egui::pos2(plot.right(), y)], egui::Stroke::new(1.0_f32, theme::CARD_STROKE));
+        p.line_segment([egui::pos2(plot.left(), y), egui::pos2(plot.right(), y)], egui::Stroke::new(1.0_f32, theme::card_stroke()));
     }
-    p.text(egui::pos2(plot.left(), plot.top() - 2.0), egui::Align2::LEFT_BOTTOM, fmt(ymax), small.clone(), theme::MUTED);
-    p.text(egui::pos2(plot.left(), plot.bottom() + 2.0), egui::Align2::LEFT_TOP, t!("−5 min", "−5 min"), small.clone(), theme::MUTED);
-    p.text(egui::pos2(plot.right(), plot.bottom() + 2.0), egui::Align2::RIGHT_TOP, t!("teď", "now"), small.clone(), theme::MUTED);
+    p.text(egui::pos2(plot.left(), plot.top() - 2.0), egui::Align2::LEFT_BOTTOM, fmt(ymax), small.clone(), theme::muted());
+    p.text(egui::pos2(plot.left(), plot.bottom() + 2.0), egui::Align2::LEFT_TOP, t!("−5 min", "−5 min"), small.clone(), theme::muted());
+    p.text(egui::pos2(plot.right(), plot.bottom() + 2.0), egui::Align2::RIGHT_TOP, t!("teď", "now"), small.clone(), theme::muted());
     if pts.is_empty() {
-        p.text(plot.center(), egui::Align2::CENTER_CENTER, t!("Zatím žádná data…", "No data yet…"), small, theme::MUTED);
+        p.text(plot.center(), egui::Align2::CENTER_CENTER, t!("Zatím žádná data…", "No data yet…"), small, theme::muted());
         return;
     }
     let line: Vec<egui::Pos2> = pts.iter().filter(|(t, _)| *t >= x0).map(|(t, v)| to_screen(*t, *v)).collect();
@@ -531,7 +531,7 @@ fn chart(ui: &mut egui::Ui, pts: &[(f64, f64)], now: f64, ymax: f64, color: egui
         let t = x0 + ((pos.x - plot.left()) / plot.width()) as f64 * STATS_WINDOW;
         if let Some((st, sv)) = pts.iter().min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs())) {
             let at = to_screen(*st, *sv);
-            p.line_segment([egui::pos2(at.x, plot.top()), egui::pos2(at.x, plot.bottom())], egui::Stroke::new(1.0_f32, theme::MUTED));
+            p.line_segment([egui::pos2(at.x, plot.top()), egui::pos2(at.x, plot.bottom())], egui::Stroke::new(1.0_f32, theme::muted()));
             p.circle_filled(at, 3.5, color);
             let ago = (now - st).max(0.0).round();
             let text = tf!("{} (před {ago:.0} s)", "{} ({ago:.0} s ago)", fmt(*sv));
@@ -551,7 +551,7 @@ fn recreate(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, nets: &[String],
          If the new one starts, the original is deleted; otherwise the new one is removed and the original restored (and restarted if it was running)."
     )));
     let warn = |ui: &mut egui::Ui, text: String| {
-        ui.label(RichText::new(format!("\u{E4E0} {text}")).color(theme::YELLOW).small());
+        ui.label(RichText::new(format!("\u{E4E0} {text}")).color(theme::yellow()).small());
     };
     ui.add_space(4.0);
     if let Some(p) = d.compose_project() {
@@ -626,9 +626,9 @@ fn recreate(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, nets: &[String],
         ui.end_row();
     });
     ui.add_space(10.0);
-    egui::Frame::new().fill(theme::BG).corner_radius(6).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+    egui::Frame::new().fill(theme::bg()).corner_radius(6).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.add(egui::Label::new(RichText::new(form.args().join(" ")).monospace().small().color(theme::MUTED)).wrap());
+        ui.add(egui::Label::new(RichText::new(form.args().join(" ")).monospace().small().color(theme::muted())).wrap());
     });
     ui.add_space(12.0);
     let mut reset = false;

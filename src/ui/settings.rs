@@ -47,7 +47,7 @@ pub fn add_distro_dialog(app: &mut App, ctx: &egui::Context) {
                     });
                 }
                 Some(Err(e)) => {
-                    ui.label(RichText::new(format!("\u{E4E0} {e}")).color(theme::RED));
+                    ui.label(RichText::new(format!("\u{E4E0} {e}")).color(theme::red()));
                 }
                 Some(Ok(list)) => {
                     let shown = list.iter().find(|(n, _)| *n == spec.distro).map(|(_, f)| f.clone()).unwrap_or_else(|| t!("vyber…", "choose…").to_string());
@@ -98,7 +98,7 @@ pub fn add_distro_dialog(app: &mut App, ctx: &egui::Context) {
             problems.push(t!("Uživatel: malá písmena, číslice, - a _, začíná písmenem.", "User: lowercase letters, digits, - and _, starting with a letter."));
         }
         for p in &problems {
-            ui.label(RichText::new(format!("\u{E4E0} {p}")).color(theme::YELLOW).small());
+            ui.label(RichText::new(format!("\u{E4E0} {p}")).color(theme::yellow()).small());
         }
         ui.label(
             muted(t!(
@@ -122,7 +122,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     header(ui, t!("Nastavení", "Settings"), "");
 
     // jazyk se mění okamžitě (bez tlačítka Uložit)
-    section(ui, "Jazyk / Language");
+    section(ui, t!("Jazyk a vzhled", "Language and appearance"));
     card(ui, |ui| {
         ui.set_width(ui.available_width());
         let cur_lang = app.cfg.read().map(|c| c.language.clone()).unwrap_or_default();
@@ -137,6 +137,30 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
         });
+        // motiv – mění se okamžitě
+        let cur_theme = app.cfg.read().map(|c| c.theme.clone()).unwrap_or_default();
+        let mut th = cur_theme.clone();
+        let theme_name = |m: &str| match m {
+            "light" => t!("Světlý", "Light"),
+            "system" => t!("Podle Windows", "Follow Windows"),
+            _ => t!("Tmavý", "Dark"),
+        };
+        ui.horizontal(|ui| {
+            ui.label(t!("Motiv", "Theme"));
+            egui::ComboBox::from_id_salt("theme").selected_text(theme_name(&th)).show_ui(ui, |ui| {
+                for m in ["dark", "light", "system"] {
+                    ui.selectable_value(&mut th, m.to_string(), theme_name(m));
+                }
+            });
+        });
+        if th != cur_theme {
+            crate::theme::set_mode(ui.ctx(), &th);
+            if let Ok(mut g) = app.cfg.write() {
+                g.theme = th.clone();
+                let _ = g.save();
+            }
+            app.cfg_draft.theme = th;
+        }
         if lang != cur_lang {
             crate::i18n::set_language(&lang);
             if let Ok(mut g) = app.cfg.write() {
@@ -292,17 +316,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             Some(s) => {
                 let dir = crate::shim_install::bin_dir().display().to_string();
                 if s.installed && s.in_path {
-                    ui.label(RichText::new(tf!("\u{E184} Nainstalováno v {dir} a přidáno do PATH", "\u{E184} Installed in {dir} and added to PATH")).color(theme::GREEN));
+                    ui.label(RichText::new(tf!("\u{E184} Nainstalováno v {dir} a přidáno do PATH", "\u{E184} Installed in {dir} and added to PATH")).color(theme::green()));
                 } else if s.installed {
-                    ui.label(RichText::new(tf!("\u{E4E0} Soubory jsou v {dir}, ale složka chybí v PATH", "\u{E4E0} The files are in {dir}, but the folder is missing from PATH")).color(theme::YELLOW));
+                    ui.label(RichText::new(tf!("\u{E4E0} Soubory jsou v {dir}, ale složka chybí v PATH", "\u{E4E0} The files are in {dir}, but the folder is missing from PATH")).color(theme::yellow()));
                 } else {
                     ui.label(muted(t!("Není nainstalováno.", "Not installed.")));
                 }
                 for o in &s.other_docker {
-                    ui.label(RichText::new(tf!("\u{E4E0} V PATH je i jiný docker: {o} – může mít přednost", "\u{E4E0} Another docker is also in PATH: {o} – it may take precedence")).color(theme::YELLOW).small());
+                    ui.label(RichText::new(tf!("\u{E4E0} V PATH je i jiný docker: {o} – může mít přednost", "\u{E4E0} Another docker is also in PATH: {o} – it may take precedence")).color(theme::yellow()).small());
                 }
                 if !s.source_ok {
-                    ui.label(RichText::new(t!("\u{E4E0} docker.exe nebyl nalezen vedle aplikace (sestav projekt přes cargo build --release).", "\u{E4E0} docker.exe was not found next to the app (build the project with cargo build --release).")).color(theme::RED).small());
+                    ui.label(RichText::new(t!("\u{E4E0} docker.exe nebyl nalezen vedle aplikace (sestav projekt přes cargo build --release).", "\u{E4E0} docker.exe was not found next to the app (build the project with cargo build --release).")).color(theme::red()).small());
                 }
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
