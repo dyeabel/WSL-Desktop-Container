@@ -16,7 +16,7 @@ Docker Desktop and without the Docker CLI for Windows.
 | **Volumes** | create, remove, prune, which containers use a volume, browse its content (as root), *run a container with this volume* |
 | **Networks** (Sítě) | create (bridge, ipvlan, macvlan), remove, prune, subnets, attached containers |
 | **Compose** | stacks detected from container labels: up, stop, start, restart, pull, build, ps, logs, down; edit the compose file in Notepad; start a stack from any folder (Windows or Linux path) |
-| **Files** (Soubory) | file browser for the distribution: navigation, bookmarks, new folder or file, rename and move, delete, chmod, built-in text editor (Ctrl+S), upload from Windows and download to Windows, *As root* mode |
+| **Files** (Soubory) | file browser for the distribution: navigation, bookmarks, *New* menu (folder, file), *Upload from Windows* menu (files, folder), rename and move, delete, chmod, built-in text editor (Ctrl+S), download to Windows, *Work as root* mode; bulk actions appear only when something is selected, row actions live in a per-row ⋯ menu |
 | **WSL engine** | start, stop and restart the engine, put the distribution to sleep, terminal; distribution list (start, terminate, default, *use for the engine*); *Install & setup* section: Docker / Podman switch, install, API setup, uninstall, `docker` command in PATH, `DOCKER_HOST`; editor for `/etc/docker/daemon.json` (Docker only) |
 | **Settings** (Nastavení) | language (Czech / English), distribution (+ *Add distribution* wizard), API port, refresh interval, keep-alive, engine autostart, restoring containers that were running last time, tray behaviour, `docker` command in PATH, global `.wslconfig` (memory, CPU, swap, `vmIdleTimeout`, `networkingMode`) |
 
@@ -46,8 +46,8 @@ in the background:
 5. optionally install Docker or Podman and switch the app to the new distribution
    (only one distribution can expose the API – all WSL distributions share the network).
 
-Engine installation supports apt (Debian, Ubuntu, Kali), dnf (Fedora, Alma, Oracle, Rocky),
-zypper (openSUSE, SLES) and pacman (Arch). Progress is shown in an output window.
+Engine installation and uninstallation support apt (Debian, Ubuntu, Kali), dnf (Fedora, Alma,
+Oracle, Rocky), zypper (openSUSE, SLES) and pacman (Arch). Progress is shown in an output window.
 
 ### Restoring containers
 
@@ -72,11 +72,15 @@ shows the running window. Windows 11 puts icons of new apps into the hidden part
 
 The engine is selected per distribution on the *WSL engine* page.
 
-- **Install & setup:** installs the engine via apt (Debian / Ubuntu). If systemd is not running,
+- **Install & setup:** installs the engine via apt, dnf, zypper or pacman (Docker via the official
+  get.docker.com script on apt/dnf systems, distribution packages on openSUSE and Arch). If systemd is not running,
   it enables it in `/etc/wsl.conf` and restarts the distribution. Then it sets up the TCP API and
   verifies it responds. Progress is shown in an output window.
-- **Uninstall:** disables the services, removes the API setup and the packages (apt purge).
-  Optionally deletes the data as well (`/var/lib/docker…` or `/var/lib/containers`).
+- **Uninstall:** disables the services, removes the API setup and the engine packages with the
+  distribution's package manager (apt purge, dnf / zypper / pacman remove) – it detects which of
+  the known package variants are installed (docker-ce, docker.io, moby-engine, docker, podman, …).
+  `docker-compose` is kept when Docker is still installed. Optionally deletes the data as well
+  (`/var/lib/docker…` or `/var/lib/containers`).
 - **Podman** runs as the rootful service `wls-podman-api`
   (`podman system service tcp://127.0.0.1:<port>`). The app talks to it through the same
   Docker-compatible API. CLI commands (running a container, compose, console, logs, the shim)
@@ -133,7 +137,7 @@ console window when it is not available.
 - **Switching distributions:** pick another distribution in Settings (or *Use for the engine*
   on the WSL engine page) and run *Install & setup* (or just *Set up API*) there once.
   Requirements: systemd (`[boot] systemd=true` in `/etc/wsl.conf`, set up automatically by
-  *Install & setup*) and apt for automatic installation.
+  *Install & setup*) and apt, dnf, zypper or pacman for automatic installation.
 - **Keep-alive:** WSL stops an idle distribution – together with the engine. The app therefore
   runs a hidden `wsl.exe … flock … sleep infinity` that runs at most once per distribution and
   keeps running after the app is closed, so the engine stays up. **Sleep** stops it and shuts
@@ -160,7 +164,10 @@ cargo test
 ```
 
 Integration tests against a real WSL distribution and engine (distribution from `WLS_DISTRO`,
-default `Ubuntu`; the Podman test expects an API on `WLS_PODMAN_PORT`, default 2376):
+default `Ubuntu`; the Podman test expects an API on `WLS_PODMAN_PORT`, default 2376).
+`live_add_distro` installs and removes a temporary Debian (`WLS-Test-Debian`),
+`live_pkg_helpers` checks install / detect / remove in throwaway Fedora, openSUSE and Arch
+containers (needs the Podman API on `WLS_PORT`, default 2375):
 
 ```bash
 cargo test -- --ignored --test-threads=1
@@ -169,7 +176,8 @@ cargo test -- --ignored --test-threads=1
 For debugging and screenshots: `WLS_START_PAGE` selects the start page (`containers`, `images`,
 `volumes`, `networks`, `compose`, `files`, `engine`, `settings`), `WLS_DEBUG_DIALOG=1` shows a
 sample confirmation dialog, `WLS_DEBUG_HUB=<image>` opens the Docker Hub dialog,
-`WLS_DEBUG_EXPAND=1` expands the engine setup section.
+`WLS_DEBUG_EXPAND=1` expands the engine setup section, `WLS_LANG=en|cs` overrides the language
+without saving it.
 
 ## UI conventions
 
@@ -180,10 +188,15 @@ sample confirmation dialog, `WLS_DEBUG_HUB=<image>` opens the Docker Hub dialog,
   windows). An icon column uses `icons_w(n)`.
 - Texts are bilingual via `t!("česky", "English")` and `tf!("… {x}", "… {x}")` (`src/i18n.rs`);
   the language is switched at runtime.
-- All controls share the height `theme::CONTROL_H`.
+- All controls (buttons, inputs, combo boxes, menus) share the height `theme::CONTROL_H` and are
+  vertically centered in toolbars.
 - Toolbars: `ui::toolbar()`, or `ui::toolbar_lr()` with the right part pinned (filter
   `ui::filter_field()`, menu `ui::more_menu()`); inputs `ui::field()` / `ui::area()`; dialogs
   `ui::modal()` + `ui::dialog_buttons()`.
+
+## Roadmap
+
+Ideas for future improvements are collected in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Project structure
 

@@ -876,7 +876,7 @@ impl Worker {
                     &distro,
                     Some("root"),
                     None,
-                    &["env", &format!("PURGE={}", if purge { 1 } else { 0 }), "sh", "-c", engine.uninstall_script()],
+                    &["env", &format!("PURGE={}", if purge { 1 } else { 0 }), "sh", "-c", &engine.uninstall_script()],
                 );
                 self.shared.tcp_checked.store(false, Ordering::SeqCst);
                 self.check_engine();

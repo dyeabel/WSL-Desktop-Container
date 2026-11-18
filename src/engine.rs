@@ -80,11 +80,13 @@ impl Engine {
     }
 
     /// Odinstalace (běží jako root; PURGE=1 smaže i data).
-    pub fn uninstall_script(self) -> &'static str {
-        match self {
+    /// Funguje pro apt / dnf / zypper / pacman.
+    pub fn uninstall_script(self) -> String {
+        let body = match self {
             Engine::Docker => DOCKER_UNINSTALL,
             Engine::Podman => PODMAN_UNINSTALL,
-        }
+        };
+        format!("{PKG}{body}")
     }
 
     /// Kde engine drží data (pro text v dialogu).
@@ -96,39 +98,32 @@ impl Engine {
     }
 }
 
-const DOCKER_UNINSTALL: &str = r#"export DEBIAN_FRONTEND=noninteractive
-echo "Zastavuji Docker…"
+/// Odinstalace Dockeru – balíčky všech podporovaných variant (docker-ce z get.docker.com,
+/// docker.io z Debianu/Ubuntu, moby-engine z Fedory, docker z openSUSE/Arch).
+const DOCKER_UNINSTALL: &str = r#"echo "Zastavuji Docker…"
 systemctl disable --now docker.socket docker containerd >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf
 rmdir /etc/systemd/system/docker.service.d 2>/dev/null || true
 systemctl daemon-reload 2>/dev/null || true
-if command -v apt-get >/dev/null; then
-  PKGS=""
-  for p in docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras docker.io docker-compose; do
-    dpkg -s "$p" >/dev/null 2>&1 && PKGS="$PKGS $p"
-  done
-  if [ -n "$PKGS" ]; then echo "Odebírám balíčky:$PKGS"; apt-get purge -y -qq $PKGS; apt-get autoremove -y -qq; else echo "Žádné balíčky Dockeru nenalezeny"; fi
-else
-  echo "apt-get není k dispozici – balíčky odeber ručně" >&2
-fi
+PKGS=$(pkg_installed docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
+  docker-ce-rootless-extras docker.io docker-compose moby-engine moby-cli moby-buildx moby-compose \
+  docker docker-buildx docker-compose-switch)
+if [ -n "$PKGS" ]; then echo "Odebírám balíčky:$PKGS"; pkg_remove $PKGS; else echo "Žádné balíčky Dockeru nenalezeny"; fi
 if [ "$PURGE" = "1" ]; then echo "Mažu data Dockeru…"; rm -rf /var/lib/docker /var/lib/containerd /etc/docker; fi
 getent group docker >/dev/null && [ "$PURGE" = "1" ] && groupdel docker 2>/dev/null || true
 echo "Docker odinstalován"
 "#;
 
-const PODMAN_UNINSTALL: &str = r#"export DEBIAN_FRONTEND=noninteractive
-echo "Zastavuji Podman API…"
+const PODMAN_UNINSTALL: &str = r#"echo "Zastavuji Podman API…"
 systemctl disable --now wls-podman-api podman-restart >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/wls-podman-api.service
 systemctl daemon-reload 2>/dev/null || true
-if command -v apt-get >/dev/null; then
-  if dpkg -s podman >/dev/null 2>&1; then echo "Odebírám balíček podman"; apt-get purge -y -qq podman; apt-get autoremove -y -qq; else echo "Balíček podman nenalezen"; fi
-  # docker-compose odebrat jen pokud není nainstalovaný Docker (tam ho může používat)
-  if dpkg -s docker-compose >/dev/null 2>&1 && ! command -v dockerd >/dev/null; then apt-get purge -y -qq docker-compose; fi
-else
-  echo "apt-get není k dispozici – balíček odeber ručně" >&2
-fi
-if [ "$PURGE" = "1" ]; then echo "Mažu data Podmanu…"; podman system reset -f >/dev/null 2>&1 || true; rm -rf /var/lib/containers; fi
+if [ "$PURGE" = "1" ]; then podman system reset -f >/dev/null 2>&1 || true; fi
+PKGS=$(pkg_installed podman podman-docker)
+# docker-compose (provider pro podman compose) odebrat jen když není nainstalovaný Docker
+if ! command -v dockerd >/dev/null; then PKGS="$PKGS$(pkg_installed docker-compose)"; fi
+if [ -n "$PKGS" ]; then echo "Odebírám balíčky:$PKGS"; pkg_remove $PKGS; else echo "Balíček podman nenalezen"; fi
+if [ "$PURGE" = "1" ]; then echo "Mažu data Podmanu…"; rm -rf /var/lib/containers; fi
 echo "Podman odinstalován"
 "#;
 
@@ -179,13 +174,34 @@ echo "Podman API nastaveno na tcp://127.0.0.1:$PORT"
 "#
 );
 
-/// Společná shell funkce `pkg_install balíček…` pro apt / dnf / zypper / pacman.
+/// Společné shell funkce pro apt / dnf / zypper / pacman:
+/// `pkg_install balíček…`, `pkg_remove balíček…` a `pkg_installed balíček…`
+/// (vypíše ty z uvedených, které jsou nainstalované, oddělené mezerou).
 const PKG: &str = r#"pkg_install() {
   if command -v apt-get >/dev/null; then export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq "$@";
   elif command -v dnf >/dev/null; then dnf install -y -q "$@";
   elif command -v zypper >/dev/null; then zypper --non-interactive install -y "$@";
   elif command -v pacman >/dev/null; then pacman -Sy --noconfirm --needed "$@";
   else echo "Nepodporovaný správce balíčků (umím apt, dnf, zypper, pacman)." >&2; return 2; fi
+}
+pkg_remove() {
+  if command -v apt-get >/dev/null; then export DEBIAN_FRONTEND=noninteractive; apt-get purge -y -qq "$@" && apt-get autoremove -y -qq;
+  elif command -v dnf >/dev/null; then dnf remove -y -q "$@";
+  elif command -v zypper >/dev/null; then zypper --non-interactive remove "$@";
+  elif command -v pacman >/dev/null; then pacman -Rns --noconfirm "$@";
+  else echo "Nepodporovaný správce balíčků (umím apt, dnf, zypper, pacman)." >&2; return 2; fi
+}
+pkg_installed() {
+  for p in "$@"; do
+    if command -v dpkg-query >/dev/null; then
+      dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'install ok installed' && printf ' %s' "$p"
+    elif command -v rpm >/dev/null; then
+      rpm -q "$p" >/dev/null 2>&1 && printf ' %s' "$p"
+    elif command -v pacman >/dev/null; then
+      pacman -Q "$p" >/dev/null 2>&1 && printf ' %s' "$p"
+    fi
+  done
+  return 0
 }
 "#;
 
@@ -286,6 +302,12 @@ mod tests {
         assert_eq!(Engine::Docker.cli(2375), vec!["docker"]);
         assert_eq!(Engine::Podman.cli(2375), vec!["podman", "--url", "tcp://127.0.0.1:2375"]);
     }
+}
+
+/// Shell funkce pkg_install / pkg_remove / pkg_installed (pro testy a vlastní skripty).
+#[allow(dead_code)]
+pub fn pkg_helpers() -> &'static str {
+    PKG
 }
 
 /// Skript přípravy nové distribuce včetně funkce pkg_install.

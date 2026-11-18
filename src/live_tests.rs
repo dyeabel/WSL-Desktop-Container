@@ -109,6 +109,34 @@ fn live_add_distro() {
     assert!(who.contains("SYSTEMD_OK"), "{who}");
 }
 
+/// pkg_install / pkg_installed / pkg_remove v dočasných kontejnerech Fedory (dnf),
+/// openSUSE (zypper) a Archu (pacman); Debian (apt) jen detekce bez změn.
+/// Potřebuje Podman API na portu z WLS_PORT (výchozí 2375). Stahuje image (~250 MB).
+#[test]
+#[ignore]
+fn live_pkg_helpers() {
+    let port = std::env::var("WLS_PORT").unwrap_or_else(|_| "2375".into());
+    let url = format!("tcp://127.0.0.1:{port}");
+    let script = format!(
+        "{}\npkg_install less >/dev/null 2>&1; echo \"inst:$(pkg_installed less bash neexistuje-xyz)\"; pkg_remove less >/dev/null 2>&1; echo \"after:$(pkg_installed less bash)\"",
+        crate::engine::pkg_helpers()
+    );
+    for img in [
+        "registry.fedoraproject.org/fedora:latest",
+        "registry.opensuse.org/opensuse/tumbleweed:latest",
+        "docker.io/library/archlinux:latest",
+    ] {
+        let out = wsl::run(&distro(), None, None, &["podman", "--url", &url, "run", "--rm", img, "sh", "-c", &script])
+            .unwrap_or_else(|e| panic!("{img}: {e}"));
+        eprintln!("{img}: {}", out.trim().replace('\n', " | "));
+        assert!(out.contains("inst: less bash") || out.contains("inst: bash less"), "{img}: {out}");
+        assert!(out.contains("after: bash"), "{img}: {out}");
+    }
+    // Debian (apt): jen detekce
+    let det = wsl::run(&distro(), None, None, &["sh", "-c", &format!("{}\necho \"det:$(pkg_installed bash neexistuje-xyz)\"", crate::engine::pkg_helpers())]).expect("debian");
+    assert!(det.contains("det: bash"), "{det}");
+}
+
 /// Syntaktická kontrola všech skriptů enginu (`sh -n`) přímo v distribuci.
 #[test]
 #[ignore]
