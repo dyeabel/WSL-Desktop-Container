@@ -65,7 +65,7 @@ pub fn hub_dialog(app: &mut App, ctx: &egui::Context) {
     let width = (screen.width() - 120.0).clamp(420.0, 860.0);
     let max_h = (screen.height() - 220.0).max(240.0);
     let mut close = false;
-    let (_, esc) = modal(ctx, "hub-dialog", "\u{E20C} Stáhnout image z Docker Hubu", width, |ui| {
+    let (_, esc) = modal(ctx, "hub-dialog", t!("\u{E20C} Stáhnout image z Docker Hubu", "\u{E20C} Pull image from Docker Hub"), width, |ui| {
         egui::ScrollArea::vertical().id_salt("hub-dialog-scroll").max_height(max_h).show(ui, |ui| {
             ui.set_width(width - 12.0);
             hub_body(app, ui);
@@ -80,20 +80,26 @@ pub fn hub_dialog(app: &mut App, ctx: &egui::Context) {
                 ui.add(field(&mut app.hub.tag).font(egui::TextStyle::Monospace).desired_width(160.0));
                 let full = format!("{}:{}", repo, app.hub.tag.trim());
                 ui.add_enabled_ui(!app.hub.tag.trim().is_empty(), |ui| {
-                    if accent_button(ui, &format!("\u{E20C} Stáhnout {full}")).clicked() {
+                    if accent_button(ui, &tf!("\u{E20C} Stáhnout {full}", "\u{E20C} Pull {full}")).clicked() {
                         app.send(Cmd::Pull(full.clone()));
                     }
                 });
             } else {
-                ui.label(muted("Vyber image ze seznamu a pak tag.").small());
+                ui.label(muted(t!("Vyber image ze seznamu a pak tag.", "Pick an image from the list, then a tag.")).small());
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Zavřít").clicked() {
+                if ui.button(t!("Zavřít", "Close")).clicked() {
                     close = true;
                 }
             });
         });
-        ui.label(muted("Stahování běží na pozadí – průběh je vidět ve stavovém řádku.").small());
+        ui.label(
+            muted(t!(
+                "Stahování běží na pozadí – průběh je vidět ve stavovém řádku.",
+                "Pulling runs in the background – progress is shown in the status bar."
+            ))
+            .small(),
+        );
     });
     if close || esc {
         app.hub.open = false;
@@ -109,14 +115,17 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
             let w = (ui.available_width() - 150.0).max(160.0);
             let r = ui.add(
                 field(&mut app.hub.query)
-                    .hint_text("\u{E30C} Hledat image… (např. postgres, redis, bitnami/kafka)")
+                    .hint_text(t!(
+                        "\u{E30C} Hledat image… (např. postgres, redis, bitnami/kafka)",
+                        "\u{E30C} Search images… (e.g. postgres, redis, bitnami/kafka)"
+                    ))
                     .desired_width(w),
             );
             if r.changed() {
                 app.hub.last_edit = now;
             }
             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if accent_button(ui, "Hledat").clicked() || enter {
+            if accent_button(ui, t!("Hledat", "Search")).clicked() || enter {
                 search(app);
             }
             if app.hub.searching {
@@ -144,7 +153,7 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
         if q.is_empty() {
             ui.add_space(4.0);
             toolbar(ui, |ui| {
-                ui.label(muted("Oblíbené:"));
+                ui.label(muted(t!("Oblíbené:", "Popular:")));
                 for p in POPULAR {
                     let sel = app.hub.selected.as_deref() == Some(*p);
                     if ui.add(egui::Button::new(*p).selected(sel)).clicked() {
@@ -159,8 +168,8 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
             egui::ScrollArea::vertical().id_salt("hub-results").max_height(260.0).show(ui, |ui| {
                 let cols = [
                     ("IMAGE", W::Fr(1.6)),
-                    ("POPIS", W::FrOpt(3.0)),
-                    ("HVĚZDY", W::Px(70.0)),
+                    (t!("POPIS", "DESCRIPTION"), W::FrOpt(3.0)),
+                    (t!("HVĚZDY", "STARS"), W::Px(70.0)),
                     ("", W::Px(90.0)),
                 ];
                 table_in(ui, "hub-results-t", &cols, |mut body| {
@@ -174,7 +183,7 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
                                     pick = Some((r.name.clone(), r.is_official));
                                 }
                                 if r.is_official {
-                                    ui.label(RichText::new("\u{E606} oficiální").small().color(theme::GREEN));
+                                    ui.label(RichText::new(t!("\u{E606} oficiální", "\u{E606} official")).small().color(theme::GREEN));
                                 }
                             });
                             row.col(|ui| {
@@ -184,7 +193,7 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
                                 ui.label(format!("\u{E46A} {}", r.star_count));
                             });
                             row.col(|ui| {
-                                if ui.add(egui::Button::new(if sel { "Vybráno" } else { "Vybrat" }).selected(sel)).clicked() {
+                                if ui.add(egui::Button::new(if sel { t!("Vybráno", "Selected") } else { t!("Vybrat", "Select") }).selected(sel)).clicked() {
                                     pick = Some((r.name.clone(), r.is_official));
                                 }
                             });
@@ -196,7 +205,7 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
                 select_repo(app, &n, o);
             }
         } else if !app.hub.searching && !app.hub.searched.is_empty() && app.hub.error.is_none() {
-            ui.label(muted(format!("Pro „{}“ nebylo nic nalezeno.", app.hub.searched)));
+            ui.label(muted(tf!("Pro „{}“ nebylo nic nalezeno.", "Nothing found for “{}”.", app.hub.searched)));
         }
 
         // --- výběr tagu
@@ -207,14 +216,14 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&repo).size(17.0).strong());
                 if app.hub.selected_official {
-                    ui.label(RichText::new("\u{E606} oficiální").small().color(theme::GREEN));
+                    ui.label(RichText::new(t!("\u{E606} oficiální", "\u{E606} official")).small().color(theme::GREEN));
                 }
                 if app.hub.tags_loading {
                     ui.spinner();
-                    ui.label(muted("načítám tagy…"));
+                    ui.label(muted(t!("načítám tagy…", "loading tags…")));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icon(ui, "\u{E4F6}", "Zavřít výběr") {
+                    if icon(ui, "\u{E4F6}", t!("Zavřít výběr", "Close selection")) {
                         app.hub.selected = None;
                     }
                 });
@@ -223,16 +232,25 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
                 return;
             }
             if let Some(e) = &app.hub.tags_error {
-                ui.label(muted(format!("Tagy nelze načíst ({e}) – zadej tag ručně.")).small());
+                ui.label(muted(tf!("Tagy nelze načíst ({e}) – zadej tag ručně.", "Cannot load tags ({e}) – enter a tag manually.")).small());
             }
             if !app.hub.tags.is_empty() {
-                ui.add(field(&mut app.hub.tag_filter).hint_text("\u{E30C} Filtrovat tagy… (např. alpine, 16)").desired_width(260.0));
+                ui.add(
+                    field(&mut app.hub.tag_filter)
+                        .hint_text(t!("\u{E30C} Filtrovat tagy… (např. alpine, 16)", "\u{E30C} Filter tags… (e.g. alpine, 16)"))
+                        .desired_width(260.0),
+                );
                 ui.add_space(4.0);
                 let f = app.hub.tag_filter.to_lowercase();
                 let tags: Vec<HubTag> = app.hub.tags.iter().filter(|t| f.is_empty() || t.name.to_lowercase().contains(&f)).cloned().collect();
                 let mut chosen = None;
                 egui::ScrollArea::vertical().id_salt("hub-tags").max_height(220.0).show(ui, |ui| {
-                    let cols = [("TAG", W::Fr(2.0)), ("VELIKOST (amd64)", W::Px(120.0)), ("AKTUALIZOVÁNO", W::PxOpt(120.0)), ("", W::Px(90.0))];
+                    let cols = [
+                        ("TAG", W::Fr(2.0)),
+                        (t!("VELIKOST (amd64)", "SIZE (amd64)"), W::Px(120.0)),
+                        (t!("AKTUALIZOVÁNO", "UPDATED"), W::PxOpt(120.0)),
+                        ("", W::Px(90.0)),
+                    ];
                     table_in(ui, "hub-tags-t", &cols, |mut body| {
                         for t in &tags {
                             let sel = app.hub.tag == t.name;
@@ -251,7 +269,7 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
                                     ui.label(muted(&t.updated));
                                 });
                                 row.col(|ui| {
-                                    if ui.add(egui::Button::new(if sel { "Vybráno" } else { "Vybrat" }).selected(sel)).clicked() {
+                                    if ui.add(egui::Button::new(if sel { t!("Vybráno", "Selected") } else { t!("Vybrat", "Select") }).selected(sel)).clicked() {
                                         chosen = Some(t.name.clone());
                                     }
                                 });
@@ -259,7 +277,7 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
                         }
                     });
                     if tags.is_empty() {
-                        ui.label(muted("Žádný tag neodpovídá filtru."));
+                        ui.label(muted(t!("Žádný tag neodpovídá filtru.", "No tag matches the filter.")));
                     }
                 });
                 if let Some(c) = chosen {
@@ -272,7 +290,11 @@ fn hub_body(app: &mut App, ui: &mut egui::Ui) {
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let total: i64 = app.snap.images.iter().map(|i| i.size).sum();
-    header(ui, "Image", &format!("{} image · {}", app.snap.images.len(), fmt_bytes(total.max(0) as u64)));
+    header(
+        ui,
+        t!("Image", "Images"),
+        &tf!("{} image · {}", "{} images · {}", app.snap.images.len(), fmt_bytes(total.max(0) as u64)),
+    );
     if !need_engine(app, ui) {
         return;
     }
@@ -282,23 +304,31 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ui,
         240.0,
         |ui, right| if !right {
-            if accent_button(ui, "\u{E30C} Hledat na Docker Hubu…").clicked() {
+            if accent_button(ui, t!("\u{E30C} Hledat na Docker Hubu…", "\u{E30C} Search Docker Hub…")).clicked() {
                 app.hub.open = true;
             }
             gap(ui);
-            let r = ui.add(field(&mut app.pull_input).hint_text("nebo přesný název, např. ghcr.io/org/app:1.2").desired_width(280.0));
+            let r = ui.add(
+                field(&mut app.pull_input)
+                    .hint_text(t!("nebo přesný název, např. ghcr.io/org/app:1.2", "or an exact name, e.g. ghcr.io/org/app:1.2"))
+                    .desired_width(280.0),
+            );
             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (ui.button("\u{E20C} Stáhnout").clicked() || enter) && !app.pull_input.trim().is_empty() {
+            if (ui.button(t!("\u{E20C} Stáhnout", "\u{E20C} Pull")).clicked() || enter) && !app.pull_input.trim().is_empty() {
                 app.send(Cmd::Pull(app.pull_input.trim().to_string()));
                 app.pull_input.clear();
             }
         } else {
             more_menu(ui, |ui| {
-                if ui.button("\u{EC54} Odstranit visící image").on_hover_text("image bez tagu (docker image prune)").clicked() {
+                if ui
+                    .button(t!("\u{EC54} Odstranit visící image", "\u{EC54} Remove dangling images"))
+                    .on_hover_text(t!("image bez tagu (docker image prune)", "untagged images (docker image prune)"))
+                    .clicked()
+                {
                     prune_dangling = true;
                     ui.close_menu();
                 }
-                if ui.button("\u{EC54} Odstranit všechny nepoužívané…").clicked() {
+                if ui.button(t!("\u{EC54} Odstranit všechny nepoužívané…", "\u{EC54} Remove all unused…")).clicked() {
                     prune_all = true;
                     ui.close_menu();
                 }
@@ -310,7 +340,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         app.send(Cmd::PruneImages { all: false });
     }
     if prune_all {
-        app.ask("Odstranit nepoužívané image?", "Smažou se všechny image, které nepoužívá žádný kontejner.", Cmd::PruneImages { all: true });
+        app.ask(
+            t!("Odstranit nepoužívané image?", "Remove unused images?"),
+            t!("Smažou se všechny image, které nepoužívá žádný kontejner.", "All images not used by any container will be deleted."),
+            Cmd::PruneImages { all: true },
+        );
     }
     ui.add_space(8.0);
 
@@ -318,12 +352,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let images = app.snap.images.clone();
     let containers = app.snap.containers.clone();
     let cols = [
-        ("REPOZITÁŘ:TAG", W::Fr(3.0)),
+        (t!("REPOZITÁŘ:TAG", "REPOSITORY:TAG"), W::Fr(3.0)),
         ("ID", W::PxOpt(120.0)),
-        ("VELIKOST", W::Px(90.0)),
-        ("VYTVOŘEN", W::PxOpt(110.0)),
-        ("POUŽÍVÁ", W::FrOpt(1.5)),
-        ("AKCE", icons_w(3)),
+        (t!("VELIKOST", "SIZE"), W::Px(90.0)),
+        (t!("VYTVOŘEN", "CREATED"), W::PxOpt(110.0)),
+        (t!("POUŽÍVÁ", "USED BY"), W::FrOpt(1.5)),
+        (t!("AKCE", "ACTIONS"), icons_w(3)),
     ];
     table(ui, "images", &cols, |mut body| {
         for img in images.iter().filter(|i| f.is_empty() || i.tags().join(" ").to_lowercase().contains(&f)) {
@@ -354,17 +388,24 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 let tag = tags.first().cloned().unwrap_or_default();
                 if !tag.contains("<none>") {
-                    if icon(ui, "\u{E3D0}", "Spustit kontejner z tohoto image") {
+                    if icon(ui, "\u{E3D0}", t!("Spustit kontejner z tohoto image", "Run a container from this image")) {
                         app.run.image = tag.clone();
                         app.run_open = true;
                     }
-                    if icon(ui, "\u{E20C}", "Aktualizovat (pull)") {
+                    if icon(ui, "\u{E20C}", t!("Aktualizovat (pull)", "Update (pull)")) {
                         app.send(Cmd::Pull(tag.clone()));
                     }
                 }
-                if icon(ui, "\u{E4A6}", "Odstranit") {
+                if icon(ui, "\u{E4A6}", t!("Odstranit", "Remove")) {
                     let id = if tags.len() == 1 && !tag.contains("<none>") { tag.clone() } else { img.id.clone() };
-                    app.ask(format!("Odstranit {tag}?"), "Image bude odstraněn (pokud ho nepoužívá žádný kontejner).", Cmd::RemoveImage(id));
+                    app.ask(
+                        tf!("Odstranit {tag}?", "Remove {tag}?"),
+                        t!(
+                            "Image bude odstraněn (pokud ho nepoužívá žádný kontejner).",
+                            "The image will be removed (if no container uses it)."
+                        ),
+                        Cmd::RemoveImage(id),
+                    );
                 }
             });
             });

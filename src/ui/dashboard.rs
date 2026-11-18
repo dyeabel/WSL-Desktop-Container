@@ -40,24 +40,36 @@ fn stat(ui: &mut egui::Ui, s: &Stat) {
 const CARD_MIN_W: f32 = 190.0;
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
-    header(ui, "Přehled", "Stav kontejnerového enginu ve WSL a výkon kontejnerů");
+    header(
+        ui,
+        t!("Přehled", "Overview"),
+        t!("Stav kontejnerového enginu ve WSL a výkon kontejnerů", "Container engine status in WSL and container performance"),
+    );
     let ename = app.cfg.read().map(|c| c.engine.name()).unwrap_or("Engine");
 
     let distro = app.distro();
-    let dstate = app.current_distro().map(|d| d.state.clone()).unwrap_or_else(|| "neznámý".into());
+    let dstate = app.current_distro().map(|d| d.state.clone()).unwrap_or_else(|| t!("neznámý", "unknown").into());
     let ver = app.snap.info.as_ref().map(|i| format!(" · {ename} {}", i.server_version)).unwrap_or_default();
     let mut stats = vec![Stat {
         title: ename.into(),
-        big: if app.snap.connected { "Běží" } else { "Zastaven" }.into(),
+        big: if app.snap.connected { t!("Běží", "Running") } else { t!("Zastaven", "Stopped") }.into(),
         sub: format!("{distro} ({dstate}){ver}"),
         dot: Some(if app.snap.connected { theme::GREEN } else { theme::GREY }),
     }];
     if let Some(i) = &app.snap.info {
         let s = |t: &str, b: String, sub: String| Stat { title: t.into(), big: b, sub, dot: None };
-        stats.push(s("Kontejnery", i.containers_running.to_string(), format!("běží z {} celkem", i.containers)));
-        stats.push(s("Image", app.snap.images.len().to_string(), fmt_bytes(app.snap.images.iter().map(|i| i.size.max(0) as u64).sum())));
-        stats.push(s("Volume", app.snap.volumes.len().to_string(), String::new()));
-        stats.push(s("Zdroje WSL", format!("{} CPU", i.ncpu), fmt_bytes(i.mem_total.max(0) as u64) + " RAM"));
+        stats.push(s(
+            t!("Kontejnery", "Containers"),
+            i.containers_running.to_string(),
+            tf!("běží z {} celkem", "running of {} total", i.containers),
+        ));
+        stats.push(s(
+            t!("Image", "Images"),
+            app.snap.images.len().to_string(),
+            fmt_bytes(app.snap.images.iter().map(|i| i.size.max(0) as u64).sum()),
+        ));
+        stats.push(s(t!("Volume", "Volumes"), app.snap.volumes.len().to_string(), String::new()));
+        stats.push(s(t!("Zdroje WSL", "WSL resources"), format!("{} CPU", i.ncpu), fmt_bytes(i.mem_total.max(0) as u64) + " RAM"));
     }
     // počet sloupců podle šířky okna, karty v řádku mají stejnou šířku
     let per_row = ((ui.available_width() / CARD_MIN_W).floor() as usize).clamp(1, stats.len().max(1));
@@ -75,7 +87,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 
     if let Some(df) = app.df.clone() {
-        section(ui, "Využití disku");
+        section(ui, t!("Využití disku", "Disk usage"));
         let mut pick: Option<u8> = None;
         card(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -83,20 +95,25 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 ui,
                 130.0,
                 |ui, right| if !right {
-                    for (k, v) in [("Image", df.images), ("Kontejnery", df.containers), ("Volume", df.volumes), ("Build cache", df.build_cache)] {
+                    for (k, v) in [
+                        (t!("Image", "Images"), df.images),
+                        (t!("Kontejnery", "Containers"), df.containers),
+                        (t!("Volume", "Volumes"), df.volumes),
+                        ("Build cache", df.build_cache),
+                    ] {
                         ui.label(muted(k));
                         ui.label(RichText::new(fmt_bytes(v.max(0) as u64)).strong());
                         ui.add_space(14.0);
                     }
                 } else {
-                    ui.menu_button("\u{EC54} Uklidit \u{E136}", |ui| {
+                    ui.menu_button(t!("\u{EC54} Uklidit \u{E136}", "\u{EC54} Clean up \u{E136}"), |ui| {
                         ui.set_min_width(260.0);
                         for (i, label) in [
-                            "Odstranit zastavené kontejnery…",
-                            "Odstranit visící image",
-                            "Odstranit nepoužívané image…",
-                            "Odstranit nepoužívané volume…",
-                            "Odstranit nepoužívané sítě",
+                            t!("Odstranit zastavené kontejnery…", "Remove stopped containers…"),
+                            t!("Odstranit visící image", "Remove dangling images"),
+                            t!("Odstranit nepoužívané image…", "Remove unused images…"),
+                            t!("Odstranit nepoužívané volume…", "Remove unused volumes…"),
+                            t!("Odstranit nepoužívané sítě", "Remove unused networks"),
                         ]
                         .iter()
                         .enumerate()
@@ -111,22 +128,37 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             );
         });
         match pick {
-            Some(0) => app.ask("Odstranit zastavené kontejnery?", "Všechny zastavené kontejnery budou smazány.", Cmd::PruneContainers),
+            Some(0) => app.ask(
+                t!("Odstranit zastavené kontejnery?", "Remove stopped containers?"),
+                t!("Všechny zastavené kontejnery budou smazány.", "All stopped containers will be deleted."),
+                Cmd::PruneContainers,
+            ),
             Some(1) => app.send(Cmd::PruneImages { all: false }),
-            Some(2) => app.ask("Odstranit nepoužívané image?", "Smažou se všechny image, které nepoužívá žádný kontejner.", Cmd::PruneImages { all: true }),
-            Some(3) => app.ask("Odstranit nepoužívané volume?", "Data v nepoužívaných volume budou nenávratně smazána!", Cmd::PruneVolumes),
+            Some(2) => app.ask(
+                t!("Odstranit nepoužívané image?", "Remove unused images?"),
+                t!("Smažou se všechny image, které nepoužívá žádný kontejner.", "All images not used by any container will be deleted."),
+                Cmd::PruneImages { all: true },
+            ),
+            Some(3) => app.ask(
+                t!("Odstranit nepoužívané volume?", "Remove unused volumes?"),
+                t!("Data v nepoužívaných volume budou nenávratně smazána!", "Data in unused volumes will be permanently deleted!"),
+                Cmd::PruneVolumes,
+            ),
             Some(4) => app.send(Cmd::PruneNetworks),
             _ => {}
         }
     }
 
-    section(ui, "Výkon běžících kontejnerů");
+    section(ui, t!("Výkon běžících kontejnerů", "Running container performance"));
     if !app.snap.containers.iter().any(|c| c.running()) {
-        ui.label(muted("Žádný kontejner neběží."));
+        ui.label(muted(t!("Žádný kontejner neběží.", "No container is running.")));
         return;
     }
     if app.stats.is_empty() {
-        ui.label(muted("Načítám statistiky… (běžící kontejnery se měří cca 1–2 s)"));
+        ui.label(muted(t!(
+            "Načítám statistiky… (běžící kontejnery se měří cca 1–2 s)",
+            "Loading statistics… (measuring running containers takes about 1–2 s)"
+        )));
         return;
     }
     let mut rows = app.stats.clone();
@@ -136,18 +168,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     card(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Celkové CPU").strong());
+            ui.label(RichText::new(t!("Celkové CPU", "Total CPU")).strong());
             ui.label(format!("{total_cpu:.1} %"));
         });
         ui.add(egui::ProgressBar::new((total_cpu / (ncpu * 100.0)) as f32).desired_height(6.0).fill(theme::ACCENT));
     });
     ui.add_space(8.0);
     let cols = [
-        ("NÁZEV", W::Fr(2.0)),
+        (t!("NÁZEV", "NAME"), W::Fr(2.0)),
         ("CPU", W::Fr(1.2)),
-        ("PAMĚŤ", W::Fr(1.6)),
-        ("SÍŤ (rx / tx)", W::FrOpt(1.4)),
-        ("DISK (čtení / zápis)", W::FrOpt(1.4)),
+        (t!("PAMĚŤ", "MEMORY"), W::Fr(1.6)),
+        (t!("SÍŤ (rx / tx)", "NETWORK (rx / tx)"), W::FrOpt(1.4)),
+        (t!("DISK (čtení / zápis)", "DISK (read / write)"), W::FrOpt(1.4)),
     ];
     table(ui, "stats", &cols, |mut body| {
         for r in &rows {
