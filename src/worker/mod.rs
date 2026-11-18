@@ -9,6 +9,7 @@ mod engine_ops;
 mod events;
 mod fs_ops;
 mod notify;
+mod recreate_body;
 mod spec;
 mod tracking;
 

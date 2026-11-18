@@ -214,7 +214,10 @@ fn live_container_detail() {
     let r = det.to_run_spec();
     assert_eq!(r.name, name);
     assert_eq!(r.ports, "18081:80");
-    assert_eq!(r.env, "SECRET_TOKEN=x\nA=1");
+    // pořadí proměnných v inspectu Podman nezaručuje
+    let mut env: Vec<&str> = r.env.lines().collect();
+    env.sort();
+    assert_eq!(env, vec!["A=1", "SECRET_TOKEN=x"]);
     assert_eq!(r.volumes, format!("{vol}:/data"));
     assert_eq!(r.restart, "unless-stopped");
     assert_eq!(r.command, spec.command);

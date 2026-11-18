@@ -127,6 +127,44 @@ impl Worker {
         Ok(String::new())
     }
 
+    /// Vytvoří a spustí kontejner přes API z původního inspectu se změnami z formuláře
+    /// (zachová bezpečnostní nastavení, limity, labely, entrypoint…).
+    fn create_from(&self, d: &Docker, orig: &Value, spec: &RunSpec, name: &str) -> Result<String, String> {
+        use super::recreate_body::{create_body, flatten};
+        let cfg = self.cfg();
+        let image = if cfg.engine == crate::engine::Engine::Podman {
+            crate::engine::qualify_image(&spec.image)
+        } else {
+            spec.image.trim().to_string()
+        };
+        let body = flatten(create_body(orig, spec, &image)?);
+        let url = format!("/containers/create?name={}", enc(name));
+        let resp = match d.post_json(&url, body.clone()) {
+            Ok(r) => r,
+            // image (třeba nový tag) ještě není stažený
+            Err(e) if e.starts_with("HTTP 404") || e.contains("No such image") || e.contains("image not known") => {
+                d.pull(&spec.image)?;
+                d.post_json(&url, body)?
+            }
+            Err(e) => return Err(e),
+        };
+        let nid = serde_json::from_str::<Value>(&resp)
+            .ok()
+            .and_then(|v| v.get("Id").and_then(|i| i.as_str()).map(String::from))
+            .ok_or_else(|| format!("create: {resp}"))?;
+        d.container_action(&nid, "start")?;
+        // chvíli počkat – skončil hned po startu?
+        thread::sleep(Duration::from_millis(1800));
+        let info: Option<Value> = d.get(&format!("/containers/{nid}/json")).ok();
+        let running = info.as_ref().and_then(|v| v.pointer("/State/Running").and_then(|r| r.as_bool())).unwrap_or(true);
+        if running {
+            Ok(tf!("Spuštěn kontejner {name} z {}", "Started container {name} from {}", spec.image.trim()))
+        } else {
+            let code = info.as_ref().and_then(|v| v.pointer("/State/ExitCode").and_then(|c| c.as_i64())).unwrap_or(0);
+            Err(tf!("Nový kontejner {name} se hned ukončil (kód {code}).", "The new container {name} exited immediately (code {code})."))
+        }
+    }
+
     /// Znovu vytvoří kontejner s novými parametry. Starý se zastaví a přejmenuje na
     /// `<název>-wls-old`; když nový naběhne, starý se smaže, jinak se nový odstraní
     /// a starý se vrátí (přejmenuje zpět a případně znovu spustí).
@@ -184,7 +222,7 @@ impl Worker {
         if let Err(e) = rename(&d, &id, &backup) {
             return Err(restore(e));
         }
-        match self.run_container(spec) {
+        match self.create_from(&d, &v, &spec, &new_name) {
             Ok(msg) => match d.container_action(&id, "remove") {
                 Ok(_) => Ok(tf!("Kontejner {old_name} znovu vytvořen. {msg}", "Container {old_name} recreated. {msg}")),
                 Err(e) => Err(tf!(
