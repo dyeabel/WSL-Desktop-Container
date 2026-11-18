@@ -4,7 +4,7 @@ A native Windows desktop app (Rust + egui, a single EXE, no web UI) for managing
 **container engine – Docker or Podman – running inside a WSL distribution**, without
 Docker Desktop and without the Docker CLI for Windows.
 
-> The user interface is in Czech.
+> The user interface is available in Czech and English (Settings → Language).
 
 ## Features
 
@@ -18,7 +18,7 @@ Docker Desktop and without the Docker CLI for Windows.
 | **Compose** | stacks detected from container labels: up, stop, start, restart, pull, build, ps, logs, down; edit the compose file in Notepad; start a stack from any folder (Windows or Linux path) |
 | **Files** (Soubory) | file browser for the distribution: navigation, bookmarks, new folder or file, rename and move, delete, chmod, built-in text editor (Ctrl+S), upload from Windows and download to Windows, *As root* mode |
 | **WSL engine** | start, stop and restart the engine, put the distribution to sleep, terminal; distribution list (start, terminate, default, *use for the engine*); *Install & setup* section: Docker / Podman switch, install, API setup, uninstall, `docker` command in PATH, `DOCKER_HOST`; editor for `/etc/docker/daemon.json` (Docker only) |
-| **Settings** (Nastavení) | distribution, API port, refresh interval, keep-alive, engine autostart, tray behaviour, global `.wslconfig` (memory, CPU, swap, `vmIdleTimeout`, `networkingMode`) |
+| **Settings** (Nastavení) | language (Czech / English), distribution (+ *Add distribution* wizard), API port, refresh interval, keep-alive, engine autostart, restoring containers that were running last time, tray behaviour, `docker` command in PATH, global `.wslconfig` (memory, CPU, swap, `vmIdleTimeout`, `networkingMode`) |
 
 Less frequent and destructive actions (prune, pause all, …) live in the **⋯** menu next to
 the filter field, which is pinned to the right on every page.
@@ -32,6 +32,31 @@ the filter field, which is pinned to the right on every page.
 - **sleep infinity** keeps images without their own service (alpine, ubuntu, debian, …) running.
 - A few seconds after start the app checks the container state and reports immediately
   exited containers including the exit code.
+
+### Add distribution
+
+*Settings → Add distribution…* (also on the WSL engine page) installs a new WSL distribution
+in the background:
+
+1. pick a distribution from `wsl --list --online`, optionally a custom instance name;
+2. `wsl --install <distro> --name <name> --no-launch` (no interactive first start);
+3. preparation as root: systemd enabled in `/etc/wsl.conf`, a default user with passwordless
+   `sudo` (optional password), `[user] default=…`;
+4. restart of the distribution and a systemd check;
+5. optionally install Docker or Podman and switch the app to the new distribution
+   (only one distribution can expose the API – all WSL distributions share the network).
+
+Engine installation supports apt (Debian, Ubuntu, Kali), dnf (Fedora, Alma, Oracle, Rocky),
+zypper (openSUSE, SLES) and pacman (Arch). Progress is shown in an output window.
+
+### Restoring containers
+
+With *Settings → Restart the containers that were running last time* enabled, the app keeps
+track of running containers (per distribution and engine, in
+`%APPDATA%\WLS_Desktop\last_running.json`) and starts them again once the engine comes up –
+e.g. after a WSL restart or a reboot. Stopping the engine, putting the distribution to sleep or
+shutting WSL down from the app does not overwrite the list. A restart policy such as
+`unless-stopped` on the container is the engine-native alternative.
 
 ### Tray
 
@@ -153,6 +178,9 @@ sample confirmation dialog, `WLS_DEBUG_HUB=<image>` opens the Docker Hub dialog,
 - Tables: `ui::table()` / `ui::table_in()` with columns `W::Px` (fixed width), `W::Fr` (share
   of the remaining width) and `W::PxOpt` / `W::FrOpt` (less important columns hidden in narrow
   windows). An icon column uses `icons_w(n)`.
+- Texts are bilingual via `t!("česky", "English")` and `tf!("… {x}", "… {x}")` (`src/i18n.rs`);
+  the language is switched at runtime.
+- All controls share the height `theme::CONTROL_H`.
 - Toolbars: `ui::toolbar()`, or `ui::toolbar_lr()` with the right part pinned (filter
   `ui::filter_field()`, menu `ui::more_menu()`); inputs `ui::field()` / `ui::area()`; dialogs
   `ui::modal()` + `ui::dialog_buttons()`.
@@ -173,6 +201,7 @@ src/
   shim_install.rs  installing the shim into PATH, DOCKER_HOST
   shim/            docker.exe shim (docker.rs, envfwd.rs)
   tray.rs          tray icon, menu, hiding the window
+  i18n.rs          Czech / English texts (t!, tf!)
   theme.rs         colors, style
   icon_art.rs      icon drawing (shared with build.rs for the .ico in the EXE)
   ui/              individual pages
