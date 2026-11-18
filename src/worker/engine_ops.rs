@@ -39,6 +39,64 @@ impl Worker {
         }
     }
 
+    /// Uvolní paměť WSL: zahodí cache Linuxu a zhutní paměť, aby ji VM mohl vrátit Windows
+    /// (VmmemWSL). `quiet` = automatické uvolnění bez oznámení.
+    pub(super) fn free_memory(&self, quiet: bool) -> Result<String, String> {
+        let distro = self.cfg().distro;
+        let before = vmmem_mb();
+        let out = wsl::run(&distro, Some("root"), None, &["sh", "-c", FREE_MEMORY_SCRIPT])?;
+        let cached = |tag: &str| -> u64 {
+            out.lines().find_map(|l| l.strip_prefix(tag)).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0) / 1024
+        };
+        let (c0, c1) = (cached("before:"), cached("after:"));
+        if quiet {
+            return Ok(String::new());
+        }
+        // VM vrací stránky Windows postupně – chvíli počkat
+        thread::sleep(Duration::from_secs(4));
+        let after = vmmem_mb();
+        Ok(match (before, after) {
+            (Some(b), Some(a)) => tf!(
+                "Paměť WSL uvolněna: VmmemWSL {b} MB → {a} MB (cache Linuxu {c0} MB → {c1} MB)",
+                "WSL memory freed: VmmemWSL {b} MB → {a} MB (Linux cache {c0} MB → {c1} MB)"
+            ),
+            _ => tf!("Cache Linuxu uvolněna: {c0} MB → {c1} MB", "Linux cache freed: {c0} MB → {c1} MB"),
+        })
+    }
+
+    /// Automatické uvolnění (nastavení): nejvýš jednou za 10 minut, jen když je cache nad 1 GB.
+    pub(super) fn auto_free_memory(&self) {
+        if !self.cfg().auto_free_memory {
+            return;
+        }
+        let due = self
+            .shared
+            .last_free_memory
+            .lock()
+            .map(|mut g| {
+                let due = g.is_none_or(|t| t.elapsed() >= Duration::from_secs(600));
+                if due {
+                    *g = Some(Instant::now());
+                }
+                due
+            })
+            .unwrap_or(false);
+        if !due {
+            return;
+        }
+        let w = self.clone();
+        thread::spawn(move || {
+            let distro = w.cfg().distro;
+            let cached = wsl::run(&distro, None, None, &["sh", "-c", "awk '/^Cached:/{print $2}' /proc/meminfo"])
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            if cached > 1024 * 1024 {
+                let _ = w.free_memory(true);
+            }
+        });
+    }
+
     /// Zkopíruje klientský certifikát, klíč a CA z distribuce do %APPDATA%\WLS_Desktop\tls.
     fn fetch_client_certs(&self, distro: &str) -> Result<(), String> {
         let dir = crate::docker::tls_dir().ok_or("APPDATA")?;
@@ -398,6 +456,22 @@ impl Worker {
         }
     }
 
+}
+
+/// Zahodí cache Linuxu a zhutní paměť; vypíše Cached (kB) před a po.
+const FREE_MEMORY_SCRIPT: &str = r#"echo "before: $(awk '/^Cached:/{print $2}' /proc/meminfo)"
+sync
+echo 3 > /proc/sys/vm/drop_caches
+echo 1 > /proc/sys/vm/compact_memory 2>/dev/null || true
+echo "after: $(awk '/^Cached:/{print $2}' /proc/meminfo)""#;
+
+/// Paměť procesu VmmemWSL (resp. vmmem) ve Windows v MB.
+fn vmmem_mb() -> Option<u64> {
+    let out = wsl::hidden("powershell.exe")
+        .args(["-NoProfile", "-Command", "(Get-Process vmmemWSL,vmmem -ErrorAction SilentlyContinue | Measure-Object WorkingSet64 -Sum).Sum"])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse::<u64>().ok().filter(|b| *b > 0).map(|b| b / 1024 / 1024)
 }
 
 /// Port API pro režim: výchozí 2375 bez ověření, 2376 s TLS; vlastní port zůstává.

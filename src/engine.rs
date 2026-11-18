@@ -208,6 +208,9 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 EOF
+# `podman compose` bez hlášky „Executing external compose provider…“ u každého příkazu
+mkdir -p /etc/containers/containers.conf.d
+printf '# WLS Desktop\n[engine]\ncompose_warning_logs = false\n' > /etc/containers/containers.conf.d/50-wls-desktop.conf
 # kontejnery s restart policy po startu (podman nemá stále běžícího démona)
 systemctl enable podman-restart.service >/dev/null 2>&1 || true
 systemctl daemon-reload

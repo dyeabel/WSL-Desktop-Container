@@ -134,6 +134,8 @@ pub enum Cmd {
     Sleep,
     /// zapnout / vypnout zabezpečení API (TLS s klientským certifikátem)
     SetTls(bool),
+    /// uvolnit paměť WSL (cache Linuxu) – VmmemWSL ji pak vrátí Windows
+    FreeMemory,
     /// přegenerovat TLS certifikáty
     RegenCerts,
     SetKeepAlive(bool),
@@ -260,6 +262,8 @@ pub struct Shared {
     pub events_live: AtomicBool,
     refresh_pending: AtomicBool,
     notifier: Mutex<notify::Notifier>,
+    /// poslední automatické uvolnění paměti
+    last_free_memory: Mutex<Option<Instant>>,
     /// předchozí vzorek CPU (čas, kumulované ns) pro výpočet vytížení z rozdílu
     cpu_prev: Mutex<std::collections::HashMap<String, (Instant, u64)>>,
 }
@@ -366,6 +370,7 @@ impl Worker {
                 thread::spawn(move || w.check_engine());
             }
         }
+        self.auto_free_memory();
         if connected
             && self.shared.want_stats.load(Ordering::Relaxed)
             && !self.shared.stats_running.swap(true, Ordering::SeqCst)
@@ -565,6 +570,7 @@ impl Worker {
             }
             Cmd::Sleep => self.sleep_distro(),
             Cmd::SetTls(on) => self.set_tls(on),
+            Cmd::FreeMemory => self.free_memory(false),
             Cmd::RegenCerts => self.regen_certs(),
             Cmd::SetKeepAlive(on) => self.set_keep_alive(on),
             Cmd::PauseAll => self.set_paused_all(true),

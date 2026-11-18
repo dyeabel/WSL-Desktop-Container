@@ -159,6 +159,15 @@ e.g. after a WSL restart or a reboot. Stopping the engine, putting the distribut
 shutting WSL down from the app does not overwrite the list. A restart policy such as
 `unless-stopped` on the container is the engine-native alternative.
 
+### WSL memory
+
+VmmemWSL keeps memory that Linux used as file cache (pulled images, builds) even when it is no
+longer needed. *Overview → Clean up → Free WSL memory* (also in the tray menu) drops the Linux
+page cache and compacts memory, so the VM returns it to Windows, and reports VmmemWSL before and
+after. *Settings → Free WSL memory automatically* (on by default) does the same at most every
+10 minutes when the cache exceeds 1 GB. The `.wslconfig` editor also offers `autoMemoryReclaim`
+(`dropCache` / `gradual` / `disabled`), which WSL itself applies when the VM is idle.
+
 ### Tray
 
 A tray icon with a status dot (green = engine running) and a tooltip. Left click shows or

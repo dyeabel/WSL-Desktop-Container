@@ -1057,3 +1057,18 @@ fn live_stack_logs() {
     let all_now: Vec<crate::docker::Container> = d.get("/containers/json?all=1").unwrap();
     assert!(!all_now.iter().any(|c| c.name().starts_with("wls-test-logs-")), "úklid");
 }
+
+/// Uvolnění paměti WSL: zahodí cache Linuxu a nahlásí VmmemWSL před a po.
+#[test]
+#[ignore]
+fn live_free_memory() {
+    let data = std::env::temp_dir().join(format!("wls-test-mem-{}", std::process::id()));
+    std::fs::create_dir_all(&data).unwrap();
+    // SAFETY (env): test běží samostatně
+    unsafe { std::env::set_var("WLS_DATA_DIR", &data) };
+    let cfg = crate::config::Config { distro: distro(), ..Default::default() };
+    let r = crate::worker::testkit::free_memory(cfg);
+    let _ = std::fs::remove_dir_all(&data);
+    eprintln!("{r:?}");
+    assert!(r.as_ref().is_ok_and(|s| s.contains("VmmemWSL") || s.contains("cache")), "{r:?}");
+}

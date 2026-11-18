@@ -38,3 +38,8 @@ pub fn regen_certs(cfg: Config) -> Result<String, String> {
     w.kill_keepalive();
     r
 }
+
+/// Uvolnění paměti WSL (jako „Uvolnit paměť WSL“).
+pub fn free_memory(cfg: Config) -> Result<String, String> {
+    worker(cfg).free_memory(false)
+}

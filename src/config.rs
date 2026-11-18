@@ -31,6 +31,8 @@ pub struct Config {
     pub theme: String,
     /// Oznámení ve Windows při pádu kontejneru, selhání healthchecku, opakovaných restartech
     pub notifications: bool,
+    /// Každých 10 min uvolnit cache Linuxu ve WSL (když je nad 1 GB), aby VmmemWSL vracel paměť Windows
+    pub auto_free_memory: bool,
     /// API enginu jen přes TLS s klientským certifikátem (port 2376, certifikáty v %APPDATA%\WLS_Desktop\tls)
     pub tls: bool,
     /// Upozornění „API bez ověření“ na stránce WSL engine bylo zavřeno
@@ -55,6 +57,7 @@ impl Default for Config {
             language: "cs".into(),
             theme: "dark".into(),
             notifications: true,
+            auto_free_memory: true,
             tls: false,
             security_hint_dismissed: false,
             npipe: false,

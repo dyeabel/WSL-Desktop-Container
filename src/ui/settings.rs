@@ -314,7 +314,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
         }
         let mut c = app.cfg.read().map(|c| c.clone()).unwrap_or_default();
-        let before = (c.close_to_tray, c.minimize_to_tray, c.start_hidden, c.notifications);
+        let before = (c.close_to_tray, c.minimize_to_tray, c.start_hidden, c.notifications, c.auto_free_memory);
+        ui.checkbox(
+            &mut c.auto_free_memory,
+            t!(
+                "Automaticky uvolňovat paměť WSL (cache Linuxu nad 1 GB, nejvýš jednou za 10 minut)",
+                "Free WSL memory automatically (Linux cache above 1 GB, at most every 10 minutes)"
+            ),
+        )
+        .on_hover_text(t!(
+            "VmmemWSL drží paměť, kterou Linux použil jako cache souborů (image, buildy), i když ji nepotřebuje. Uvolnění ji vrátí Windows; další čtení souborů může být chvíli pomalejší.",
+            "VmmemWSL keeps memory Linux used as file cache (images, builds) even when it is not needed. Freeing returns it to Windows; the next file reads may be slightly slower."
+        ));
         ui.checkbox(
             &mut c.notifications,
             t!(
@@ -329,13 +340,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ui.checkbox(&mut c.close_to_tray, t!("Zavření okna (křížek) aplikaci jen schová do oznamovací oblasti", "Closing the window (×) only hides the app to the tray"));
         ui.checkbox(&mut c.minimize_to_tray, t!("Minimalizace schová okno do oznamovací oblasti", "Minimizing hides the window to the tray"));
         ui.checkbox(&mut c.start_hidden, t!("Spouštět rovnou schované v oznamovací oblasti", "Start hidden in the tray"));
-        if (c.close_to_tray, c.minimize_to_tray, c.start_hidden, c.notifications) != before {
+        if (c.close_to_tray, c.minimize_to_tray, c.start_hidden, c.notifications, c.auto_free_memory) != before {
             let _ = c.save();
             crate::tray::sync_checks(c.close_to_tray, c.minimize_to_tray);
             app.cfg_draft.close_to_tray = c.close_to_tray;
             app.cfg_draft.minimize_to_tray = c.minimize_to_tray;
             app.cfg_draft.start_hidden = c.start_hidden;
             app.cfg_draft.notifications = c.notifications;
+            app.cfg_draft.auto_free_memory = c.auto_free_memory;
             if let Ok(mut g) = app.cfg.write() {
                 *g = c;
             }
@@ -436,6 +448,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     ui.selectable_value(&mut w.networking, "nat".to_string(), "nat");
                 });
             ui.label(muted(t!("mirrored = sdílí síť s Windows", "mirrored = shares the network with Windows")).small());
+            ui.end_row();
+            ui.label(t!("Vracení paměti", "Memory reclaim"));
+            let reclaim_name = |m: &str| match m {
+                "dropCache" => t!("dropCache – hned po nečinnosti", "dropCache – right after idle"),
+                "gradual" => t!("gradual – postupně", "gradual – gradually"),
+                "disabled" => t!("vypnuto", "disabled"),
+                _ => t!("výchozí (dropCache)", "default (dropCache)"),
+            };
+            egui::ComboBox::from_id_salt("memreclaim").selected_text(reclaim_name(&w.memory_reclaim)).show_ui(ui, |ui| {
+                for m in ["", "dropCache", "gradual", "disabled"] {
+                    ui.selectable_value(&mut w.memory_reclaim, m.to_string(), reclaim_name(m));
+                }
+            });
+            ui.label(muted(t!("autoMemoryReclaim – jak WSL vrací Windows paměť z cache", "autoMemoryReclaim – how WSL returns cached memory to Windows")).small());
             ui.end_row();
         });
         ui.add_space(6.0);

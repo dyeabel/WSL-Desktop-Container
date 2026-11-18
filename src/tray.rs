@@ -40,6 +40,7 @@ struct Handles {
     stop: MenuItem,
     restart: MenuItem,
     sleep: MenuItem,
+    free_mem: MenuItem,
     pause: MenuItem,
     unpause: MenuItem,
     close_tray: CheckMenuItem,
@@ -168,6 +169,7 @@ pub fn init(
     let stop = MenuItem::with_id("stop", t!("Zastavit Docker", "Stop Docker"), true, None);
     let restart = MenuItem::with_id("restart", t!("Restartovat Docker", "Restart Docker"), true, None);
     let sleep = MenuItem::with_id("sleep", t!("Uspat distribuci (uvolnit RAM)", "Put distribution to sleep (free RAM)"), true, None);
+    let free_mem = MenuItem::with_id("free_mem", t!("Uvolnit paměť WSL (cache)", "Free WSL memory (cache)"), true, None);
     let pause = MenuItem::with_id("pause", t!("Pozastavit všechny kontejnery", "Pause all containers"), true, None);
     let unpause = MenuItem::with_id("unpause", t!("Obnovit pozastavené kontejnery", "Resume paused containers"), true, None);
     let term = MenuItem::with_id("term", t!("Terminál distribuce", "Distribution terminal"), true, None);
@@ -187,6 +189,7 @@ pub fn init(
         &stop,
         &restart,
         &sleep,
+        &free_mem,
         &PredefinedMenuItem::separator(),
         &pause,
         &unpause,
@@ -221,6 +224,7 @@ pub fn init(
             stop,
             restart,
             sleep,
+            free_mem,
             pause,
             unpause,
             close_tray,
@@ -282,6 +286,7 @@ pub fn init(
             "stop" => send(Cmd::EngineStop),
             "restart" => send(Cmd::EngineRestart),
             "sleep" => send(Cmd::Sleep),
+            "free_mem" => send(Cmd::FreeMemory),
             "pause" => send(Cmd::PauseAll),
             "unpause" => send(Cmd::UnpauseAll),
             "term" => send(Cmd::Terminal(Term::Distro(distro))),
@@ -388,6 +393,7 @@ pub fn refresh() {
         h.stop.set_enabled(st.connected);
         h.restart.set_enabled(st.connected);
         h.sleep.set_enabled(st.distro_running);
+        h.free_mem.set_enabled(st.distro_running);
         h.pause.set_enabled(st.connected && st.running > 0);
         h.unpause.set_enabled(st.connected);
         h.last = Some(st);
@@ -415,6 +421,7 @@ pub fn retranslate() {
             h.open.set_text(t!("Otevřít WLS Desktop", "Open WLS Desktop"));
             h.start.set_text(t!("Spustit / probudit engine", "Start / wake engine"));
             h.sleep.set_text(t!("Uspat distribuci (uvolnit RAM)", "Put distribution to sleep (free RAM)"));
+            h.free_mem.set_text(t!("Uvolnit paměť WSL (cache)", "Free WSL memory (cache)"));
             h.pause.set_text(t!("Pozastavit všechny kontejnery", "Pause all containers"));
             h.unpause.set_text(t!("Obnovit pozastavené kontejnery", "Resume paused containers"));
             h.term.set_text(t!("Terminál distribuce", "Distribution terminal"));

@@ -90,6 +90,8 @@ pub struct Draft {
     pub swap: String,
     pub idle_timeout: String,
     pub networking: String,
+    /// [experimental] autoMemoryReclaim: dropCache / gradual / disabled (prázdné = výchozí)
+    pub memory_reclaim: String,
 }
 
 pub const KEYS: [&str; 5] = ["memory", "processors", "swap", "vmIdleTimeout", "networkingMode"];
@@ -104,6 +106,7 @@ impl Draft {
             swap: g("swap"),
             idle_timeout: g("vmIdleTimeout"),
             networking: g("networkingMode"),
+            memory_reclaim: get(&t, "experimental", "autoMemoryReclaim").unwrap_or_default(),
         }
     }
 
@@ -115,6 +118,8 @@ impl Draft {
             let v = v.trim();
             t = set(&t, "wsl2", k, if v.is_empty() { None } else { Some(v) });
         }
+        let r = self.memory_reclaim.trim();
+        t = set(&t, "experimental", "autoMemoryReclaim", if r.is_empty() { None } else { Some(r) });
         std::fs::write(p, t).map_err(|e| e.to_string())
     }
 }

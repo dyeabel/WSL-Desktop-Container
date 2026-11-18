@@ -114,6 +114,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             t!("Odstranit nepoužívané image…", "Remove unused images…"),
                             t!("Odstranit nepoužívané volume…", "Remove unused volumes…"),
                             t!("Odstranit nepoužívané sítě", "Remove unused networks"),
+                            t!("Uvolnit paměť WSL (cache)", "Free WSL memory (cache)"),
                         ]
                         .iter()
                         .enumerate()
@@ -134,6 +135,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 Cmd::PruneContainers,
             ),
             Some(1) => app.send(Cmd::PruneImages { all: false }),
+            Some(5) => app.send(Cmd::FreeMemory),
             Some(2) => app.ask(
                 t!("Odstranit nepoužívané image?", "Remove unused images?"),
                 t!("Smažou se všechny image, které nepoužívá žádný kontejner.", "All images not used by any container will be deleted."),
