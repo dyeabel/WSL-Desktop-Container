@@ -708,7 +708,7 @@ fn networks(ui: &mut egui::Ui, d: &Detail, primary: &str, edit: &mut NetEdit) {
                 }
             }
             if is_primary {
-                badge(ui, t!("hlavní", "primary"), theme::ACCENT);
+                badge(ui, t!("hlavní", "primary"), theme::accent());
             }
             let aliases: Vec<&str> = n.aliases.iter().map(String::as_str).filter(|a| !(a.len() >= 12 && d.id.starts_with(a))).collect();
             if !aliases.is_empty() {
