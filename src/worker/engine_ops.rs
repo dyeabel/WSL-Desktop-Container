@@ -64,32 +64,10 @@ impl Worker {
         let mut cfg = self.cfg();
         let old = cfg.clone();
         cfg.tls = on;
-        cfg.port = match (on, cfg.port) {
-            (true, 2375) => 2376,
-            (false, 2376) => 2375,
-            (_, p) => p,
-        };
+        cfg.port = api_port(on, cfg.port);
         self.suppress_tracking();
         let r = self.setup_api(&cfg);
-        match &r {
-            Ok(_) => {
-                if let Ok(mut g) = self.cfg.write() {
-                    g.tls = cfg.tls;
-                    g.port = cfg.port;
-                    let _ = g.save();
-                }
-                self.shared.was_connected.store(false, Ordering::SeqCst);
-                self.send(Msg::ConfigChanged);
-                // DOCKER_HOST nastavený aplikací převést na nový režim
-                if crate::shim_install::status().docker_host.is_some() {
-                    let _ = crate::shim_install::set_docker_host(Some((cfg.port, cfg.tls)));
-                }
-            }
-            Err(_) => {
-                // vrátit původní režim (a jeho TLS klienta)
-                let _ = crate::docker::configure_tls(old.tls);
-            }
-        }
+        self.commit_api_mode(&cfg, old.tls, r.is_ok());
         let (title, out) = match &r {
             Ok((o, _)) => (t!("Zabezpečení API", "API security"), o.clone()),
             Err(e) => (t!("Zabezpečení API", "API security"), e.clone()),
@@ -107,6 +85,27 @@ impl Worker {
             }
         })
         .map_err(|_| t!("Nastavení API selhalo – viz výstup", "API setup failed – see output").into())
+    }
+
+    /// Po nastavení API v novém režimu (TLS / bez ověření): při úspěchu uloží režim a port do
+    /// konfigurace a převede DOCKER_HOST nastavený aplikací (tcp://…); při chybě vrátí TLS klienta
+    /// původního režimu.
+    fn commit_api_mode(&self, cfg: &Config, old_tls: bool, ok: bool) {
+        if !ok {
+            let _ = crate::docker::configure_tls(old_tls);
+            return;
+        }
+        if let Ok(mut g) = self.cfg.write() {
+            g.tls = cfg.tls;
+            g.port = cfg.port;
+            let _ = g.save();
+        }
+        self.shared.was_connected.store(false, Ordering::SeqCst);
+        self.send(Msg::ConfigChanged);
+        // DOCKER_HOST=npipe://… se nemění – roura vždy míří na aktuální API
+        if docker_host_is_tcp() {
+            let _ = crate::shim_install::set_docker_host(Some((cfg.port, cfg.tls)));
+        }
     }
 
     /// Spustí skript, který zpřístupní API enginu na TCP, a počká na odezvu.
@@ -128,7 +127,7 @@ impl Worker {
             Err(e) => e.clone(),
         };
         self.send(Msg::Output(t!("Zabezpečení API", "API security").into(), out));
-        if r.is_ok() && crate::shim_install::status().docker_host.is_some() {
+        if r.is_ok() && docker_host_is_tcp() {
             // nástroje s DOCKER_CERT_PATH potřebují nový klíč
             let _ = crate::shim_install::set_docker_host(Some((cfg.port, true)));
         }
@@ -175,9 +174,11 @@ impl Worker {
         }
     }
 
-    /// Nainstaluje engine, zapne systemd (s restartem distribuce), nastaví API.
-    pub(super) fn install_engine(&self, engine: Engine, log: &mut String) -> Result<String, String> {
+    /// Nainstaluje engine, zapne systemd (s restartem distribuce), nastaví API
+    /// (`tls` = zabezpečit API pomocí TLS s klientským certifikátem, jinak bez ověření).
+    pub(super) fn install_engine(&self, engine: Engine, tls: bool, log: &mut String) -> Result<String, String> {
         let mut cfg = self.cfg();
+        let old_tls = cfg.tls;
         let distro = cfg.distro.clone();
         let step = |log: &mut String, s: &str| {
             log.push_str(&format!("\n=== {s} ===\n"));
@@ -237,8 +238,15 @@ impl Worker {
             let _ = g.save();
         }
         self.shared.tcp_checked.store(false, Ordering::SeqCst);
-        step(log, t!("Nastavení TCP API", "Setting up the TCP API"));
-        match self.setup_api(&cfg) {
+        cfg.tls = tls;
+        cfg.port = api_port(tls, cfg.port);
+        step(
+            log,
+            if tls { t!("Nastavení API (TLS s klientským certifikátem)", "Setting up the API (TLS with a client certificate)") } else { t!("Nastavení TCP API", "Setting up the TCP API") },
+        );
+        let r = self.setup_api(&cfg);
+        self.commit_api_mode(&cfg, old_tls, r.is_ok());
+        match r {
             Ok((o, _)) => {
                 log.push_str(&o);
                 log.push_str(t!("\nAPI odpovídá – hotovo.\n", "\nThe API is responding – done.\n"));
@@ -390,4 +398,31 @@ impl Worker {
         }
     }
 
+}
+
+/// Port API pro režim: výchozí 2375 bez ověření, 2376 s TLS; vlastní port zůstává.
+pub fn api_port(tls: bool, port: u16) -> u16 {
+    match (tls, port) {
+        (true, 2375) => 2376,
+        (false, 2376) => 2375,
+        (_, p) => p,
+    }
+}
+
+/// Uživatelská proměnná DOCKER_HOST míří na TCP API (nastavila ji aplikace) – při změně
+/// režimu nebo certifikátů se má převést. npipe://… se nemění.
+fn docker_host_is_tcp() -> bool {
+    crate::shim_install::status().docker_host.is_some_and(|h| h.starts_with("tcp://"))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn api_port_follows_mode() {
+        assert_eq!(super::api_port(true, 2375), 2376);
+        assert_eq!(super::api_port(false, 2376), 2375);
+        assert_eq!(super::api_port(true, 2376), 2376);
+        assert_eq!(super::api_port(false, 2375), 2375);
+        assert_eq!(super::api_port(true, 3000), 3000);
+    }
 }

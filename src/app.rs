@@ -118,6 +118,8 @@ pub struct App {
     pub online: Option<Result<Vec<(String, String)>, String>>,
     /// otevřený dialog odinstalace: (engine, smazat data)
     pub uninstall: Option<(crate::engine::Engine, bool)>,
+    /// otevřený dialog instalace: (engine, zabezpečit API pomocí TLS)
+    pub install: Option<(crate::engine::Engine, bool)>,
     /// dialogy správy distribucí (odebrat, export, import, disk)
     pub distro_dlg: ui::distros::DistroDialogs,
     /// stav instalace docker shimu (zjišťuje se na pozadí)
@@ -148,7 +150,13 @@ impl App {
             }
         }
         let cfg_draft = cfg.clone();
+        let npipe = cfg.npipe;
         let cfg = Arc::new(RwLock::new(cfg));
+        if npipe {
+            // pojmenovaná roura pro nástroje – běží, dokud běží aplikace
+            let ctx = cc.egui_ctx.clone();
+            crate::npipe::apply(true, cfg.clone(), move || ctx.request_repaint());
+        }
         let (tx, rx, shared) = worker::spawn(cc.egui_ctx.clone(), cfg.clone());
         let wsl_draft = wslconfig::Draft::load();
 
@@ -224,6 +232,7 @@ impl App {
             build: ui::build::BuildState::default(),
             vol: ui::volumes::VolState::new(),
             uninstall: None,
+            install: None,
             distro_dlg: ui::distros::DistroDialogs::from_env(),
             add_distro: None,
             online: None,
@@ -698,6 +707,7 @@ impl App {
         ui::images::hub_dialog(self, ctx);
         ui::build::dialogs(self, ctx);
         ui::engine::uninstall_dialog(self, ctx);
+        ui::engine::install_dialog(self, ctx);
         ui::settings::add_distro_dialog(self, ctx);
         ui::distros::dialogs(self, ctx);
         ui::containers::run_dialog(self, ctx);

@@ -75,7 +75,7 @@ impl Worker {
             self.shared.tcp_checked.store(false, Ordering::SeqCst);
             self.send(Msg::ConfigChanged);
             if let Some(e) = spec.engine {
-                return self.install_engine(e, log).map(|_| {
+                return self.install_engine(e, spec.tls, log).map(|_| {
                     tf!(
                         "Distribuce {name} je připravená s {} a aplikace ji používá",
                         "Distribution {name} is ready with {} and the app is using it",

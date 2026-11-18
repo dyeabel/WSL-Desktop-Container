@@ -14,6 +14,7 @@ mod error;
 mod fs;
 mod icon_art;
 mod notify;
+mod npipe;
 mod inspect;
 #[allow(dead_code)] // používá docker shim, tady jen kvůli testům
 mod pathmap;

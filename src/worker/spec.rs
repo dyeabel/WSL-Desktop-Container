@@ -132,6 +132,8 @@ pub struct AddDistroSpec {
     pub engine: Option<Engine>,
     /// přepnout aplikaci na novou distribuci (a nastavit API enginu)
     pub use_for_app: bool,
+    /// API enginu zabezpečit pomocí TLS (jen s use_for_app a enginem)
+    pub tls: bool,
 }
 
 /// Parametry sestavení image z Dockerfile (`docker build`).

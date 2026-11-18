@@ -12,7 +12,8 @@ fn default_user() -> String {
 /// Otevře dialog „Přidat distribuci“ (a načte seznam dostupných distribucí).
 pub fn open_add_distro(app: &mut App) {
     let engine = app.cfg.read().map(|c| c.engine).ok();
-    app.add_distro = Some(AddDistroSpec { user: default_user(), engine, use_for_app: true, ..Default::default() });
+    // TLS je pro nové instalace výchozí
+    app.add_distro = Some(AddDistroSpec { user: default_user(), engine, use_for_app: true, tls: true, ..Default::default() });
     if !matches!(app.online, Some(Ok(_))) {
         app.online = None;
         app.send(Cmd::ListOnline);
@@ -81,6 +82,15 @@ pub fn add_distro_dialog(app: &mut App, ctx: &egui::Context) {
             ui.label("");
             ui.checkbox(&mut spec.use_for_app, t!("Použít pro aplikaci (přepnout a nastavit API enginu)", "Use for the app (switch and set up the engine API)"));
             ui.end_row();
+            ui.label("");
+            ui.add_enabled_ui(spec.use_for_app && spec.engine.is_some(), |ui| {
+                ui.checkbox(&mut spec.tls, t!("Zabezpečit API pomocí TLS (doporučeno)", "Secure the API with TLS (recommended)"))
+                    .on_hover_text(t!(
+                        "Engine jen na unix socketu, na 127.0.0.1:2376 TLS proxy, která pustí jen klienta s certifikátem aplikace.",
+                        "Engine only on a unix socket; a TLS proxy on 127.0.0.1:2376 accepts only the app's client certificate."
+                    ));
+            });
+            ui.end_row();
         });
         ui.add_space(8.0);
         let name = if spec.name.trim().is_empty() { spec.distro.clone() } else { spec.name.trim().to_string() };
@@ -116,6 +126,50 @@ pub fn add_distro_dialog(app: &mut App, ctx: &egui::Context) {
     } else if !(cancel || esc) {
         app.add_distro = Some(spec);
     }
+}
+
+/// Pojmenovaná roura pro nástroje (relay v aplikaci, DOCKER_HOST=npipe://…).
+fn npipe_section(app: &mut App, ui: &mut egui::Ui) {
+    let url = crate::npipe::docker_host_url(crate::npipe::PIPE_NAME);
+    section(ui, t!("Pojmenovaná roura pro nástroje", "Named pipe for tools"));
+    card(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let mut on = app.cfg.read().map(|c| c.npipe).unwrap_or(false);
+        if ui.checkbox(&mut on, tf!("Pojmenovaná roura pro nástroje ({url})", "Named pipe for tools ({url})")).changed() {
+            let res = match app.cfg.write() {
+                Ok(mut g) => {
+                    g.npipe = on;
+                    g.save()
+                }
+                Err(e) => Err(e.to_string()),
+            };
+            if let Err(e) = res {
+                app.toast(false, tf!("Nastavení nelze uložit: {e}", "Cannot save settings: {e}"));
+            }
+            app.cfg_draft.npipe = on;
+            let ctx = ui.ctx().clone();
+            crate::npipe::apply(on, app.cfg.clone(), move || ctx.request_repaint());
+        }
+        match crate::npipe::state() {
+            crate::npipe::State::Running => {
+                ui.label(RichText::new(t!("\u{E184} Běží – jen dokud běží WLS Desktop", "\u{E184} Running – only while WLS Desktop runs")).color(theme::GREEN).small());
+            }
+            crate::npipe::State::Failed(e) if on => {
+                ui.label(RichText::new(tf!("\u{E4E0} Rouru nelze spustit: {e}", "\u{E4E0} Cannot start the pipe: {e}")).color(theme::RED).small());
+            }
+            _ => {}
+        }
+        ui.label(
+            muted(tf!(
+                "Aplikace přijímá spojení na {} (jen aktuální uživatel Windows, bez vzdáleného přístupu) a předává je API enginu – v režimu TLS s certifikátem aplikace, takže nástroje nepotřebují klíč na disku. \
+                 Funguje jen, dokud aplikace běží (stačí schovaná v oznamovací oblasti). DOCKER_HOST na rouru nastavíš na stránce WSL engine.",
+                "The app accepts connections on {} (current Windows user only, no remote access) and relays them to the engine API – in TLS mode with the app's certificate, so tools need no key on disk. \
+                 It works only while the app is running (hidden in the tray is enough). Set DOCKER_HOST to the pipe on the WSL engine page.",
+                crate::npipe::PIPE_NAME
+            ))
+            .small(),
+        );
+    });
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
@@ -325,6 +379,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
         }
     });
+
+    npipe_section(app, ui);
 
     section(ui, t!("WSL – globální nastavení (%USERPROFILE%\\.wslconfig)", "WSL – global settings (%USERPROFILE%\\.wslconfig)"));
     card(ui, |ui| {

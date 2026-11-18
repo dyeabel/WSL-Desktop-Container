@@ -29,10 +29,14 @@ pub fn tls_config(dir: &std::path::Path) -> Result<rustls::ClientConfig, String>
         }
         Err(_) => PrivateKeyDer::from_pem_file(f("key.pem")).map_err(|e| format!("key.pem: {e}"))?,
     };
-    rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
+    let mut cfg = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
         .with_safe_default_protocol_versions()
         .map_err(|e| e.to_string())?
         .with_root_certificates(roots)
         .with_client_auth_cert(certs, key)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Bez obnovy relací: socat (OpenSSL s verify=1 bez session id context) na pokus o obnovu
+    // odpoví alertem internal_error – každé další nové spojení se stejnou konfigurací by selhalo.
+    cfg.resumption = rustls::client::Resumption::disabled();
+    Ok(cfg)
 }

@@ -461,6 +461,11 @@ fn tls() -> Option<std::sync::Arc<rustls::ClientConfig>> {
     TLS.read().ok().and_then(|g| g.clone())
 }
 
+/// Aktuální TLS klient aplikace (None = obyčejné HTTP) – používá ho i relay pojmenované roury.
+pub fn current_tls() -> Option<std::sync::Arc<rustls::ClientConfig>> {
+    tls()
+}
+
 fn agent_builder(tls: &Option<std::sync::Arc<rustls::ClientConfig>>) -> ureq::AgentBuilder {
     let b = ureq::AgentBuilder::new();
     match tls {
