@@ -102,6 +102,8 @@ pub struct App {
     pub wsl_saved: wslconfig::Draft,
     pub files: ui::files::FilesState,
     pub hub: ui::images::HubState,
+    /// sestavení image z Dockerfile (dialog, průběh)
+    pub build: ui::build::BuildState,
     /// otevřený dialog „Přidat distribuci“
     pub add_distro: Option<crate::worker::AddDistroSpec>,
     /// distribuce k instalaci (wsl --list --online); None = načítá se
@@ -201,6 +203,7 @@ impl App {
             wsl_draft,
             files: ui::files::FilesState::default(),
             hub: ui::images::HubState::default(),
+            build: ui::build::BuildState::default(),
             uninstall: None,
             add_distro: None,
             online: None,
@@ -402,6 +405,8 @@ impl App {
                 }
                 Msg::FsChanged => ui::files::reload(self),
                 Msg::OnlineDistros(r) => self.online = Some(r),
+                Msg::BuildOutput(line) => ui::build::on_output(self, line),
+                Msg::BuildDone(r) => ui::build::on_done(self, r),
                 Msg::ConfigChanged => {
                     if let Ok(c) = self.cfg.read() {
                         self.cfg_draft = c.clone();
@@ -655,6 +660,7 @@ impl App {
         ui::logs::window(self, ctx);
         ui::files::dialogs(self, ctx);
         ui::images::hub_dialog(self, ctx);
+        ui::build::dialogs(self, ctx);
         ui::engine::uninstall_dialog(self, ctx);
         ui::settings::add_distro_dialog(self, ctx);
         ui::containers::run_dialog(self, ctx);

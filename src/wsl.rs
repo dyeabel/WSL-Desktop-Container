@@ -135,6 +135,64 @@ pub fn run_stdin(distro: &str, user: Option<&str>, args: &[&str], input: &str) -
     finish(child.wait_with_output().map_err(|e| e.to_string())?)
 }
 
+/// Spustí program v distribuci a průběžně předává řádky výstupu (stdout i stderr
+/// sloučené v pořadí, jak přicházejí) do `on_line`. Vrací návratový kód programu.
+/// Řádek s `\r` (průběh) se zkrátí na poslední úsek.
+pub fn run_stream(
+    distro: &str,
+    user: Option<&str>,
+    cwd: Option<&str>,
+    args: &[String],
+    mut on_line: impl FnMut(&str),
+) -> Result<i32, String> {
+    use std::io::{BufRead, BufReader, Read};
+    let mut child = base(distro, user, cwd)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    fn pump(r: impl Read + Send + 'static, tx: std::sync::mpsc::Sender<String>) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let mut r = BufReader::new(r);
+            let mut buf = Vec::new();
+            loop {
+                buf.clear();
+                match r.read_until(b'\n', &mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        let s = String::from_utf8_lossy(&buf);
+                        let s = s.trim_end_matches(['\n', '\r']);
+                        let s = s.rsplit('\r').next().unwrap_or("");
+                        if tx.send(s.to_string()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+    }
+    let mut readers = Vec::new();
+    if let Some(o) = child.stdout.take() {
+        readers.push(pump(o, tx.clone()));
+    }
+    if let Some(e) = child.stderr.take() {
+        readers.push(pump(e, tx.clone()));
+    }
+    drop(tx);
+    // končí, až oba proudy dojdou (všechny odesílatele zahodí čtecí vlákna)
+    for line in rx {
+        on_line(&line);
+    }
+    for r in readers {
+        let _ = r.join();
+    }
+    let st = child.wait().map_err(|e| e.to_string())?;
+    Ok(st.code().unwrap_or(-1))
+}
+
 fn wsl_simple(args: &[&str]) -> Result<String, String> {
     finish(hidden("wsl.exe").args(args).output().map_err(|e| e.to_string())?)
 }
