@@ -1,6 +1,7 @@
 pub mod compose;
 pub mod containers;
 pub mod dashboard;
+pub mod detail;
 pub mod engine;
 pub mod files;
 pub mod images;

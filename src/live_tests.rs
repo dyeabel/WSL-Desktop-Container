@@ -165,6 +165,107 @@ fn live_docker_host_roundtrip() {
     assert_eq!(status().docker_host, None);
 }
 
+/// Detail kontejneru: inspect -> RunSpec, statistiky, logy a znovuvytvoření (úspěch i návrat
+/// původního). Pracuje jen s vlastními objekty `wls-test-detail*`.
+/// `WLS_DISTRO=Debian cargo test live_container_detail -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn live_container_detail() {
+    use crate::engine::Engine;
+    use crate::worker::RunSpec;
+    use std::time::Duration;
+    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let d = Docker::new(port);
+    assert!(d.ping(), "API na {port} neodpovídá");
+    let ver: serde_json::Value = d.get("/version").unwrap();
+    let engine = if ver.to_string().contains("Podman") { Engine::Podman } else { Engine::Docker };
+    let cfg = crate::config::Config { distro: distro(), engine, port, ..Default::default() };
+    let name = "wls-test-detail";
+    let vol = "wls-test-detail-vol";
+    let cleanup = || {
+        for n in [name, "wls-test-detail-wls-old"] {
+            let _ = d.container_action(n, "remove");
+        }
+        let _ = d.delete(&format!("/volumes/{vol}"));
+    };
+    cleanup();
+    let inspect = |id: &str| {
+        let v: serde_json::Value = d.get(&format!("/containers/{id}/json")).expect("inspect");
+        let mut det = crate::inspect::parse(&v);
+        let img: serde_json::Value = d.get(&format!("/images/{}/json", crate::docker::enc(&det.image_id))).expect("image");
+        crate::inspect::set_image_defaults(&mut det, &img);
+        det
+    };
+
+    let spec = RunSpec {
+        image: "alpine:3.20".into(),
+        name: name.into(),
+        ports: "18081:80".into(),
+        env: "SECRET_TOKEN=x\nA=1".into(),
+        volumes: format!("{vol}:/data"),
+        restart: "unless-stopped".into(),
+        command: r#"sh -c 'echo "hello detail"; sleep 600'"#.into(),
+        ..Default::default()
+    };
+    wsl::run_owned(&cfg.distro, None, None, &spec.args_for(engine, port)).expect("run");
+    let det = inspect(name);
+    eprintln!("inspect: {} {} {:?} ports={:?} nets={:?}", det.name, det.image, det.cmd, det.port_specs, det.networks);
+    assert!(det.running, "{}", det.status);
+    let r = det.to_run_spec();
+    assert_eq!(r.name, name);
+    assert_eq!(r.ports, "18081:80");
+    assert_eq!(r.env, "SECRET_TOKEN=x\nA=1");
+    assert_eq!(r.volumes, format!("{vol}:/data"));
+    assert_eq!(r.restart, "unless-stopped");
+    assert_eq!(r.command, spec.command);
+
+    // statistiky: ~3 vzorky, CPU z rozdílu
+    let feed = crate::worker::start_stats(eframe::egui::Context::default(), port, det.id.clone());
+    std::thread::sleep(Duration::from_millis(5500));
+    let samples: Vec<_> = feed.samples.lock().unwrap().iter().copied().collect();
+    drop(feed);
+    eprintln!("stats: {samples:?}");
+    assert!(samples.len() >= 2, "{samples:?}");
+    assert!(samples.iter().any(|s| s.cpu.is_some()) && samples.last().is_some_and(|s| s.mem > 0));
+
+    // logy (stejný stream jako okno logů)
+    let mut logs = String::new();
+    d.stream_logs(&det.id, 10, |c| {
+        logs.push_str(c);
+        !logs.contains("hello detail")
+    })
+    .expect("logs");
+    assert!(logs.contains("hello detail"), "{logs}");
+
+    // znovuvytvoření se změnou -> nové ID, změna se projeví, záloha zmizí
+    let mut changed = r.clone();
+    changed.env.push_str("\nB=2");
+    changed.ports = "18082:80".into();
+    let res = crate::worker::recreate_for_test(cfg.clone(), &det.id, changed);
+    eprintln!("recreate: {res:?}");
+    assert!(res.is_ok(), "{res:?}");
+    let new = inspect(name);
+    assert_ne!(new.id, det.id);
+    assert!(new.running);
+    assert!(new.env.iter().any(|(k, v)| k == "B" && v == "2"));
+    assert_eq!(new.port_specs, vec!["18082:80".to_string()]);
+    assert!(d.get::<serde_json::Value>("/containers/wls-test-detail-wls-old/json").is_err());
+
+    // nový kontejner hned skončí -> odstraní se a původní se vrátí a znovu spustí
+    let bad = RunSpec { command: "false".into(), restart: "no".into(), ..new.to_run_spec() };
+    let res = crate::worker::recreate_for_test(cfg.clone(), &new.id, bad);
+    eprintln!("recreate (fail): {res:?}");
+    assert!(res.is_err());
+    let back = inspect(name);
+    assert_eq!(back.id, new.id, "vrátil se původní kontejner");
+    assert!(back.running, "{}", back.status);
+    assert!(d.get::<serde_json::Value>("/containers/wls-test-detail-wls-old/json").is_err());
+    let all: Vec<crate::docker::Container> = d.get("/containers/json?all=1").unwrap();
+    assert_eq!(all.iter().filter(|c| c.name().starts_with(name)).count(), 1);
+
+    cleanup();
+}
+
 #[test]
 #[ignore]
 fn live_docker_snapshot() {

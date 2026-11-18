@@ -53,9 +53,68 @@ impl RunSpec {
             a.extend(["--restart".into(), self.restart.clone()]);
         }
         a.push(if qualify { qualify_image(&self.image) } else { self.image.trim().into() });
-        a.extend(self.command.split_whitespace().map(String::from));
+        a.extend(split_args(&self.command));
         a
     }
+}
+
+/// Rozdělí příkaz na argumenty jako shell: mezery oddělují, '…' a "…" seskupují,
+/// `\` escapuje (mimo jednoduché uvozovky).
+pub fn split_args(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut has = false;
+    let mut it = s.chars();
+    while let Some(c) = it.next() {
+        match c {
+            '\'' => {
+                has = true;
+                for c in it.by_ref() {
+                    if c == '\'' {
+                        break;
+                    }
+                    cur.push(c);
+                }
+            }
+            '"' => {
+                has = true;
+                while let Some(c) = it.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => match it.next() {
+                            Some(n @ ('"' | '\\' | '$' | '`')) => cur.push(n),
+                            Some(n) => {
+                                cur.push('\\');
+                                cur.push(n);
+                            }
+                            None => cur.push('\\'),
+                        },
+                        _ => cur.push(c),
+                    }
+                }
+            }
+            '\\' => {
+                has = true;
+                if let Some(n) = it.next() {
+                    cur.push(n);
+                }
+            }
+            c if c.is_whitespace() => {
+                if has {
+                    out.push(std::mem::take(&mut cur));
+                    has = false;
+                }
+            }
+            c => {
+                has = true;
+                cur.push(c);
+            }
+        }
+    }
+    if has {
+        out.push(cur);
+    }
+    out
 }
 
 /// Parametry přidání nové distribuce.
@@ -96,5 +155,12 @@ mod tests {
             s.args().join(" "),
             "docker run -d --name web -p 8080:80 -p 8443:443 -e A=1 -e B=2 -v data:/data --restart unless-stopped nginx:alpine"
         );
+    }
+
+    #[test]
+    fn split_command() {
+        assert_eq!(split_args("sleep  infinity"), vec!["sleep", "infinity"]);
+        assert_eq!(split_args(r#"sh -c 'echo "a b"; x' "c\"d" e\ f ''"#), vec!["sh", "-c", "echo \"a b\"; x", "c\"d", "e f", ""]);
+        assert!(split_args("  ").is_empty());
     }
 }

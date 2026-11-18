@@ -86,7 +86,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             (t!("PORTY", "PORTS"), W::FrOpt(2.2)),
             (t!("SÍŤ", "NETWORK"), W::FrOpt(1.2)),
             (t!("STAV", "STATE"), W::Fr(1.6)),
-            (t!("AKCE", "ACTIONS"), icons_w(6)),
+            (t!("AKCE", "ACTIONS"), icons_w(7)),
         ];
         table(ui, &format!("grid-{g}"), &cols, |mut body| {
             for c in &list {
@@ -132,6 +132,10 @@ fn row(app: &mut App, r: &mut TableRow<'_>, c: &Container) {
         ui.spacing_mut().item_spacing.x = 2.0;
         let id = c.id.clone();
         let name = c.name();
+        if icon(ui, "\u{E2CE}", t!("Detail kontejneru", "Container details")) {
+            let ctx = ui.ctx().clone();
+            crate::ui::detail::open(app, &ctx, id.clone(), name.clone());
+        }
         if c.paused() {
             if icon(ui, "\u{E3D2}", t!("Obnovit (unpause)", "Resume (unpause)")) {
                 app.send(Cmd::Container(id.clone(), "unpause"));

@@ -232,6 +232,8 @@ pub struct StatRow {
     pub net_tx: u64,
     pub blk_read: u64,
     pub blk_write: u64,
+    /// kumulovaný čas CPU v ns (pro výpočet z rozdílu mezi vzorky – Podman nevyplňuje precpu_stats)
+    pub cpu_total: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -608,6 +610,7 @@ impl Docker {
             net_tx: tx,
             blk_read: br,
             blk_write: bw,
+            cpu_total: u("/cpu_stats/cpu_usage/total_usage"),
         })
     }
 

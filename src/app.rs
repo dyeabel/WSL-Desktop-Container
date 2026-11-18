@@ -60,6 +60,8 @@ pub struct LogView {
     pub stop: Arc<AtomicBool>,
     pub filter: String,
     pub wrap: bool,
+    /// posouvat na konec při nových řádcích
+    pub follow: bool,
 }
 
 impl Drop for LogView {
@@ -83,6 +85,8 @@ pub struct App {
     pub confirm: Option<Confirm>,
     pub output: Option<(String, String)>,
     pub logs: Option<LogView>,
+    /// otevřený detail kontejneru
+    pub detail: Option<ui::detail::DetailView>,
     pub run_open: bool,
     pub run: RunSpec,
     /// výběr existujícího volume v dialogu Spustit kontejner: (název, cesta v kontejneru, jen pro čtení)
@@ -182,6 +186,7 @@ impl App {
             }),
             output: None,
             logs: None,
+            detail: None,
             run_open: false,
             run: RunSpec { restart: "no".into(), ..Default::default() },
             run_vol: (String::new(), "/data".into(), false),
@@ -320,6 +325,11 @@ impl App {
     }
 
     pub fn open_logs(&mut self, id: String, name: String) {
+        self.logs = Some(self.spawn_logs(id, name, 1000));
+    }
+
+    /// Spustí streamování posledních `tail` řádků logu (a dalších) do nového `LogView`.
+    pub fn spawn_logs(&self, id: String, name: String, tail: u32) -> LogView {
         let buf = Arc::new(Mutex::new(String::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let port = self.cfg.read().map(|c| c.port).unwrap_or(2375);
@@ -327,7 +337,7 @@ impl App {
         let view_id = id.clone();
         std::thread::spawn(move || {
             let d = crate::docker::Docker::new(port);
-            let res = d.stream_logs(&id, 1000, |chunk| {
+            let res = d.stream_logs(&id, tail, |chunk| {
                 if s.load(Ordering::Relaxed) {
                     return false;
                 }
@@ -347,7 +357,7 @@ impl App {
                 }
             }
         });
-        self.logs = Some(LogView { id: view_id, name, buf, stop, filter: String::new(), wrap: true });
+        LogView { id: view_id, name, buf, stop, filter: String::new(), wrap: true, follow: true }
     }
 
     fn drain(&mut self) {
@@ -399,6 +409,7 @@ impl App {
                 }
                 Msg::FsChanged => ui::files::reload(self),
                 Msg::OnlineDistros(r) => self.online = Some(r),
+                Msg::Inspect(id, r) => ui::detail::on_inspect(self, id, r),
                 Msg::ConfigChanged => {
                     if let Ok(c) = self.cfg.read() {
                         self.cfg_draft = c.clone();
@@ -655,6 +666,7 @@ impl App {
         ui::engine::uninstall_dialog(self, ctx);
         ui::settings::add_distro_dialog(self, ctx);
         ui::containers::run_dialog(self, ctx);
+        ui::detail::window(self, ctx);
     }
 
     fn toasts(&mut self, ctx: &egui::Context) {
@@ -737,7 +749,7 @@ impl eframe::App for App {
             });
         self.dialogs(ctx);
         self.toasts(ctx);
-        if self.logs.is_some() {
+        if self.logs.is_some() || self.detail.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(300));
         }
     }
