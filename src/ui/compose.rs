@@ -32,30 +32,30 @@ fn stacks(cs: &[Container]) -> Vec<Stack> {
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let list = stacks(&app.snap.containers);
-    header(ui, "Compose", &format!("{} stacků (rozpoznáno podle labelů kontejnerů)", list.len()));
+    header(ui, "Compose", &tf!("{} stacků (rozpoznáno podle labelů kontejnerů)", "{} stacks (detected from container labels)", list.len()));
     if !need_engine(app, ui) {
         return;
     }
 
     card(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(RichText::new("Spustit stack ze složky").strong());
+        ui.label(RichText::new(t!("Spustit stack ze složky", "Start stack from folder")).strong());
         toolbar(ui, |ui| {
             ui.add(
                 field(&mut app.compose_dir)
-                    .hint_text(r"D:\projekty\app  nebo  /home/user/app")
+                    .hint_text(t!(r"D:\projekty\app  nebo  /home/user/app", r"D:\projects\app  or  /home/user/app"))
                     .desired_width(380.0),
             );
             if accent_button(ui, "\u{E3D0} docker compose up -d").clicked() && !app.compose_dir.trim().is_empty() {
                 app.send(Cmd::ComposeUpPath(app.compose_dir.trim().to_string()));
             }
         });
-        ui.label(muted("Složka musí obsahovat compose.yaml / docker-compose.yml. Windows cesty se převedou přes wslpath.").small());
+        ui.label(muted(t!("Složka musí obsahovat compose.yaml / docker-compose.yml. Windows cesty se převedou přes wslpath.", "The folder must contain compose.yaml / docker-compose.yml. Windows paths are converted via wslpath.")).small());
     });
 
     if list.is_empty() {
         ui.add_space(8.0);
-        ui.label(muted("Žádné compose stacky."));
+        ui.label(muted(t!("Žádné compose stacky.", "No Compose stacks.")));
         return;
     }
 
@@ -71,7 +71,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     if running == total { theme::GREEN } else if running > 0 { theme::YELLOW } else { theme::GREY },
                 );
                 ui.label(RichText::new(&s.name).size(18.0).strong());
-                ui.label(muted(format!("{running}/{total} běží")));
+                ui.label(muted(tf!("{running}/{total} běží", "{running}/{total} running")));
             });
             ui.label(RichText::new(&s.dir).monospace().small().color(theme::MUTED));
             ui.add_space(4.0);
@@ -100,37 +100,37 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 if ui.button("\u{E2F2} ps").clicked() {
                     app.send(c(&["ps", "-a"]));
                 }
-                if ui.button("\u{EB7A} Logy").on_hover_text("docker compose logs --tail 300").clicked() {
+                if ui.button(t!("\u{EB7A} Logy", "\u{EB7A} Logs")).on_hover_text("docker compose logs --tail 300").clicked() {
                     app.send(c(&["logs", "--no-color", "--tail", "300"]));
                 }
                 if ui.button("\u{E4A6} Down").clicked() {
                     app.ask(
                         format!("docker compose down – {}?", s.name),
-                        "Kontejnery a sítě stacku budou odstraněny (volume zůstanou).",
+                        t!("Kontejnery a sítě stacku budou odstraněny (volume zůstanou).", "The stack's containers and networks will be removed (volumes are kept)."),
                         c(&["down"]),
                     );
                 }
                 gap(ui);
                 for f in &s.files {
                     let fname = f.rsplit('/').next().unwrap_or(f);
-                    if ui.button(format!("\u{E34C} {fname}")).on_hover_text(format!("Upravit v Notepadu: {f}")).clicked() {
+                    if ui.button(format!("\u{E34C} {fname}")).on_hover_text(tf!("Upravit v Notepadu: {f}", "Edit in Notepad: {f}")).clicked() {
                         app.send(Cmd::Notepad(f.clone()));
                     }
                 }
-                if icon(ui, "\u{E256}", "Otevřít složku v Průzkumníku") {
+                if icon(ui, "\u{E256}", t!("Otevřít složku v Průzkumníku", "Open folder in Explorer")) {
                     app.send(Cmd::Explorer(s.dir.clone()));
                 }
-                if icon(ui, "\u{EAE8}", "Terminál ve složce stacku") {
+                if icon(ui, "\u{EAE8}", t!("Terminál ve složce stacku", "Terminal in stack folder")) {
                     app.send(Cmd::Terminal(Term::Dir(s.dir.clone())));
                 }
             });
             ui.add_space(4.0);
             let cols = [
                 ("", W::Px(14.0)),
-                ("SLUŽBA", W::Fr(1.5)),
+                (t!("SLUŽBA", "SERVICE"), W::Fr(1.5)),
                 ("IMAGE", W::Fr(2.0)),
-                ("PORTY", W::FrOpt(2.0)),
-                ("AKCE", icons_w(3)),
+                (t!("PORTY", "PORTS"), W::FrOpt(2.0)),
+                (t!("AKCE", "ACTIONS"), icons_w(3)),
             ];
             table_in(ui, &format!("svc-{}", s.name), &cols, |mut body| {
                 for ct in &s.containers {
@@ -148,16 +148,16 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     r.col(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         if ct.running() {
-                            if icon(ui, "\u{E46C}", "Zastavit") {
+                            if icon(ui, "\u{E46C}", t!("Zastavit", "Stop")) {
                                 app.send(Cmd::Container(ct.id.clone(), "stop"));
                             }
-                            if icon(ui, "\u{EAE8}", "Konzole") {
+                            if icon(ui, "\u{EAE8}", t!("Konzole", "Console")) {
                                 app.send(Cmd::Terminal(Term::Container { id: ct.id.clone(), name: ct.name() }));
                             }
-                        } else if icon(ui, "\u{E3D0}", "Spustit") {
+                        } else if icon(ui, "\u{E3D0}", t!("Spustit", "Start")) {
                             app.send(Cmd::Container(ct.id.clone(), "start"));
                         }
-                        if icon(ui, "\u{EB7A}", "Logy") {
+                        if icon(ui, "\u{EB7A}", t!("Logy", "Logs")) {
                             app.open_logs(ct.id.clone(), ct.name());
                         }
                     });

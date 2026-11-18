@@ -3,7 +3,7 @@ use crate::app::App;
 use crate::worker::Cmd;
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
-    header(ui, "Volume", &format!("{} volume", app.snap.volumes.len()));
+    header(ui, "Volume", &tf!("{} volume", "{} volumes", app.snap.volumes.len()));
     if !need_engine(app, ui) {
         return;
     }
@@ -12,14 +12,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ui,
         240.0,
         |ui, right| if !right {
-            ui.add(field(&mut app.new_volume).hint_text("název nového volume").desired_width(220.0));
-            if accent_button(ui, "\u{E3D4} Vytvořit").clicked() && !app.new_volume.trim().is_empty() {
+            ui.add(field(&mut app.new_volume).hint_text(t!("název nového volume", "new volume name")).desired_width(220.0));
+            if accent_button(ui, t!("\u{E3D4} Vytvořit", "\u{E3D4} Create")).clicked() && !app.new_volume.trim().is_empty() {
                 app.send(Cmd::CreateVolume(app.new_volume.trim().to_string()));
                 app.new_volume.clear();
             }
         } else {
             more_menu(ui, |ui| {
-                if ui.button("\u{EC54} Odstranit nepoužívané volume…").clicked() {
+                if ui.button(t!("\u{EC54} Odstranit nepoužívané volume…", "\u{EC54} Remove unused volumes…")).clicked() {
                     prune = true;
                     ui.close_menu();
                 }
@@ -28,7 +28,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         },
     );
     if prune {
-        app.ask("Odstranit nepoužívané volume?", "Data v nepoužívaných volume budou nenávratně smazána!", Cmd::PruneVolumes);
+        app.ask(
+            t!("Odstranit nepoužívané volume?", "Remove unused volumes?"),
+            t!("Data v nepoužívaných volume budou nenávratně smazána!", "Data in unused volumes will be permanently deleted!"),
+            Cmd::PruneVolumes,
+        );
     }
     ui.add_space(8.0);
 
@@ -36,11 +40,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let volumes = app.snap.volumes.clone();
     let containers = app.snap.containers.clone();
     let cols = [
-        ("NÁZEV", W::Fr(2.5)),
+        (t!("NÁZEV", "NAME"), W::Fr(2.5)),
         ("DRIVER", W::PxOpt(80.0)),
-        ("POUŽÍVÁ", W::Fr(1.5)),
+        (t!("POUŽÍVÁ", "USED BY"), W::Fr(1.5)),
         ("MOUNTPOINT", W::FrOpt(3.0)),
-        ("AKCE", icons_w(3)),
+        (t!("AKCE", "ACTIONS"), icons_w(3)),
     ];
     let mut browse = None;
     let mut run_with: Option<String> = None;
@@ -65,7 +69,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 });
                 r.col(|ui| {
                     if used.is_empty() {
-                        ui.label(muted("nepoužívá se"));
+                        ui.label(muted(t!("nepoužívá se", "unused")));
                     } else {
                         ui.label(used.join(", "));
                     }
@@ -75,14 +79,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 });
                 r.col(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    if icon(ui, "\u{E3D0}", "Spustit kontejner s tímto volume (lze připojit do více kontejnerů najednou)") {
+                    if icon(ui, "\u{E3D0}", t!("Spustit kontejner s tímto volume (lze připojit do více kontejnerů najednou)", "Run a container with this volume (can be attached to several containers at once)")) {
                         run_with = Some(v.name.clone());
                     }
-                    if icon(ui, "\u{E24A}", "Procházet obsah (stránka Soubory, jako root)") {
+                    if icon(ui, "\u{E24A}", t!("Procházet obsah (stránka Soubory, jako root)", "Browse contents (Files page, as root)")) {
                         browse = Some(v.mountpoint.clone());
                     }
-                    if icon(ui, "\u{E4A6}", "Odstranit") {
-                        app.ask(format!("Odstranit volume {}?", v.name), "Data ve volume budou nenávratně smazána!", Cmd::RemoveVolume(v.name.clone()));
+                    if icon(ui, "\u{E4A6}", t!("Odstranit", "Remove")) {
+                        app.ask(tf!("Odstranit volume {}?", "Remove volume {}?", v.name), t!("Data ve volume budou nenávratně smazána!", "Data in the volume will be permanently deleted!"), Cmd::RemoveVolume(v.name.clone()));
                     }
                 });
             });

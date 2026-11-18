@@ -75,7 +75,7 @@ fn kind_icon(e: &Entry) -> &'static str {
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let distro = app.distro();
-    header(ui, "Soubory", &format!("Souborový systém distribuce {distro}"));
+    header(ui, t!("Soubory", "Files"), &tf!("Souborový systém distribuce {distro}", "File system of distribution {distro}"));
     if !app.files.loaded && !app.files.loading {
         reload(app);
     }
@@ -84,16 +84,16 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // --- navigace ---
     ui.horizontal(|ui| {
         let cur = app.files.path.clone();
-        if icon(ui, "\u{E08E}", "O úroveň výš") {
+        if icon(ui, "\u{E08E}", t!("O úroveň výš", "Up one level")) {
             navigate(app, parent(&cur));
         }
-        if icon(ui, "\u{E2C2}", "Domovská složka") {
+        if icon(ui, "\u{E2C2}", t!("Domovská složka", "Home folder")) {
             navigate(app, "~".into());
         }
         if app.files.loading {
             // při načítání místo ikony obnovení kolečko (stejná šířka)
             ui.add_sized([26.0, 24.0], egui::Spinner::new());
-        } else if icon(ui, "\u{E094}", "Obnovit") {
+        } else if icon(ui, "\u{E094}", t!("Obnovit", "Refresh")) {
             reload(app);
         }
         // pole vyplní šířku až po Záložky (150) u pravého okraje
@@ -104,8 +104,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             navigate(app, p);
         }
         let mut marks: Vec<(String, String)> = vec![
-            ("\u{E2C2} Domů".into(), "~".into()),
-            ("/ Kořen".into(), "/".into()),
+            (t!("\u{E2C2} Domů", "\u{E2C2} Home").into(), "~".into()),
+            (t!("/ Kořen", "/ Root").into(), "/".into()),
             ("\u{E1DA} /etc/docker".into(), "/etc/docker".into()),
             ("\u{E2A0} Docker volume".into(), "/var/lib/docker/volumes".into()),
             ("\u{E270} /etc".into(), "/etc".into()),
@@ -119,7 +119,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
         marks.extend(dirs.into_iter().map(|d| (format!("\u{E466} {d}"), d)));
         let mut go = None;
-        egui::ComboBox::from_id_salt("marks").selected_text("\u{E46A} Záložky").width(150.0).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("marks").selected_text(t!("\u{E46A} Záložky", "\u{E46A} Bookmarks")).width(150.0).show_ui(ui, |ui| {
             for (l, p) in &marks {
                 if ui.selectable_label(false, l).clicked() {
                     go = Some(p.clone());
@@ -129,7 +129,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         if let Some(p) = go {
             if p.starts_with("/var/lib/docker") && !app.files.root {
                 app.files.root = true;
-                app.toast(true, "Docker data patří rootovi – přepnuto na režim root");
+                app.toast(true, t!("Docker data patří rootovi – přepnuto na režim root", "Docker data belongs to root – switched to root mode"));
             }
             navigate(app, p);
         }
@@ -143,42 +143,42 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     toolbar_lr(ui, 330.0, |ui, right| {
         let cur = cur_path.clone();
         if !right {
-            ui.menu_button("\u{E3D4} Nový \u{E136}", |ui| {
-                if ui.button("\u{E258} Složka…").clicked() {
+            ui.menu_button(t!("\u{E3D4} Nový \u{E136}", "\u{E3D4} New \u{E136}"), |ui| {
+                if ui.button(t!("\u{E258} Složka…", "\u{E258} Folder…")).clicked() {
                     app.files.create = Some((true, String::new()));
                     ui.close_menu();
                 }
-                if ui.button("\u{E236} Soubor…").clicked() {
+                if ui.button(t!("\u{E236} Soubor…", "\u{E236} File…")).clicked() {
                     app.files.create = Some((false, String::new()));
                     ui.close_menu();
                 }
             });
-            ui.menu_button("\u{E4C0} Nahrát z Windows \u{E136}", |ui| {
-                if ui.button("Soubory…").on_hover_text("Zkopírovat soubory z Windows do této složky").clicked() {
+            ui.menu_button(t!("\u{E4C0} Nahrát z Windows \u{E136}", "\u{E4C0} Upload from Windows \u{E136}"), |ui| {
+                if ui.button(t!("Soubory…", "Files…")).on_hover_text(t!("Zkopírovat soubory z Windows do této složky", "Copy files from Windows into this folder")).clicked() {
                     upload_files = true;
                     ui.close_menu();
                 }
-                if ui.button("Složku…").clicked() {
+                if ui.button(t!("Složku…", "Folder…")).clicked() {
                     upload_dir = true;
                     ui.close_menu();
                 }
             });
         } else {
             more_menu(ui, |ui| {
-                if ui.button("\u{E256} Otevřít v Průzkumníku").clicked() {
+                if ui.button(t!("\u{E256} Otevřít v Průzkumníku", "\u{E256} Open in Explorer")).clicked() {
                     app.send(Cmd::Explorer(cur.clone()));
                     ui.close_menu();
                 }
-                if ui.button("\u{EAE8} Terminál v této složce").clicked() {
+                if ui.button(t!("\u{EAE8} Terminál v této složce", "\u{EAE8} Terminal in this folder")).clicked() {
                     app.send(Cmd::Terminal(Term::Dir(cur.clone())));
                     ui.close_menu();
                 }
-                if ui.button("\u{E1CA} Kopírovat cestu").clicked() {
+                if ui.button(t!("\u{E1CA} Kopírovat cestu", "\u{E1CA} Copy path")).clicked() {
                     ui.ctx().copy_text(cur.clone());
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("\u{E184} Vybrat vše").clicked() {
+                if ui.button(t!("\u{E184} Vybrat vše", "\u{E184} Select all")).clicked() {
                     let f = app.files.filter.to_lowercase();
                     app.files.selected = app
                         .files
@@ -190,26 +190,26 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.checkbox(&mut app.files.root, "Pracovat jako root").on_hover_text("Operace poběží pod uživatelem root (wsl -u root)").changed() {
+                if ui.checkbox(&mut app.files.root, t!("Pracovat jako root", "Work as root")).on_hover_text(t!("Operace poběží pod uživatelem root (wsl -u root)", "Operations will run as the root user (wsl -u root)")).changed() {
                     reload(app);
                     ui.close_menu();
                 }
             });
             filter_field(ui, &mut app.files.filter);
-            if app.files.root && badge(ui, "root", theme::YELLOW).on_hover_text("Pracuješ jako root – kliknutím vypneš").interact(egui::Sense::click()).clicked() {
+            if app.files.root && badge(ui, "root", theme::YELLOW).on_hover_text(t!("Pracuješ jako root – kliknutím vypneš", "Working as root – click to turn off")).interact(egui::Sense::click()).clicked() {
                 app.files.root = false;
                 reload(app);
             }
         }
     });
     if upload_files {
-        if let Some(files) = rfd::FileDialog::new().set_title("Nahrát do WSL").pick_files() {
+        if let Some(files) = rfd::FileDialog::new().set_title(t!("Nahrát do WSL", "Upload to WSL")).pick_files() {
             let v = files.into_iter().map(|p| p.display().to_string()).collect();
             fs(app, FsOp::Upload(v, cur_path.clone()));
         }
     }
     if upload_dir {
-        if let Some(dir) = rfd::FileDialog::new().set_title("Nahrát složku do WSL").pick_folder() {
+        if let Some(dir) = rfd::FileDialog::new().set_title(t!("Nahrát složku do WSL", "Upload folder to WSL")).pick_folder() {
             fs(app, FsOp::Upload(vec![dir.display().to_string()], cur_path.clone()));
         }
     }
@@ -235,24 +235,24 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 toolbar(ui, |ui| {
-                    ui.label(RichText::new(format!("Vybráno: {nsel}")).strong());
+                    ui.label(RichText::new(tf!("Vybráno: {nsel}", "Selected: {nsel}")).strong());
                     gap(ui);
-                    if ui.button("\u{E20C} Stáhnout do Windows…").clicked() {
-                        if let Some(dir) = rfd::FileDialog::new().set_title("Uložit do…").pick_folder() {
+                    if ui.button(t!("\u{E20C} Stáhnout do Windows…", "\u{E20C} Download to Windows…")).clicked() {
+                        if let Some(dir) = rfd::FileDialog::new().set_title(t!("Uložit do…", "Save to…")).pick_folder() {
                             let items: Vec<String> = app.files.selected.iter().map(|n| join(&cur, n)).collect();
                             fs(app, FsOp::Download(items, dir.display().to_string()));
                         }
                     }
-                    if ui.button(RichText::new("\u{E4A6} Smazat…").color(theme::RED)).clicked() {
+                    if ui.button(RichText::new(t!("\u{E4A6} Smazat…", "\u{E4A6} Delete…")).color(theme::RED)).clicked() {
                         let items: Vec<String> = app.files.selected.iter().map(|n| join(&cur, n)).collect();
                         let list = app.files.selected.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
                         app.ask(
-                            format!("Smazat {nsel} položek?"),
-                            format!("Nenávratně se smaže (rm -rf): {list}{}", if nsel > 8 { ", …" } else { "" }),
+                            tf!("Smazat {nsel} položek?", "Delete {nsel} items?"),
+                            tf!("Nenávratně se smaže (rm -rf): {list}{}", "Will be permanently deleted (rm -rf): {list}{}", if nsel > 8 { ", …" } else { "" }),
                             Cmd::Fs { root: app.files.root, op: FsOp::Delete(items) },
                         );
                     }
-                    if ui.button("Zrušit výběr").clicked() {
+                    if ui.button(t!("Zrušit výběr", "Clear selection")).clicked() {
                         app.files.selected.clear();
                     }
                 });
@@ -265,7 +265,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui.set_width(ui.available_width());
             ui.label(RichText::new(format!("\u{E4E0} {e}")).color(theme::RED));
             if !app.files.root {
-                ui.label(muted("Nedostatečná práva? Zapni „Jako root“."));
+                ui.label(muted(t!("Nedostatečná práva? Zapni „Jako root“.", "Insufficient permissions? Turn on “As root”.")));
             }
         });
         ui.add_space(6.0);
@@ -275,12 +275,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let mut go = None;
     let cols = [
         ("", W::Px(22.0)),
-        ("NÁZEV", W::Fr(1.0)),
-        ("VELIKOST", W::Px(76.0)),
-        ("ZMĚNĚNO", W::PxOpt(96.0)),
-        ("VLASTNÍK", W::PxOpt(78.0)),
-        ("PRÁVA", W::PxOpt(48.0)),
-        ("AKCE", icons_w(2)),
+        (t!("NÁZEV", "NAME"), W::Fr(1.0)),
+        (t!("VELIKOST", "SIZE"), W::Px(76.0)),
+        (t!("ZMĚNĚNO", "MODIFIED"), W::PxOpt(96.0)),
+        (t!("VLASTNÍK", "OWNER"), W::PxOpt(78.0)),
+        (t!("PRÁVA", "MODE"), W::PxOpt(48.0)),
+        (t!("AKCE", "ACTIONS"), icons_w(2)),
     ];
     table(ui, "files", &cols, |mut body| {
         if cur != "/" {
@@ -288,7 +288,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 r.col(|_| {});
                 r.col(|ui| {
                     let l = ui.add(egui::Label::new(RichText::new("\u{E24A} ..").strong()).selectable(false).sense(egui::Sense::click()));
-                    if l.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("O úroveň výš").clicked() {
+                    if l.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(t!("O úroveň výš", "Up one level")).clicked() {
                         go = Some(parent(&cur));
                     }
                 });
@@ -319,7 +319,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         }
                     } else {
                         let l = ui.add(egui::Label::new(label).selectable(false).sense(egui::Sense::click()));
-                        if l.on_hover_text("Dvojklik = upravit").double_clicked() {
+                        if l.on_hover_text(t!("Dvojklik = upravit", "Double-click = edit")).double_clicked() {
                             fs(app, FsOp::Read(path.clone()));
                         }
                     }
@@ -341,41 +341,41 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     if e.is_dir() {
                         // místo ikony Upravit – ⋯ zůstane ve stejném sloupci jako u souborů
                         ui.add_space(26.0 + ui.spacing().item_spacing.x);
-                    } else if icon(ui, "\u{E34C}", "Upravit ve vestavěném editoru") {
+                    } else if icon(ui, "\u{E34C}", t!("Upravit ve vestavěném editoru", "Edit in built-in editor")) {
                         fs(app, FsOp::Read(path.clone()));
                     }
                     // ostatní akce v nabídce řádku
                     let mut download = false;
                     ui.menu_button(RichText::new("\u{E1FE}").size(15.0), |ui| {
                         ui.set_min_width(200.0);
-                        if !e.is_dir() && ui.button("\u{E23A} Otevřít v Notepadu").clicked() {
+                        if !e.is_dir() && ui.button(t!("\u{E23A} Otevřít v Notepadu", "\u{E23A} Open in Notepad")).clicked() {
                             app.send(Cmd::Notepad(path.clone()));
                             ui.close_menu();
                         }
-                        if ui.button("\u{E3B4} Přejmenovat / přesunout…").clicked() {
+                        if ui.button(t!("\u{E3B4} Přejmenovat / přesunout…", "\u{E3B4} Rename / move…")).clicked() {
                             app.files.rename = Some((path.clone(), e.name.clone()));
                             ui.close_menu();
                         }
-                        if ui.button("\u{E2D6} Změnit práva…").clicked() {
+                        if ui.button(t!("\u{E2D6} Změnit práva…", "\u{E2D6} Change permissions…")).clicked() {
                             app.files.chmod = Some((path.clone(), e.mode.clone()));
                             ui.close_menu();
                         }
-                        if ui.button("\u{E20C} Stáhnout do Windows…").clicked() {
+                        if ui.button(t!("\u{E20C} Stáhnout do Windows…", "\u{E20C} Download to Windows…")).clicked() {
                             download = true;
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button(RichText::new("\u{E4A6} Smazat…").color(theme::RED)).clicked() {
+                        if ui.button(RichText::new(t!("\u{E4A6} Smazat…", "\u{E4A6} Delete…")).color(theme::RED)).clicked() {
                             app.ask(
-                                format!("Smazat {}?", e.name),
-                                format!("{} bude nenávratně smazán{}.", path, if e.is_dir() { "a včetně obsahu" } else { "" }),
+                                tf!("Smazat {}?", "Delete {}?", e.name),
+                                tf!("{} bude nenávratně smazán{}.", "{} will be permanently deleted{}.", path, if e.is_dir() { t!("a včetně obsahu", " including its contents") } else { "" }),
                                 Cmd::Fs { root: app.files.root, op: FsOp::Delete(vec![path.clone()]) },
                             );
                             ui.close_menu();
                         }
                     });
                     if download {
-                        if let Some(dir) = rfd::FileDialog::new().set_title("Uložit do…").pick_folder() {
+                        if let Some(dir) = rfd::FileDialog::new().set_title(t!("Uložit do…", "Save to…")).pick_folder() {
                             fs(app, FsOp::Download(vec![path.clone()], dir.display().to_string()));
                         }
                     }
@@ -385,7 +385,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
     if entries.is_empty() && app.files.loaded && app.files.error.is_none() {
         ui.add_space(6.0);
-        ui.label(muted("Prázdná složka"));
+        ui.label(muted(t!("Prázdná složka", "Empty folder")));
     }
     if let Some(p) = go {
         navigate(app, p);
@@ -400,18 +400,18 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
     // nová složka / soubor
     let mut close = false;
     if let Some((is_dir, name)) = app.files.create.as_mut() {
-        let title = if *is_dir { "Nová složka" } else { "Nový soubor" };
+        let title = if *is_dir { t!("Nová složka", "New folder") } else { t!("Nový soubor", "New file") };
         let (_, esc) = modal(ctx, "fs-create", title, 420.0, |ui| {
-            ui.label(muted("Ve složce"));
+            ui.label(muted(t!("Ve složce", "In folder")));
             ui.label(RichText::new(&cur).monospace());
             ui.add_space(8.0);
-            let r = ui.add(field(name).hint_text("název").desired_width(f32::INFINITY));
+            let r = ui.add(field(name).hint_text(t!("název", "name")).desired_width(f32::INFINITY));
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
             }
             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let valid = !name.trim().is_empty() && !name.contains('/');
-            let (ok, cancel) = dialog_buttons(ui, "Vytvořit", false, valid);
+            let (ok, cancel) = dialog_buttons(ui, t!("Vytvořit", "Create"), false, valid);
             if (ok || enter) && valid {
                 let p = join(&cur, name.trim());
                 op = Some(if *is_dir { FsOp::Mkdir(p) } else { FsOp::Touch(p) });
@@ -428,14 +428,14 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
     // přejmenování
     let mut close = false;
     if let Some((from, name)) = app.files.rename.as_mut() {
-        let (_, esc) = modal(ctx, "fs-rename", "Přejmenovat / přesunout", 460.0, |ui| {
+        let (_, esc) = modal(ctx, "fs-rename", t!("Přejmenovat / přesunout", "Rename / move"), 460.0, |ui| {
             ui.label(RichText::new(from.as_str()).monospace());
             ui.add_space(8.0);
             let r = ui.add(field(name).desired_width(f32::INFINITY));
             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            ui.label(muted("Nový název, nebo celá cesta začínající / pro přesun.").small());
+            ui.label(muted(t!("Nový název, nebo celá cesta začínající / pro přesun.", "New name, or a full path starting with / to move.")).small());
             let valid = !name.trim().is_empty();
-            let (ok, cancel) = dialog_buttons(ui, "Přejmenovat", false, valid);
+            let (ok, cancel) = dialog_buttons(ui, t!("Přejmenovat", "Rename"), false, valid);
             if (ok || enter) && valid {
                 let n = name.trim();
                 let to = if n.starts_with('/') { n.to_string() } else { join(&parent(from), n) };
@@ -453,7 +453,7 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
     // chmod
     let mut close = false;
     if let Some((path, mode)) = app.files.chmod.as_mut() {
-        let (_, esc) = modal(ctx, "fs-chmod", "Změnit práva", 420.0, |ui| {
+        let (_, esc) = modal(ctx, "fs-chmod", t!("Změnit práva", "Change permissions"), 420.0, |ui| {
             ui.label(RichText::new(path.as_str()).monospace());
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -465,7 +465,7 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
                 }
             });
             let valid = !mode.trim().is_empty();
-            let (ok, cancel) = dialog_buttons(ui, "Nastavit", false, valid);
+            let (ok, cancel) = dialog_buttons(ui, t!("Nastavit", "Apply"), false, valid);
             if ok && valid {
                 op = Some(FsOp::Chmod(mode.trim().to_string(), path.clone()));
                 close = true;
@@ -491,15 +491,15 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     let ctrl_s = ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S));
                     ui.add_enabled_ui(dirty, |ui| {
-                        if accent_button(ui, "\u{E248} Uložit (Ctrl+S)").clicked() || (ctrl_s && dirty) {
+                        if accent_button(ui, t!("\u{E248} Uložit (Ctrl+S)", "\u{E248} Save (Ctrl+S)")).clicked() || (ctrl_s && dirty) {
                             save = Some(FsOp::Write(ed.path.clone(), ed.text.clone()));
                             ed.orig = ed.text.clone();
                         }
                     });
-                    if dirty && ui.button("\u{E038} Zahodit změny").clicked() {
+                    if dirty && ui.button(t!("\u{E038} Zahodit změny", "\u{E038} Discard changes")).clicked() {
                         ed.text = ed.orig.clone();
                     }
-                    ui.label(muted(format!("{} řádků{}", ed.text.lines().count(), if root { " · root" } else { "" })).small());
+                    ui.label(muted(tf!("{} řádků{}", "{} lines{}", ed.text.lines().count(), if root { " · root" } else { "" })).small());
                 });
                 ui.separator();
                 egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
