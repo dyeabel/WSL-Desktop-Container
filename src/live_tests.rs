@@ -553,3 +553,77 @@ fn live_build_cancel() {
     assert!(took < std::time::Duration::from_secs(30), "{took:?}");
     assert!(ps.trim().is_empty(), "build běží dál: {ps}");
 }
+
+/// Nový stack ze šablony Redis stejnou cestou jako aplikace (`worker::compose::create_stack`):
+/// dočasná složka /tmp/wls-test-compose-*, projekt `wls-test-compose`, port hostitele mimo 6379.
+/// Pak `config -q` (soubor i obsah editoru přes stdin), `up -d`, kontrola kontejneru přes API,
+/// nakonec `down -v` a smazání složky. Jiných stacků, kontejnerů, volume ani image se nedotýká.
+#[test]
+#[ignore]
+fn live_compose_new_stack() {
+    use crate::worker::compose::{create_stack, validate, NewStackSpec};
+    let cfg = crate::config::Config::load();
+    let distro = std::env::var("WLS_DISTRO").unwrap_or(cfg.distro.clone());
+    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let d = Docker::new(port);
+    assert!(d.ping(), "API na {port} neodpovídá");
+    let cli = cfg.engine.cli(port, false);
+    let project = "wls-test-compose";
+    let dir = format!("/tmp/wls-test-compose-{}", std::process::id());
+    let t = crate::compose_templates::TEMPLATES.iter().find(|t| t.id == "redis").unwrap();
+    let host_port = 16379 + std::process::id() % 1000;
+    let env = crate::ui::compose_new::set_env_line(&t.render_env(project), "REDIS_PORT", &host_port.to_string());
+    let spec = NewStackSpec { project: project.into(), dir: dir.clone(), compose: t.compose.into(), env, start: false };
+
+    let compose_cmd = |args: &[&str]| {
+        let mut a = cli.clone();
+        a.extend(["compose".into(), "-p".into(), project.into()]);
+        a.extend(args.iter().map(|s| s.to_string()));
+        wsl::run_owned(&distro, None, Some(&dir), &a)
+    };
+    let created = create_stack(&distro, &cli, &spec);
+    eprintln!("create_stack: {created:?}");
+    let again = create_stack(&distro, &cli, &spec);
+    eprintln!("znovu do stejné složky: {again:?}");
+    let files = fs::list(&distro, false, &dir).map(|(_, e)| e.iter().map(|x| format!("{} {}", x.mode, x.name)).collect::<Vec<_>>());
+    eprintln!("soubory: {files:?}");
+    let compose_file = fs::join(&dir, "compose.yaml");
+    let check_file = validate(&distro, &cli, project, &dir, &[compose_file.clone()], None, "");
+    eprintln!("config -q (soubor): {check_file:?}");
+    let check_bad = validate(&distro, &cli, project, &dir, &["-".into()], None, "services:\n  redis: [\n");
+    eprintln!("config -q (rozbitý obsah editoru): {check_bad:?}");
+    let check_env = validate(&distro, &cli, project, &dir, &[compose_file.clone()], Some("REDIS_PORT=1\n"), "");
+    eprintln!("config -q (.env z editoru bez hesla): {check_env:?}");
+    let up = compose_cmd(&["up", "-d"]);
+    eprintln!("up -d: {up:?}");
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let c = d
+        .snapshot()
+        .containers
+        .into_iter()
+        .find(|c| c.project() == Some(project) && c.label("com.docker.compose.service") == Some("redis"));
+    if let Some(c) = &c {
+        eprintln!("kontejner: {} {} {} | {}", c.name(), c.image, c.status, c.ports_text());
+    }
+    let down = compose_cmd(&["down", "-v"]);
+    eprintln!("down -v: {down:?}");
+    let rm = fs::delete(&distro, false, &[dir.clone()]);
+    eprintln!("rm složky: {rm:?}");
+    let left = d.snapshot().containers.into_iter().any(|c| c.project() == Some(project));
+
+    assert_eq!(created.as_deref(), Ok(dir.as_str()));
+    assert!(again.as_ref().is_err_and(|e| e.contains("compose.yaml")), "{again:?}");
+    let files = files.unwrap();
+    assert!(files.iter().any(|f| f == "600 .env"), "{files:?}");
+    assert!(files.iter().any(|f| f.ends_with(" compose.yaml")), "{files:?}");
+    assert!(check_file.is_ok(), "{check_file:?}");
+    assert!(check_bad.is_err(), "{check_bad:?}");
+    assert!(check_env.as_ref().is_ok_and(|w| w.contains("REDIS_PASSWORD")), "{check_env:?}");
+    assert!(up.is_ok(), "{up:?}");
+    let c = c.expect("kontejner stacku v API");
+    assert!(c.running(), "{}", c.status);
+    assert!(c.ports_text().contains(&host_port.to_string()), "{}", c.ports_text());
+    assert!(down.is_ok(), "{down:?}");
+    assert!(!left, "kontejnery stacku zůstaly");
+    assert!(rm.is_ok() && fs::list(&distro, false, &dir).is_err());
+}

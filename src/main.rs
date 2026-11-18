@@ -4,6 +4,7 @@
 mod i18n;
 mod app;
 mod autostart;
+mod compose_templates;
 mod config;
 mod docker;
 mod dpapi;

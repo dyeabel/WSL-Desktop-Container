@@ -99,6 +99,8 @@ pub struct App {
     pub new_net: String,
     pub new_net_driver: String,
     pub compose_dir: String,
+    /// stránka Compose: nový stack, editor souborů, škálování
+    pub compose: ui::compose::ComposeState,
     pub daemon_json: String,
     pub daemon_loaded: bool,
     pub cfg_draft: Config,
@@ -209,6 +211,7 @@ impl App {
             new_net: String::new(),
             new_net_driver: "bridge".into(),
             compose_dir: String::new(),
+            compose: ui::compose::ComposeState::default(),
             daemon_json: String::new(),
             daemon_loaded: false,
             cfg_draft,
@@ -435,6 +438,7 @@ impl App {
                 Msg::BuildDone(r) => ui::build::on_done(self, r),
                 Msg::Inspect(id, r) => ui::detail::on_inspect(self, id, r),
                 Msg::VolumeSizes(s) => self.vol.sizes = s,
+                Msg::Stack(m) => ui::compose::on_msg(self, m),
                 Msg::ConfigChanged => {
                     if let Ok(c) = self.cfg.read() {
                         self.cfg_draft = c.clone();
@@ -694,6 +698,7 @@ impl App {
         ui::containers::run_dialog(self, ctx);
         ui::detail::window(self, ctx);
         ui::volumes::dialogs(self, ctx);
+        ui::compose::dialogs(self, ctx);
     }
 
     fn toasts(&mut self, ctx: &egui::Context) {

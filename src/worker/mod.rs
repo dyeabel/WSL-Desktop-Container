@@ -2,6 +2,7 @@
 //! aby UI vlákno nikdy neblokovalo.
 
 pub(crate) mod build;
+pub(crate) mod compose;
 mod containers;
 mod detail;
 mod distro;
@@ -19,6 +20,7 @@ pub use volumes::{backup_file_name, valid_volume_name};
 pub use volumes::{du_sizes, volume_op_for_test, volume_sizes_for_test, HELPER_IMAGE};
 pub use build::cancel_build;
 pub use spec::{is_windows_path, AddDistroSpec, BuildSpec, RunSpec};
+pub use compose::{NewStackSpec, StackMsg, StackOp};
 pub use detail::{start_stats, StatSample, StatsFeed, STATS_WINDOW};
 #[cfg(test)]
 pub use detail::recreate_for_test;
@@ -101,6 +103,8 @@ pub enum Cmd {
     Compose { dir: String, project: Option<String>, args: Vec<String> },
     /// docker compose up -d pro složku (Windows nebo Linux cesta)
     ComposeUpPath(String),
+    /// nový stack ze šablony, editor compose souborů, kontrola (-> Msg::Stack)
+    Stack(StackOp),
     Wsl(WslCmd),
     EngineStart,
     EngineStop,
@@ -158,6 +162,8 @@ pub enum Msg {
     Inspect(String, Result<Box<crate::inspect::Detail>, String>),
     /// velikosti volume v bajtech (chybí = neznámá)
     VolumeSizes(std::collections::HashMap<String, u64>),
+    /// výsledky operací se stacky (Cmd::Stack)
+    Stack(StackMsg),
 }
 
 /// Souhrnný stav pro tray (zapisuje worker, čte vlákno UI/traye).
@@ -365,7 +371,8 @@ impl Worker {
     fn exec(&self, cmd: Cmd) {
         self.shared.busy.fetch_add(1, Ordering::SeqCst);
         self.ctx.request_repaint();
-        let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline | Cmd::Inspect(_) | Cmd::VolumeSizes);
+        let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline | Cmd::Inspect(_) | Cmd::VolumeSizes)
+            || matches!(cmd, Cmd::Stack(StackOp::Read { .. } | StackOp::Validate { .. }));
         let res = self.exec_inner(cmd);
         self.shared.busy.fetch_sub(1, Ordering::SeqCst);
         match res {
@@ -428,6 +435,7 @@ impl Worker {
                 }
                 self.compose(dir, project, args)
             }
+            Cmd::Stack(op) => self.stack_op(op),
             Cmd::ComposeUpPath(path) => {
                 let dir = wsl::to_linux_path(&distro, &path)?;
                 self.exec_inner(Cmd::Compose { dir, project: None, args: vec!["up".into(), "-d".into()] })
