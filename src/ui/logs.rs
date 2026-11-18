@@ -151,6 +151,7 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
     egui::Window::new(title)
         .id(egui::Id::new("logs-window"))
         .open(&mut open)
+        .collapsible(false)
         .default_size([960.0, 560.0])
         .show(ctx, |ui| {
             term = view(ui, lv);

@@ -151,6 +151,7 @@ fn editor_window(app: &mut App, ctx: &egui::Context) {
     let mut cmd = None;
     let dirty = ed.text != ed.orig;
     egui::Window::new(format!("{PENCIL} {}{}", ed.path, if dirty { " •" } else { "" }))
+        .collapsible(false)
         .id(egui::Id::new("compose-editor"))
         .open(&mut open)
         .default_size([820.0, 580.0])

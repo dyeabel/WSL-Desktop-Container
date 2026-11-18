@@ -492,6 +492,7 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
     if let Some(ed) = app.files.editor.as_mut() {
         let dirty = ed.text != ed.orig;
         egui::Window::new(format!("\u{E34C} {}{}", ed.path, if dirty { " •" } else { "" }))
+            .collapsible(false)
             .id(egui::Id::new("file-editor"))
             .open(&mut open)
             .default_size([820.0, 560.0])

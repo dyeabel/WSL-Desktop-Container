@@ -575,6 +575,7 @@ fn dialogs(ctx: &egui::Context, st: &mut CfState) {
     if let Some(ed) = st.editor.as_mut() {
         let dirty = ed.text != ed.orig;
         egui::Window::new(format!("\u{E34C} {}: {}{}", st.name, ed.path, if dirty { " •" } else { "" }))
+            .collapsible(false)
             .id(egui::Id::new(("cfile-editor", view)))
             .open(&mut open)
             .default_size([820.0, 560.0])

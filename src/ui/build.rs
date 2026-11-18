@@ -272,6 +272,7 @@ fn log_window(app: &mut App, ctx: &egui::Context) {
     let mut open = true;
     let mut close = false;
     egui::Window::new(tf!("{HAMMER} Sestavení: {}", "{HAMMER} Build: {}", log.title))
+        .collapsible(false)
         .id(egui::Id::new("build-log"))
         .open(&mut open)
         .default_size([900.0, 520.0])
