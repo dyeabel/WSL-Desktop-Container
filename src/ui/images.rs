@@ -307,19 +307,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             if accent_button(ui, t!("\u{E30C} Hledat na Docker Hubu…", "\u{E30C} Search Docker Hub…")).clicked() {
                 app.hub.open = true;
             }
+            crate::ui::build::toolbar_button(app, ui);
             gap(ui);
-            let r = ui.add(
-                field(&mut app.pull_input)
-                    .hint_text(t!("nebo přesný název, např. ghcr.io/org/app:1.2", "or an exact name, e.g. ghcr.io/org/app:1.2"))
-                    .desired_width(280.0),
-            );
+            // pevná šířka: Hledat + Sestavit + pole + Stáhnout se vejdou na jeden řádek
+            let w = 200.0;
+            // krátká nápověda – delší by pole roztáhla (wrap_mode Extend) a tlačítko by se zalomilo
+            let r = ui
+                .add(field(&mut app.pull_input).hint_text(t!("nebo přesný název…", "or exact name…")).desired_width(w))
+                .on_hover_text(t!("Přesný název image, např. ghcr.io/org/app:1.2", "Exact image name, e.g. ghcr.io/org/app:1.2"));
             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if (ui.button(t!("\u{E20C} Stáhnout", "\u{E20C} Pull")).clicked() || enter) && !app.pull_input.trim().is_empty() {
                 app.send(Cmd::Pull(app.pull_input.trim().to_string()));
                 app.pull_input.clear();
             }
-            gap(ui);
-            crate::ui::build::toolbar_button(app, ui);
         } else {
             more_menu(ui, |ui| {
                 if ui
