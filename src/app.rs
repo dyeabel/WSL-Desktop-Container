@@ -53,22 +53,7 @@ pub struct Confirm {
     pub cmd: Cmd,
 }
 
-pub struct LogView {
-    pub id: String,
-    pub name: String,
-    pub buf: Arc<Mutex<String>>,
-    pub stop: Arc<AtomicBool>,
-    pub filter: String,
-    pub wrap: bool,
-    /// posouvat na konec při nových řádcích
-    pub follow: bool,
-}
-
-impl Drop for LogView {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-    }
-}
+pub use crate::ui::logs::LogView;
 
 pub struct App {
     pub cfg: Arc<RwLock<Config>>,
@@ -382,34 +367,15 @@ impl App {
 
     /// Spustí streamování posledních `tail` řádků logu (a dalších) do nového `LogView`.
     pub fn spawn_logs(&self, id: String, name: String, tail: u32) -> LogView {
-        let buf = Arc::new(Mutex::new(String::new()));
-        let stop = Arc::new(AtomicBool::new(false));
         let port = self.cfg.read().map(|c| c.port).unwrap_or(2375);
-        let (b, s) = (buf.clone(), stop.clone());
-        let view_id = id.clone();
-        std::thread::spawn(move || {
-            let d = crate::docker::Docker::new(port);
-            let res = d.stream_logs(&id, tail, |chunk| {
-                if s.load(Ordering::Relaxed) {
-                    return false;
-                }
-                if let Ok(mut g) = b.lock() {
-                    g.push_str(chunk);
-                    if g.len() > 4_000_000 {
-                        let cut = g.len() - 3_000_000;
-                        let cut = (cut..g.len()).find(|i| g.is_char_boundary(*i)).unwrap_or(0);
-                        g.drain(..cut);
-                    }
-                }
-                true
-            });
-            if let Err(e) = res {
-                if let Ok(mut g) = b.lock() {
-                    g.push_str(&tf!("\n[chyba streamu logů: {e}]\n", "\n[log stream error: {e}]\n"));
-                }
-            }
-        });
-        LogView { id: view_id, name, buf, stop, filter: String::new(), wrap: true, follow: true }
+        LogView::single(port, id, name, tail)
+    }
+
+    /// Okno se sloučenými živými logy všech kontejnerů compose projektu.
+    pub fn open_stack_logs(&mut self, project: &str) {
+        let port = self.cfg.read().map(|c| c.port).unwrap_or(2375);
+        let targets = crate::logbuf::stack_targets(&self.snap.containers, project);
+        self.logs = Some(LogView::stack(port, project.to_string(), targets));
     }
 
     fn drain(&mut self) {

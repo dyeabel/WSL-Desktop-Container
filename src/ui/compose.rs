@@ -356,8 +356,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 if ui.button("\u{E2F2} ps").clicked() {
                     app.send(c(&["ps", "-a"]));
                 }
-                if ui.button(t!("\u{EB7A} Logy", "\u{EB7A} Logs")).on_hover_text("docker compose logs --tail 300").clicked() {
-                    app.send(c(&["logs", "--no-color", "--tail", "300"]));
+                if ui
+                    .button(t!("\u{EB7A} Logy", "\u{EB7A} Logs"))
+                    .on_hover_text(t!("Živé logy všech kontejnerů stacku v jednom okně", "Live logs of all the stack's containers in one window"))
+                    .clicked()
+                {
+                    app.open_stack_logs(&s.name);
                 }
                 if ui.button("\u{E4A6} Down").clicked() {
                     app.ask(

@@ -658,44 +658,102 @@ impl Docker {
             .unwrap_or(false)
     }
 
-    /// Streamuje logy, dokud `on_chunk` vrací true.
-    pub fn stream_logs(&self, id: &str, tail: u32, mut on_chunk: impl FnMut(&str) -> bool) -> Result<(), String> {
+    /// Streamuje logy, dokud `on_chunk` vrací true, stream neskončí nebo se nezavolá
+    /// `opts.closer.close()`. `on_chunk(text, celé_řádky)`: u kontejnerů bez TTY je každý rámec
+    /// ukončený řádek, u TTY jde o surové bloky (řádek může pokračovat v dalším bloku).
+    ///
+    /// Spojení se otevírá přímo (ne přes ureq), aby ho šlo z jiného vlákna zavřít
+    /// (`shutdown` socketu) – jinak by vlákno viselo na čtení, dokud kontejner nic nevypíše.
+    pub fn stream_logs(&self, id: &str, opts: &LogOpts, mut on_chunk: impl FnMut(&str, bool) -> bool) -> Result<(), String> {
         let tty = self.is_tty(id);
-        let agent = agent_builder(&self.tls).timeout_connect(Duration::from_secs(2)).build();
-        let resp = agent
-            .get(&self.url(&format!(
-                "/containers/{id}/logs?stdout=1&stderr=1&follow=1&tail={tail}"
-            )))
-            .call()
-            .map_err(Self::err)?;
-        let mut r = resp.into_reader();
-        if tty {
-            let mut buf = [0u8; 8192];
-            loop {
-                let n = r.read(&mut buf).map_err(|e| e.to_string())?;
-                if n == 0 || !on_chunk(&String::from_utf8_lossy(&buf[..n])) {
-                    break;
+        let path = format!(
+            "/containers/{id}/logs?stdout=1&stderr=1&follow={}&tail={}&timestamps={}",
+            opts.follow as u8, opts.tail, opts.timestamps as u8
+        );
+        let res = (|| {
+            let mut r = self.open_stream(&path, &opts.closer)?;
+            if tty {
+                let mut buf = [0u8; 8192];
+                // nedokončený UTF-8 znak na konci bloku počká na další blok
+                let mut carry: Vec<u8> = Vec::new();
+                loop {
+                    let n = r.read(&mut buf).map_err(|e| e.to_string())?;
+                    if n == 0 {
+                        if !carry.is_empty() {
+                            on_chunk(&String::from_utf8_lossy(&carry), false);
+                        }
+                        break;
+                    }
+                    carry.extend_from_slice(&buf[..n]);
+                    let keep = match std::str::from_utf8(&carry) {
+                        Err(e) if e.error_len().is_none() => carry.len() - e.valid_up_to(),
+                        _ => 0,
+                    };
+                    let rest = carry.split_off(carry.len() - keep);
+                    let go_on = on_chunk(&String::from_utf8_lossy(&carry), false);
+                    carry = rest;
+                    if !go_on {
+                        break;
+                    }
+                }
+            } else {
+                let mut h = [0u8; 8];
+                loop {
+                    if r.read_exact(&mut h).is_err() {
+                        break;
+                    }
+                    let size = u32::from_be_bytes([h[4], h[5], h[6], h[7]]) as usize;
+                    // ochrana před nesmyslnou velikostí rámce (až 4 GiB)
+                    if size > 16 * 1024 * 1024 {
+                        return Err(format!("log frame too large: {size} B"));
+                    }
+                    let mut data = vec![0u8; size];
+                    r.read_exact(&mut data).map_err(|e| e.to_string())?;
+                    if !on_chunk(&String::from_utf8_lossy(&data), true) {
+                        break;
+                    }
                 }
             }
-        } else {
-            let mut h = [0u8; 8];
-            loop {
-                if r.read_exact(&mut h).is_err() {
-                    break;
-                }
-                let size = u32::from_be_bytes([h[4], h[5], h[6], h[7]]) as usize;
-                // ochrana před nesmyslnou velikostí rámce (až 4 GiB)
-                if size > 16 * 1024 * 1024 {
-                    return Err(format!("log frame too large: {size} B"));
-                }
-                let mut data = vec![0u8; size];
-                r.read_exact(&mut data).map_err(|e| e.to_string())?;
-                if !on_chunk(&String::from_utf8_lossy(&data)) {
-                    break;
-                }
-            }
+            Ok(())
+        })();
+        let by_user = opts.closer.is_closed();
+        opts.closer.close();
+        // chyba čtení po zavření zvenku není chyba
+        if by_user {
+            return Ok(());
         }
-        Ok(())
+        res
+    }
+
+    /// GET na vlastním spojení (HTTP/1.1, případně TLS); vrací čtečku těla odpovědi.
+    fn open_stream(&self, path: &str, closer: &StreamCloser) -> Result<Box<dyn Read + Send>, String> {
+        use std::io::Write;
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], self.port));
+        let sock = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)).map_err(|e| e.to_string())?;
+        let _ = sock.set_nodelay(true);
+        closer.attach(sock.try_clone().map_err(|e| e.to_string())?)?;
+        let mut io: Box<dyn ReadWriteSend> = match &self.tls {
+            None => Box::new(sock),
+            Some(cfg) => {
+                let name = rustls_pki_types::ServerName::try_from("127.0.0.1").map_err(|e| e.to_string())?;
+                let conn = rustls::ClientConnection::new(cfg.clone(), name).map_err(|e| e.to_string())?;
+                Box::new(rustls::StreamOwned::new(conn, sock))
+            }
+        };
+        write!(io, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUser-Agent: wls-desktop\r\nConnection: close\r\n\r\n", self.port)
+            .and_then(|_| io.flush())
+            .map_err(|e| e.to_string())?;
+        let (status, body) = http_response(std::io::BufReader::new(io))?;
+        if !(200..300).contains(&status) {
+            let mut text = String::new();
+            let _ = body.take(64 * 1024).read_to_string(&mut text);
+            let msg = serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
+                .unwrap_or(text);
+            return Err(format!("HTTP {status}: {}", msg.trim()));
+        }
+        Ok(body)
     }
 
     /// Odebírá `/events`. `on_connected` se zavolá po navázání spojení, `on_event` pro každou
@@ -790,9 +848,172 @@ impl Docker {
     }
 }
 
+// ---------------------------------------------------------------- stream logů
+
+/// Parametry `stream_logs`.
+#[derive(Clone)]
+pub struct LogOpts {
+    pub tail: u32,
+    pub follow: bool,
+    /// `timestamps=1` – každý řádek začíná časem RFC3339
+    pub timestamps: bool,
+    /// zavření spojení z jiného vlákna
+    pub closer: StreamCloser,
+}
+
+impl LogOpts {
+    pub fn follow(tail: u32) -> Self {
+        Self { tail, follow: true, timestamps: true, closer: StreamCloser::default() }
+    }
+}
+
+/// Umožní zavřít probíhající stream z jiného vlákna (`shutdown` socketu odblokuje čtení).
+#[derive(Clone, Default)]
+pub struct StreamCloser(std::sync::Arc<std::sync::Mutex<(bool, Option<std::net::TcpStream>)>>);
+
+impl StreamCloser {
+    /// Zavře spojení (i budoucí – `attach` po zavření vrátí chybu).
+    pub fn close(&self) {
+        if let Ok(mut g) = self.0.lock() {
+            g.0 = true;
+            if let Some(s) = g.1.take() {
+                let _ = s.shutdown(std::net::Shutdown::Both);
+            }
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.0.lock().map(|g| g.0).unwrap_or(true)
+    }
+
+    fn attach(&self, s: std::net::TcpStream) -> Result<(), String> {
+        let mut g = self.0.lock().map_err(|e| e.to_string())?;
+        if g.0 {
+            let _ = s.shutdown(std::net::Shutdown::Both);
+            return Err("closed".into());
+        }
+        g.1 = Some(s);
+        Ok(())
+    }
+}
+
+trait ReadWriteSend: Read + std::io::Write + Send {}
+impl<T: Read + std::io::Write + Send> ReadWriteSend for T {}
+
+/// Přečte stavový řádek a hlavičky HTTP/1.1 odpovědi; vrací (status, čtečka těla) –
+/// tělo je dekódované z `chunked`, případně omezené `Content-Length`.
+fn http_response<R: std::io::BufRead + Send + 'static>(mut r: R) -> Result<(u16, Box<dyn Read + Send>), String> {
+    let mut line = String::new();
+    r.read_line(&mut line).map_err(|e| e.to_string())?;
+    let status: u16 = line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| format!("invalid HTTP response: {}", line.trim()))?;
+    let (mut chunked, mut len) = (false, None);
+    loop {
+        line.clear();
+        if r.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+            return Err("unexpected end of HTTP headers".into());
+        }
+        let l = line.trim_end();
+        if l.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = l.split_once(':') {
+            let (k, v) = (k.trim(), v.trim());
+            if k.eq_ignore_ascii_case("transfer-encoding") && v.to_ascii_lowercase().contains("chunked") {
+                chunked = true;
+            } else if k.eq_ignore_ascii_case("content-length") {
+                len = v.parse::<u64>().ok();
+            }
+        }
+    }
+    let body: Box<dyn Read + Send> = if chunked {
+        Box::new(Chunked { r, left: 0, done: false })
+    } else if let Some(n) = len {
+        Box::new(r.take(n))
+    } else {
+        Box::new(r)
+    };
+    Ok((status, body))
+}
+
+/// Dekodér `Transfer-Encoding: chunked`.
+struct Chunked<R> {
+    r: R,
+    /// zbývá bajtů v aktuálním bloku
+    left: u64,
+    done: bool,
+}
+
+impl<R: std::io::BufRead> Read for Chunked<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::{Error, ErrorKind};
+        if self.done || buf.is_empty() {
+            return Ok(0);
+        }
+        if self.left == 0 {
+            let mut line = String::new();
+            if self.r.read_line(&mut line)? == 0 {
+                return Err(Error::new(ErrorKind::UnexpectedEof, "chunked: unexpected end"));
+            }
+            let hex = line.trim().split(';').next().unwrap_or("").trim();
+            let size = u64::from_str_radix(hex, 16).map_err(|_| Error::new(ErrorKind::InvalidData, format!("chunked: bad size {hex:?}")))?;
+            if size == 0 {
+                self.done = true;
+                return Ok(0);
+            }
+            self.left = size;
+        }
+        let want = buf.len().min(self.left as usize);
+        let n = self.r.read(&mut buf[..want])?;
+        if n == 0 {
+            return Err(Error::new(ErrorKind::UnexpectedEof, "chunked: unexpected end"));
+        }
+        self.left -= n as u64;
+        if self.left == 0 {
+            // CRLF za blokem
+            let mut crlf = String::new();
+            self.r.read_line(&mut crlf)?;
+        }
+        Ok(n)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn http_response_chunked_and_errors() {
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n7;ext=1\r\n, world\r\n0\r\n\r\n";
+        let (st, mut body) = http_response(std::io::Cursor::new(raw.to_vec())).unwrap();
+        assert_eq!(st, 200);
+        let mut s = String::new();
+        body.read_to_string(&mut s).unwrap();
+        assert_eq!(s, "hello, world");
+
+        let raw = b"HTTP/1.1 404 Not Found\r\nContent-Length: 22\r\n\r\n{\"message\":\"no such\"}\nEXTRA";
+        let (st, mut body) = http_response(std::io::Cursor::new(raw.to_vec())).unwrap();
+        assert_eq!(st, 404);
+        let mut s = String::new();
+        body.read_to_string(&mut s).unwrap();
+        assert_eq!(s, "{\"message\":\"no such\"}\n");
+
+        assert!(http_response(std::io::Cursor::new(b"garbage\r\n".to_vec())).is_err());
+    }
+
+    #[test]
+    fn closer_rejects_attach_after_close() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let s = std::net::TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let c = StreamCloser::default();
+        assert!(!c.is_closed());
+        c.close();
+        assert!(c.is_closed());
+        assert!(c.attach(s).is_err());
+    }
 
     #[test]
     fn parses_container_list() {

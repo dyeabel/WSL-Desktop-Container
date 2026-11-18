@@ -73,6 +73,12 @@ pub fn strong_text() -> Color32 {
 pub fn body_text() -> Color32 {
     pick(Color32::from_gray(210), rgb(0x2E, 0x2C, 0x29))
 }
+/// Rozlišovací barva podle odstínu (0..1) – čitelná na pozadí obou motivů
+/// (např. služby ve sloučeném logu stacku).
+pub fn hue(h: f32) -> Color32 {
+    let (s, v) = if is_light() { (0.85, 0.50) } else { (0.50, 0.95) };
+    egui::ecolor::Hsva::new(h.rem_euclid(1.0), s, v, 1.0).into()
+}
 
 /// Režim z nastavení: "dark", "light" nebo "system" (podle Windows).
 pub fn resolve(mode: &str) -> bool {
