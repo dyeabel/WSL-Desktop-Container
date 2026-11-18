@@ -6,6 +6,7 @@ pub(crate) mod compose;
 mod containers;
 mod detail;
 mod distro;
+mod distro_manage;
 mod engine_ops;
 mod events;
 mod fs_ops;
@@ -22,6 +23,7 @@ pub use build::cancel_build;
 pub use spec::{is_windows_path, AddDistroSpec, BuildSpec, RunSpec};
 pub use compose::{NewStackSpec, StackMsg, StackOp};
 pub use detail::{start_stats, StatSample, StatsFeed, STATS_WINDOW};
+pub use distro_manage::{default_import_folder, DistroDisk, DistroOp};
 #[cfg(test)]
 pub use detail::recreate_for_test;
 
@@ -116,6 +118,8 @@ pub enum Cmd {
     ListOnline,
     /// nainstalovat a připravit novou distribuci
     AddDistro(AddDistroSpec),
+    /// odebrání / export / import / disk distribuce
+    Distro(DistroOp),
     /// odinstalovat engine (a odebrat nastavení API); purge = smazat i data
     UninstallEngine { engine: Engine, purge: bool },
     Sleep,
@@ -164,6 +168,8 @@ pub enum Msg {
     VolumeSizes(std::collections::HashMap<String, u64>),
     /// výsledky operací se stacky (Cmd::Stack)
     Stack(StackMsg),
+    /// virtuální disk distribuce (název, cesta / velikost / sparse, nebo chyba)
+    DistroDisk(String, Result<DistroDisk, String>),
 }
 
 /// Souhrnný stav pro tray (zapisuje worker, čte vlákno UI/traye).
@@ -479,6 +485,7 @@ impl Worker {
                 self.send(Msg::Output(title, log));
                 res
             }
+            Cmd::Distro(op) => self.distro_op(op),
             Cmd::InstallEngine(engine) => {
                 let mut log = String::new();
                 let res = self.install_engine(engine, &mut log);

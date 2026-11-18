@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::thread;
 
 /// Uložený seznam kontejnerů, které naposledy běžely – pro každou distribuci a engine zvlášť.
-mod last_running {
+pub(super) mod last_running {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -32,11 +32,45 @@ mod last_running {
     pub fn save(key: &str, ids: &[String]) {
         let mut all = load_all();
         all.insert(key.to_string(), ids.to_vec());
+        write_all(&all);
+    }
+
+    /// Odebere záznamy distribuce (klíče `"<distro>/<engine>"`). Vrací, zda se něco odebralo.
+    pub fn drop_distro(all: &mut BTreeMap<String, Vec<String>>, distro: &str) -> bool {
+        let before = all.len();
+        all.retain(|k, _| k.split_once('/').map(|(d, _)| !d.eq_ignore_ascii_case(distro)).unwrap_or(true));
+        all.len() != before
+    }
+
+    /// Zapomene uložené kontejnery odebrané distribuce.
+    pub fn forget_distro(distro: &str) {
+        let mut all = load_all();
+        if drop_distro(&mut all, distro) {
+            write_all(&all);
+        }
+    }
+
+    fn write_all(all: &BTreeMap<String, Vec<String>>) {
         if let Some(p) = path() {
             if let Some(d) = p.parent() {
                 let _ = std::fs::create_dir_all(d);
             }
             let _ = std::fs::write(p, serde_json::to_string_pretty(&all).unwrap_or_default());
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn drop_distro_keys() {
+            let mut m: super::BTreeMap<String, Vec<String>> = super::BTreeMap::new();
+            m.insert("Debian/Podman".into(), vec!["a".into()]);
+            m.insert("Debian/Docker".into(), vec![]);
+            m.insert("Debian-dev/Podman".into(), vec![]);
+            m.insert("Ubuntu/Docker".into(), vec![]);
+            assert!(super::drop_distro(&mut m, "debian"));
+            assert_eq!(m.keys().cloned().collect::<Vec<_>>(), ["Debian-dev/Podman", "Ubuntu/Docker"]);
+            assert!(!super::drop_distro(&mut m, "Fedora"));
         }
     }
 }

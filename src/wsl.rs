@@ -333,3 +333,281 @@ pub fn to_linux_path(distro: &str, path: &str) -> Result<String, String> {
     }
     Ok(run(distro, None, None, &["wslpath", "-a", p])?.trim().to_string())
 }
+
+// --- správa distribucí: odebrání, export, import, disk ---
+
+/// Platný název nové distribuce pro `wsl --import`: neprázdný, jen `[A-Za-z0-9._-]`, max. 64 znaků.
+pub fn valid_distro_name(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Formát exportu distribuce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExportFormat {
+    #[default]
+    Tar,
+    Vhd,
+}
+
+impl ExportFormat {
+    pub fn ext(self) -> &'static str {
+        match self {
+            ExportFormat::Tar => "tar",
+            ExportFormat::Vhd => "vhdx",
+        }
+    }
+
+    /// Formát podle přípony souboru (.vhd/.vhdx = Vhd, jinak tar).
+    pub fn from_path(path: &str) -> Self {
+        let p = path.trim().to_ascii_lowercase();
+        if p.ends_with(".vhdx") || p.ends_with(".vhd") { ExportFormat::Vhd } else { ExportFormat::Tar }
+    }
+}
+
+/// Text nápovědy `wsl --help` (načte se jednou) – podle něj se poznají podporované přepínače.
+fn help_text() -> &'static str {
+    static HELP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HELP.get_or_init(|| {
+        hidden("wsl.exe")
+            .arg("--help")
+            .output()
+            .map(|o| format!("{}{}", decode(&o.stdout), decode(&o.stderr)))
+            .unwrap_or_default()
+    })
+}
+
+/// Umí `wsl --export` přepínač `--format` (novější WSL), nebo jen starší `--vhd`?
+pub fn export_has_format_flag() -> bool {
+    let h = help_text();
+    h.is_empty() || h.contains("--format")
+}
+
+/// Nabízí WSL `wsl --manage … --set-sparse` / `--compact`?
+pub fn manage_support() -> (bool, bool) {
+    let h = help_text();
+    (h.contains("--set-sparse"), h.contains("--compact"))
+}
+
+/// Argumenty `wsl --export` (každý jako samostatná položka argv).
+pub fn export_args(distro: &str, file: &str, format: ExportFormat, format_flag: bool) -> Vec<String> {
+    let mut v = vec!["--export".to_string(), distro.to_string(), file.to_string()];
+    if format == ExportFormat::Vhd {
+        if format_flag {
+            v.extend(["--format".to_string(), "vhd".to_string()]);
+        } else {
+            v.push("--vhd".to_string());
+        }
+    }
+    v
+}
+
+/// Argumenty `wsl --import` (formát se pozná podle přípony souboru).
+pub fn import_args(distro: &str, folder: &str, file: &str) -> Vec<String> {
+    let mut v = vec!["--import".to_string(), distro.to_string(), folder.to_string(), file.to_string()];
+    if ExportFormat::from_path(file) == ExportFormat::Vhd {
+        v.push("--vhd".to_string());
+    }
+    v
+}
+
+/// Argumenty `wsl --manage <distro> …` pro kompaktaci / zhuštěný disk.
+pub fn manage_args(distro: &str, compact: bool) -> Vec<String> {
+    let mut v = vec!["--manage".to_string(), distro.to_string()];
+    if compact {
+        v.push("--compact".to_string());
+    } else {
+        v.extend(["--set-sparse".to_string(), "true".to_string()]);
+    }
+    v
+}
+
+fn wsl_owned(args: &[String]) -> Result<String, String> {
+    let a: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    wsl_simple(&a)
+}
+
+/// Zruší registraci distribuce a smaže její disk (nevratné).
+pub fn unregister(distro: &str) -> Result<String, String> {
+    wsl_simple(&["--unregister", distro])
+}
+
+/// Exportuje distribuci do souboru (může trvat minuty).
+pub fn export(distro: &str, file: &str, format: ExportFormat) -> Result<String, String> {
+    wsl_owned(&export_args(distro, file, format, export_has_format_flag()))
+}
+
+/// Importuje distribuci ze souboru .tar / .tar.gz / .vhdx do složky.
+pub fn import(distro: &str, folder: &str, file: &str) -> Result<String, String> {
+    wsl_owned(&import_args(distro, folder, file))
+}
+
+/// `wsl --manage …`; disk bývá chvíli po `--terminate` ještě připojený (ERROR_SHARING_VIOLATION),
+/// proto se několikrát zopakuje. Na WSL 2.x/3.x zůstává disk spuštěné distribuce připojený
+/// k VM často až do `wsl --shutdown` – pak chyba propadne volajícímu.
+fn manage(args: &[String]) -> Result<String, String> {
+    let mut res = wsl_owned(args);
+    for _ in 0..3 {
+        match &res {
+            Err(e) if e.contains("SHARING_VIOLATION") => {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                res = wsl_owned(args);
+            }
+            _ => break,
+        }
+    }
+    res
+}
+
+/// Zapne zhuštěný (sparse) disk – WSL pak samo vrací uvolněné místo (distribuce musí být ukončená).
+pub fn set_sparse(distro: &str) -> Result<String, String> {
+    manage(&manage_args(distro, false))
+}
+
+/// Zkomprimuje VHDX distribuce (distribuce musí být ukončená, disk nesmí být zhuštěný).
+pub fn compact(distro: &str) -> Result<String, String> {
+    manage(&manage_args(distro, true))
+}
+
+/// Je soubor zhuštěný (FILE_ATTRIBUTE_SPARSE_FILE)?
+pub fn is_sparse(meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        meta.file_attributes() & 0x200 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = meta;
+        false
+    }
+}
+
+/// Cesta k virtuálnímu disku distribuce (BasePath + VhdFileName z registru Lxss).
+pub fn vhd_path(distro: &str) -> Option<std::path::PathBuf> {
+    lxss::find(distro).map(|(base, file)| {
+        let base = base.strip_prefix(r"\\?\").unwrap_or(&base).to_string();
+        std::path::PathBuf::from(base).join(if file.is_empty() { "ext4.vhdx".to_string() } else { file })
+    })
+}
+
+#[cfg(windows)]
+mod lxss {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_REG_SZ,
+    };
+
+    const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Lxss";
+
+    fn w(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn get_sz(key: HKEY, name: &str) -> Option<String> {
+        let n = w(name);
+        let mut buf = vec![0u16; 1024];
+        let mut len = (buf.len() * 2) as u32;
+        let r = unsafe {
+            RegGetValueW(key, std::ptr::null(), n.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut len)
+        };
+        if r != 0 {
+            return None;
+        }
+        let chars = (len as usize / 2).saturating_sub(1);
+        Some(String::from_utf16_lossy(&buf[..chars.min(buf.len())]))
+    }
+
+    /// (BasePath, VhdFileName) distribuce podle DistributionName.
+    pub fn find(distro: &str) -> Option<(String, String)> {
+        let k = w(KEY);
+        let mut root: HKEY = std::ptr::null_mut();
+        if unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, k.as_ptr(), 0, KEY_READ, &mut root) } != 0 {
+            return None;
+        }
+        let mut found = None;
+        let mut i = 0u32;
+        loop {
+            let mut name = [0u16; 256];
+            let mut len = name.len() as u32;
+            let r = unsafe {
+                RegEnumKeyExW(
+                    root,
+                    i,
+                    name.as_mut_ptr(),
+                    &mut len,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if r != 0 {
+                break;
+            }
+            i += 1;
+            let mut sub: HKEY = std::ptr::null_mut();
+            if unsafe { RegOpenKeyExW(root, name.as_ptr(), 0, KEY_READ, &mut sub) } != 0 {
+                continue;
+            }
+            if get_sz(sub, "DistributionName").map(|d| d.eq_ignore_ascii_case(distro)).unwrap_or(false) {
+                found = get_sz(sub, "BasePath").map(|b| (b, get_sz(sub, "VhdFileName").unwrap_or_default()));
+            }
+            unsafe { RegCloseKey(sub) };
+            if found.is_some() {
+                break;
+            }
+        }
+        unsafe { RegCloseKey(root) };
+        found
+    }
+}
+
+#[cfg(not(windows))]
+mod lxss {
+    pub fn find(_: &str) -> Option<(String, String)> {
+        None
+    }
+}
+
+#[cfg(test)]
+mod manage_tests {
+    use super::*;
+
+    #[test]
+    fn names() {
+        assert!(valid_distro_name("WLS-Test-Import"));
+        assert!(valid_distro_name("debian_12.dev"));
+        assert!(!valid_distro_name(""));
+        assert!(!valid_distro_name("a b"));
+        assert!(!valid_distro_name("a;calc"));
+        assert!(!valid_distro_name("Ubuntu/x"));
+        assert!(!valid_distro_name("č"));
+        assert!(!valid_distro_name(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn export_argv() {
+        assert_eq!(export_args("Deb", r"C:\b k\x.tar", ExportFormat::Tar, true), ["--export", "Deb", r"C:\b k\x.tar"]);
+        assert_eq!(export_args("Deb", "x.vhdx", ExportFormat::Vhd, true), ["--export", "Deb", "x.vhdx", "--format", "vhd"]);
+        assert_eq!(export_args("Deb", "x.vhdx", ExportFormat::Vhd, false), ["--export", "Deb", "x.vhdx", "--vhd"]);
+    }
+
+    #[test]
+    fn import_argv() {
+        assert_eq!(import_args("N", r"D:\wsl\N", r"D:\a.tar"), ["--import", "N", r"D:\wsl\N", r"D:\a.tar"]);
+        assert_eq!(import_args("N", "f", r"D:\A.VHDX"), ["--import", "N", "f", r"D:\A.VHDX", "--vhd"]);
+        assert_eq!(import_args("N", "f", "a.tar.gz").len(), 4);
+    }
+
+    #[test]
+    fn manage_argv() {
+        assert_eq!(manage_args("N", false), ["--manage", "N", "--set-sparse", "true"]);
+        assert_eq!(manage_args("N", true), ["--manage", "N", "--compact"]);
+    }
+
+    #[test]
+    fn format_from_path() {
+        assert_eq!(ExportFormat::from_path("a.vhd"), ExportFormat::Vhd);
+        assert_eq!(ExportFormat::from_path("a.tar"), ExportFormat::Tar);
+        assert_eq!(ExportFormat::Vhd.ext(), "vhdx");
+    }
+}
