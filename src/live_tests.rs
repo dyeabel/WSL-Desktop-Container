@@ -740,3 +740,45 @@ fn live_shared_agent_speed() {
     let shared = t.elapsed();
     eprintln!("{n}× snapshot: nový agent {fresh:?}, sdílený {shared:?}");
 }
+
+/// F-05: stack z labelů – labely z image a neexistující složka se odmítnou, skutečný projekt projde.
+#[test]
+#[ignore]
+fn live_compose_label_trust() {
+    let mut cfg = crate::config::Config::load();
+    if let Ok(d) = std::env::var("WLS_DISTRO") {
+        cfg.distro = d;
+    }
+    let d = Docker::new(cfg.port);
+    let cli = cfg.engine.cli(cfg.port, cfg.tls);
+    let run = |extra: &[&str]| {
+        let mut a: Vec<String> = cli.clone();
+        a.extend(extra.iter().map(|s| s.to_string()));
+        wsl::run_owned(&cfg.distro, None, None, &a)
+    };
+    let _ = run(&["rm", "-f", "wls-test-trust-a", "wls-test-trust-b"]);
+    // image, který si sám nastaví labely compose
+    let dir = std::env::temp_dir().join(format!("wls-test-trust-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("Dockerfile"),
+        "FROM docker.io/library/alpine:3.20\nLABEL com.docker.compose.project=wls-test-evil com.docker.compose.project.working_dir=/tmp\n",
+    )
+    .unwrap();
+    let spec = crate::worker::BuildSpec { context: dir.to_string_lossy().to_string(), tags: "wls-test-trust:latest".into(), ..Default::default() };
+    crate::worker::build::run_build(&cfg.distro, cfg.engine, cfg.port, cfg.tls, &spec, |_| {}).expect("build");
+    run(&["create", "--name", "wls-test-trust-a", "wls-test-trust:latest", "true"]).expect("create a");
+    let evil = crate::worker::check_stack_for_test(cfg.clone(), "/tmp", "wls-test-evil");
+    // label na kontejneru (ne z image), ale složka neexistuje
+    run(&["create", "--name", "wls-test-trust-b", "--label", "com.docker.compose.project=wls-test-gone", "docker.io/library/alpine:3.20", "true"]).expect("create b");
+    let gone = crate::worker::check_stack_for_test(cfg.clone(), "/nonexistent/wls-test", "wls-test-gone");
+    // stejný projekt, existující složka s compose souborem -> projde
+    wsl::run(&cfg.distro, None, None, &["sh", "-c", "mkdir -p /tmp/wls-test-trust-ok && echo 'services: {}' > /tmp/wls-test-trust-ok/compose.yaml"]).unwrap();
+    let ok = crate::worker::check_stack_for_test(cfg.clone(), "/tmp/wls-test-trust-ok", "wls-test-gone");
+    let _ = run(&["rm", "-f", "wls-test-trust-a", "wls-test-trust-b"]);
+    let _ = d.delete("/images/wls-test-trust:latest");
+    let _ = wsl::run(&cfg.distro, None, None, &["rm", "-rf", "/tmp/wls-test-trust-ok"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    eprintln!("evil: {evil:?}\ngone: {gone:?}\nok: {ok:?}");
+    assert!(evil.is_err() && gone.is_err() && ok.is_ok());
+}

@@ -26,6 +26,8 @@ pub use detail::{start_stats, StatSample, StatsFeed, STATS_WINDOW};
 pub use distro_manage::{default_import_folder, DistroDisk, DistroOp};
 #[cfg(test)]
 pub use detail::recreate_for_test;
+#[cfg(test)]
+pub use compose::check_stack_for_test;
 
 use crate::config::Config;
 use crate::engine::Engine;

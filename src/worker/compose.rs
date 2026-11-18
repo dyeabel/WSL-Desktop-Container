@@ -161,6 +161,12 @@ impl Worker {
         }
         a.extend(args.iter().cloned());
         let title = format!("{} compose {}", cfg.engine.name().to_lowercase(), args.join(" "));
+        // stack poznaný z labelů kontejnerů: před příkazy, které spouští / sestavují, ověřit,
+        // že labely nepodstrčil image a že složka opravdu obsahuje compose projekt (F-05)
+        let runs = args.iter().any(|x| matches!(x.as_str(), "up" | "build" | "pull" | "create" | "run" | "restart" | "start"));
+        if let (Some(p), true) = (&project, runs) {
+            self.check_stack_trusted(&distro, &dir, p, &args)?;
+        }
         let r = wsl::run_owned(&distro, None, Some(&dir), &a);
         match r {
             Ok(out) => {
@@ -171,6 +177,49 @@ impl Worker {
                 self.send(Msg::Output(title, clean_output(&e)));
                 Err(t!("Compose selhal – viz výstup", "Compose failed – see output").into())
             }
+        }
+    }
+
+    /// Kontroly před spuštěním stacku poznaného z labelů (F-05):
+    /// - labely compose nesmí pocházet z image (to by si je mohl nastavit autor image),
+    /// - pracovní složka musí existovat a (bez vlastního -f) obsahovat compose soubor.
+    fn check_stack_trusted(&self, distro: &str, dir: &str, project: &str, args: &[String]) -> Result<(), String> {
+        let d = self.docker();
+        let filter = serde_json::json!({ "label": [format!("com.docker.compose.project={project}")] }).to_string();
+        let list: Vec<serde_json::Value> = d
+            .get(&format!("/containers/json?all=1&filters={}", crate::docker::enc(&filter)))
+            .map_err(String::from)?;
+        let mut seen = std::collections::HashSet::new();
+        for c in &list {
+            let Some(img) = c.get("ImageID").and_then(|v| v.as_str()) else { continue };
+            if !seen.insert(img.to_string()) {
+                continue;
+            }
+            if let Ok(i) = d.get::<serde_json::Value>(&format!("/images/{}/json", crate::docker::enc(img))) {
+                let inherited = i
+                    .pointer("/Config/Labels")
+                    .and_then(|l| l.as_object())
+                    .is_some_and(|l| l.contains_key("com.docker.compose.project") || l.contains_key("com.docker.compose.project.working_dir"));
+                if inherited {
+                    return Err(tf!(
+                        "Stack {project} odmítnut: labely compose pochází z image, ne ze skutečného compose projektu. Spusť ho ze složky (Spustit stack ze složky).",
+                        "Stack {project} refused: the compose labels come from the image, not from a real compose project. Start it from its folder (Start stack from a folder)."
+                    ));
+                }
+            }
+        }
+        let script = r#"[ -d "$1" ] || { echo "nodir"; exit 0; }
+for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do [ -f "$1/$f" ] && { echo ok; exit 0; }; done
+echo nofile"#;
+        let out = wsl::run(distro, None, None, &["sh", "-c", script, "sh", dir]).unwrap_or_default();
+        let custom_file = args.iter().any(|x| x == "-f" || x == "--file");
+        match out.trim() {
+            "nodir" => Err(tf!("Složka stacku {dir} neexistuje", "The stack folder {dir} does not exist")),
+            "nofile" if !custom_file => Err(tf!(
+                "Ve složce {dir} není compose soubor – stack nejde spustit",
+                "There is no compose file in {dir} – the stack cannot be started"
+            )),
+            _ => Ok(()),
         }
     }
 
@@ -293,4 +342,19 @@ mod tests {
         assert!(!ENV_CHECK_SCRIPT.contains("A="));
         assert_eq!(&a[5..], ["docker", "compose", "-p", "p", "--project-directory", "/s"]);
     }
+}
+
+/// Pro živé testy: kontrola stacku z labelů stejnou cestou jako před `compose up`.
+#[cfg(test)]
+pub fn check_stack_for_test(cfg: crate::config::Config, dir: &str, project: &str) -> Result<(), String> {
+    let (msg, _m) = std::sync::mpsc::channel();
+    let (cmd, _c) = std::sync::mpsc::channel();
+    let w = Worker {
+        ctx: eframe::egui::Context::default(),
+        cfg: std::sync::Arc::new(std::sync::RwLock::new(cfg)),
+        msg,
+        cmd,
+        shared: std::sync::Arc::new(super::Shared::default()),
+    };
+    w.check_stack_trusted(&w.cfg().distro, dir, project, &["up".into(), "-d".into()])
 }
