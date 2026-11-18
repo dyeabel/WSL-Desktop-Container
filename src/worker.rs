@@ -199,11 +199,11 @@ pub struct EngineStatus {
 impl EngineStatus {
     pub fn text(&self) -> String {
         if self.connected {
-            format!("{} běží ({}) · {}/{} kontejnerů", self.engine, self.distro, self.running, self.total)
+            tf!("{} běží ({}) · {}/{} kontejnerů", "{} running ({}) · {}/{} containers", self.engine, self.distro, self.running, self.total)
         } else if self.distro_running {
-            format!("{} běží, Docker API nedostupné", self.distro)
+            tf!("{} běží, Docker API nedostupné", "{} running, Docker API unavailable", self.distro)
         } else {
-            format!("{} zastavena", self.distro)
+            tf!("{} zastavena", "{} stopped", self.distro)
         }
     }
 }
@@ -340,7 +340,7 @@ impl Worker {
                     thread::spawn(move || {
                         let d = w.docker();
                         let ok = to_start.iter().filter(|id| d.container_action(id, "start").is_ok()).count();
-                        w.send(Msg::Toast(true, format!("Obnoveno kontejnerů: {ok}/{}", to_start.len())));
+                        w.send(Msg::Toast(true, tf!("Obnoveno kontejnerů: {ok}/{}", "Containers restored: {ok}/{}", to_start.len())));
                         let _ = w.cmd.send(Cmd::Refresh);
                     });
                 }
@@ -493,7 +493,10 @@ impl Worker {
         if self.wait_ping(25) {
             Ok((out, true))
         } else {
-            Err(format!("{out}\nAPI zatím neodpovídá z Windows – zkontroluj networkingMode / localhostForwarding."))
+            Err(tf!(
+                "{out}\nAPI zatím neodpovídá z Windows – zkontroluj networkingMode / localhostForwarding.",
+                "{out}\nThe API is not responding from Windows yet – check networkingMode / localhostForwarding."
+            ))
         }
     }
 
@@ -506,24 +509,30 @@ impl Worker {
         };
 
         // 1) instalace balíčků
-        step(log, &format!("Instalace {}", engine.name()));
-        self.send(Msg::Toast(true, format!("Instaluji {} do {distro}… (může trvat několik minut)", engine.name())));
+        step(log, &tf!("Instalace {}", "Installing {}", engine.name()));
+        self.send(Msg::Toast(
+            true,
+            tf!("Instaluji {} do {distro}… (může trvat několik minut)", "Installing {} into {distro}… (may take several minutes)", engine.name()),
+        ));
         match wsl::run(&distro, Some("root"), None, &["sh", "-c", &engine.install_script()]) {
             Ok(o) => log.push_str(&o),
             Err(e) => {
                 log.push_str(&e);
-                return Err(format!("Instalace {} selhala – viz výstup", engine.name()));
+                return Err(tf!("Instalace {} selhala – viz výstup", "Installation of {} failed – see output", engine.name()));
             }
         }
 
         // 2) systemd
-        step(log, "Kontrola systemd");
+        step(log, t!("Kontrola systemd", "Checking systemd"));
         if wsl::run(&distro, Some("root"), None, &["test", "-d", "/run/systemd/system"]).is_err() {
-            log.push_str("systemd neběží – zapínám v /etc/wsl.conf a restartuji distribuci\n");
+            log.push_str(t!(
+                "systemd neběží – zapínám v /etc/wsl.conf a restartuji distribuci\n",
+                "systemd is not running – enabling it in /etc/wsl.conf and restarting the distribution\n"
+            ));
             let script = "grep -q '^systemd=true' /etc/wsl.conf 2>/dev/null || printf '\\n[boot]\\nsystemd=true\\n' >> /etc/wsl.conf";
             wsl::run(&distro, Some("root"), None, &["sh", "-c", script]).map_err(|e| {
                 log.push_str(&e);
-                "Nelze upravit /etc/wsl.conf".to_string()
+                t!("Nelze upravit /etc/wsl.conf", "Cannot modify /etc/wsl.conf").to_string()
             })?;
             self.kill_keepalive();
             let _ = wsl::terminate(&distro);
@@ -535,12 +544,15 @@ impl Worker {
             }
             thread::sleep(Duration::from_secs(3));
             if wsl::run(&distro, Some("root"), None, &["test", "-d", "/run/systemd/system"]).is_err() {
-                log.push_str("systemd stále neběží – zkus „Vypnout celé WSL“ a znovu.\n");
-                return Err("systemd se nepodařilo zapnout".into());
+                log.push_str(t!(
+                    "systemd stále neběží – zkus „Vypnout celé WSL“ a znovu.\n",
+                    "systemd is still not running – try “Shut down WSL” and retry.\n"
+                ));
+                return Err(t!("systemd se nepodařilo zapnout", "Failed to enable systemd").into());
             }
-            log.push_str("systemd běží\n");
+            log.push_str(t!("systemd běží\n", "systemd is running\n"));
         } else {
-            log.push_str("systemd běží\n");
+            log.push_str(t!("systemd běží\n", "systemd is running\n"));
         }
 
         // 3) přepnout engine v konfiguraci a nastavit API
@@ -550,16 +562,20 @@ impl Worker {
             let _ = g.save();
         }
         self.shared.tcp_checked.store(false, Ordering::SeqCst);
-        step(log, "Nastavení TCP API");
+        step(log, t!("Nastavení TCP API", "Setting up the TCP API"));
         match self.setup_api(&cfg) {
             Ok((o, _)) => {
                 log.push_str(&o);
-                log.push_str("\nAPI odpovídá – hotovo.\n");
-                Ok(format!("{} nainstalován a nastaven", engine.name()))
+                log.push_str(t!("\nAPI odpovídá – hotovo.\n", "\nThe API is responding – done.\n"));
+                Ok(tf!("{} nainstalován a nastaven", "{} installed and configured", engine.name()))
             }
             Err(e) => {
                 log.push_str(&e);
-                Err("Engine je nainstalovaný, ale API neodpovídá – viz výstup".into())
+                Err(t!(
+                    "Engine je nainstalovaný, ale API neodpovídá – viz výstup",
+                    "The engine is installed, but the API is not responding – see output"
+                )
+                .into())
             }
         }
     }
@@ -569,49 +585,56 @@ impl Worker {
         let name = if spec.name.trim().is_empty() { spec.distro.clone() } else { spec.name.trim().to_string() };
         let step = |log: &mut String, s: &str| log.push_str(&format!("\n=== {s} ===\n"));
         if wsl::list().map(|l| l.iter().any(|d| d.name.eq_ignore_ascii_case(&name))).unwrap_or(false) {
-            return Err(format!("Distribuce {name} už existuje – zvol jiný název"));
+            return Err(tf!("Distribuce {name} už existuje – zvol jiný název", "Distribution {name} already exists – choose a different name"));
         }
 
         // 1) instalace
-        step(log, &format!("Instalace {} jako {name}", spec.distro));
-        self.send(Msg::Toast(true, format!("Instaluji distribuci {name}… (stahování může trvat několik minut)")));
+        step(log, &tf!("Instalace {} jako {name}", "Installing {} as {name}", spec.distro));
+        self.send(Msg::Toast(
+            true,
+            tf!("Instaluji distribuci {name}… (stahování může trvat několik minut)", "Installing distribution {name}… (the download may take several minutes)"),
+        ));
         match wsl::install_distro(&spec.distro, &name) {
             Ok(o) => log.push_str(&o),
             Err(e) => {
                 log.push_str(&e);
-                return Err(format!("Instalace distribuce {name} selhala – viz výstup"));
+                return Err(tf!("Instalace distribuce {name} selhala – viz výstup", "Installation of distribution {name} failed – see output"));
             }
         }
 
         // 2) systemd, uživatel, sudo
-        step(log, "Příprava (systemd, uživatel, sudo)");
+        step(log, t!("Příprava (systemd, uživatel, sudo)", "Preparation (systemd, user, sudo)"));
         let user = spec.user.trim().to_string();
         match wsl::run(&name, Some("root"), None, &["env", &format!("U={user}"), "sh", "-c", &crate::engine::distro_prepare_script()]) {
             Ok(o) => log.push_str(&o),
             Err(e) => {
                 log.push_str(&e);
-                return Err("Příprava distribuce selhala – viz výstup".into());
+                return Err(t!("Příprava distribuce selhala – viz výstup", "Distribution preparation failed – see output").into());
             }
         }
         if !user.is_empty() && !spec.password.is_empty() {
             match wsl::run_stdin(&name, Some("root"), &["chpasswd"], &format!("{user}:{}\n", spec.password)) {
-                Ok(_) => log.push_str("Heslo nastaveno\n"),
-                Err(e) => log.push_str(&format!("Heslo se nepodařilo nastavit: {e}\n")),
+                Ok(_) => log.push_str(t!("Heslo nastaveno\n", "Password set\n")),
+                Err(e) => log.push_str(&tf!("Heslo se nepodařilo nastavit: {e}\n", "Failed to set the password: {e}\n")),
             }
         }
 
         // 3) restart kvůli systemd a výchozímu uživateli
-        step(log, "Restart distribuce");
+        step(log, t!("Restart distribuce", "Restarting the distribution"));
         let _ = wsl::terminate(&name);
         thread::sleep(Duration::from_secs(3));
         wsl::start(&name)?;
         thread::sleep(Duration::from_secs(3));
         let systemd = wsl::run(&name, Some("root"), None, &["test", "-d", "/run/systemd/system"]).is_ok();
-        log.push_str(if systemd { "systemd běží\n" } else { "systemd zatím neběží – může pomoci „Vypnout celé WSL“\n" });
+        log.push_str(if systemd {
+            t!("systemd běží\n", "systemd is running\n")
+        } else {
+            t!("systemd zatím neběží – může pomoci „Vypnout celé WSL“\n", "systemd is not running yet – “Shut down WSL” may help\n")
+        });
 
         // 4) přepnout aplikaci a/nebo nainstalovat engine
         if spec.use_for_app {
-            step(log, "Přepnutí aplikace na novou distribuci");
+            step(log, t!("Přepnutí aplikace na novou distribuci", "Switching the app to the new distribution"));
             self.kill_keepalive();
             if let Ok(mut g) = self.cfg.write() {
                 g.distro = name.clone();
@@ -623,21 +646,30 @@ impl Worker {
             self.shared.tcp_checked.store(false, Ordering::SeqCst);
             self.send(Msg::ConfigChanged);
             if let Some(e) = spec.engine {
-                return self.install_engine(e, log).map(|_| format!("Distribuce {name} je připravená s {} a aplikace ji používá", e.name()));
+                return self.install_engine(e, log).map(|_| {
+                    tf!(
+                        "Distribuce {name} je připravená s {} a aplikace ji používá",
+                        "Distribution {name} is ready with {} and the app is using it",
+                        e.name()
+                    )
+                });
             }
-            return Ok(format!("Distribuce {name} je připravená a aplikace ji používá – nainstaluj engine na stránce WSL engine"));
+            return Ok(tf!(
+                "Distribuce {name} je připravená a aplikace ji používá – nainstaluj engine na stránce WSL engine",
+                "Distribution {name} is ready and the app is using it – install an engine on the WSL engine page"
+            ));
         }
         if let Some(e) = spec.engine {
-            step(log, &format!("Instalace {} (bez nastavení API)", e.name()));
+            step(log, &tf!("Instalace {} (bez nastavení API)", "Installing {} (without API setup)", e.name()));
             match wsl::run(&name, Some("root"), None, &["sh", "-c", &e.install_script()]) {
                 Ok(o) => log.push_str(&o),
                 Err(err) => {
                     log.push_str(&err);
-                    return Err(format!("Instalace {} selhala – viz výstup", e.name()));
+                    return Err(tf!("Instalace {} selhala – viz výstup", "Installation of {} failed – see output", e.name()));
                 }
             }
         }
-        Ok(format!("Distribuce {name} je nainstalovaná a připravená"))
+        Ok(tf!("Distribuce {name} je nainstalovaná a připravená", "Distribution {name} is installed and ready"))
     }
 
     fn exec_inner(&self, cmd: Cmd) -> Result<String, String> {
@@ -660,33 +692,33 @@ impl Worker {
                         }
                         Ok(String::new())
                     }
-                    FsOp::Mkdir(p) => changed(fs::mkdir(&distro, root, &p), "Složka vytvořena".into()),
-                    FsOp::Touch(p) => changed(fs::touch(&distro, root, &p), "Soubor vytvořen".into()),
-                    FsOp::Rename(a, b) => changed(fs::rename(&distro, root, &a, &b), "Přejmenováno".into()),
+                    FsOp::Mkdir(p) => changed(fs::mkdir(&distro, root, &p), t!("Složka vytvořena", "Folder created").into()),
+                    FsOp::Touch(p) => changed(fs::touch(&distro, root, &p), t!("Soubor vytvořen", "File created").into()),
+                    FsOp::Rename(a, b) => changed(fs::rename(&distro, root, &a, &b), t!("Přejmenováno", "Renamed").into()),
                     FsOp::Delete(p) => {
                         let n = p.len();
-                        changed(fs::delete(&distro, root, &p), format!("Smazáno položek: {n}"))
+                        changed(fs::delete(&distro, root, &p), tf!("Smazáno položek: {n}", "Items deleted: {n}"))
                     }
-                    FsOp::Chmod(m, p) => changed(fs::chmod(&distro, root, &m, &p), format!("Práva nastavena na {m}")),
+                    FsOp::Chmod(m, p) => changed(fs::chmod(&distro, root, &m, &p), tf!("Práva nastavena na {m}", "Permissions set to {m}")),
                     FsOp::Upload(win, dir) => {
                         let mut src = Vec::new();
                         for w in &win {
                             src.push(wsl::to_linux_path(&distro, w)?);
                         }
                         let n = src.len();
-                        changed(fs::copy(&distro, root, &src, &dir), format!("Nahráno položek: {n}"))
+                        changed(fs::copy(&distro, root, &src, &dir), tf!("Nahráno položek: {n}", "Items uploaded: {n}"))
                     }
                     FsOp::Download(items, win_dir) => {
                         let dst = wsl::to_linux_path(&distro, &win_dir)?;
                         let n = items.len();
-                        fs::copy(&distro, root, &items, &dst).map(|_| format!("Staženo {n} položek do {win_dir}"))
+                        fs::copy(&distro, root, &items, &dst).map(|_| tf!("Staženo {n} položek do {win_dir}", "Downloaded {n} items to {win_dir}"))
                     }
                     FsOp::Read(p) => {
                         let t = fs::read_text(&distro, root, &p)?;
                         self.send(Msg::FsFile(p, t));
                         Ok(String::new())
                     }
-                    FsOp::Write(p, t) => changed(fs::write_text(&distro, root, &p, &t), format!("Uloženo: {p}")),
+                    FsOp::Write(p, t) => changed(fs::write_text(&distro, root, &p, &t), tf!("Uloženo: {p}", "Saved: {p}")),
                 }
             }
             Cmd::Container(id, action) => d.container_action(&id, action).map(|_| String::new()),
@@ -698,8 +730,8 @@ impl Worker {
                     // interaktivně ve Windows Terminalu – kontejner se po ukončení smaže (--rm)
                     let mut w: Vec<String> = vec!["-d".into(), distro.clone(), "-e".into()];
                     w.extend(args);
-                    wsl::open_terminal(&format!("{image} (interaktivně)"), &w)?;
-                    return Ok(format!("{image} spuštěn interaktivně v terminálu"));
+                    wsl::open_terminal(&tf!("{image} (interaktivně)", "{image} (interactive)"), &w)?;
+                    return Ok(tf!("{image} spuštěn interaktivně v terminálu", "{image} started interactively in a terminal"));
                 }
                 let out = wsl::run_owned(&distro, None, None, &args)?;
                 // ID je poslední řádek výstupu (před ním může být průběh stahování)
@@ -714,17 +746,19 @@ impl Worker {
                     .unwrap_or_else(|| crate::docker::short_id(&id).to_string());
                 let running = info.as_ref().and_then(|v| v.pointer("/State/Running").and_then(|r| r.as_bool())).unwrap_or(true);
                 if running {
-                    Ok(format!("Spuštěn kontejner {name} z {image}"))
+                    Ok(tf!("Spuštěn kontejner {name} z {image}", "Started container {name} from {image}"))
                 } else {
                     let code = info.as_ref().and_then(|v| v.pointer("/State/ExitCode").and_then(|c| c.as_i64())).unwrap_or(0);
-                    Err(format!(
+                    Err(tf!(
                         "Kontejner {name} z {image} se hned ukončil (kód {code}). Image asi nemá dlouhodobě běžící proces – \
-                         zadej příkaz (např. sleep infinity) nebo zaškrtni „Interaktivně v terminálu“. Výstup najdeš v logu kontejneru."
+                         zadej příkaz (např. sleep infinity) nebo zaškrtni „Interaktivně v terminálu“. Výstup najdeš v logu kontejneru.",
+                        "Container {name} from {image} exited immediately (code {code}). The image probably has no long-running process – \
+                         enter a command (e.g. sleep infinity) or check “Interactive in terminal”. See the container log for output."
                     ))
                 }
             }
             Cmd::Pull(r) => {
-                self.send(Msg::Toast(true, format!("Stahuji {r}…")));
+                self.send(Msg::Toast(true, tf!("Stahuji {r}…", "Pulling {r}…")));
                 d.pull(&r)
             }
             Cmd::HubSearch(term) => {
@@ -737,15 +771,15 @@ impl Worker {
                 self.send(Msg::HubTags(repo, r));
                 Ok(String::new())
             }
-            Cmd::RemoveImage(id) => d.delete(&format!("/images/{}", crate::docker::enc(&id))).map(|_| "Image odstraněn".into()),
+            Cmd::RemoveImage(id) => d.delete(&format!("/images/{}", crate::docker::enc(&id))).map(|_| t!("Image odstraněn", "Image removed").into()),
             Cmd::PruneImages { all } => d.prune("images", Some(if all { r#"{"dangling":["false"]}"# } else { r#"{"dangling":["true"]}"# })),
-            Cmd::CreateVolume(n) => d.post_json("/volumes/create", serde_json::json!({ "Name": n })).map(|_| format!("Volume {n} vytvořen")),
-            Cmd::RemoveVolume(n) => d.delete(&format!("/volumes/{}", crate::docker::enc(&n))).map(|_| format!("Volume {n} odstraněn")),
+            Cmd::CreateVolume(n) => d.post_json("/volumes/create", serde_json::json!({ "Name": n })).map(|_| tf!("Volume {n} vytvořen", "Volume {n} created")),
+            Cmd::RemoveVolume(n) => d.delete(&format!("/volumes/{}", crate::docker::enc(&n))).map(|_| tf!("Volume {n} odstraněn", "Volume {n} removed")),
             Cmd::PruneVolumes => d.prune("volumes", Some(r#"{"all":["true"]}"#)),
             Cmd::CreateNetwork(n, drv) => d
                 .post_json("/networks/create", serde_json::json!({ "Name": n, "Driver": drv }))
-                .map(|_| format!("Síť {n} vytvořena")),
-            Cmd::RemoveNetwork(id) => d.delete(&format!("/networks/{id}")).map(|_| "Síť odstraněna".into()),
+                .map(|_| tf!("Síť {n} vytvořena", "Network {n} created")),
+            Cmd::RemoveNetwork(id) => d.delete(&format!("/networks/{id}")).map(|_| t!("Síť odstraněna", "Network removed").into()),
             Cmd::PruneNetworks => d.prune("networks", None),
             Cmd::Compose { dir, project, args } => {
                 let mut a: Vec<String> = cfg.engine.cli(cfg.port);
@@ -759,11 +793,11 @@ impl Worker {
                 match r {
                     Ok(out) => {
                         self.send(Msg::Output(title, out));
-                        Ok("Compose: hotovo".into())
+                        Ok(t!("Compose: hotovo", "Compose: done").into())
                     }
                     Err(e) => {
                         self.send(Msg::Output(title, e.clone()));
-                        Err("Compose selhal – viz výstup".into())
+                        Err(t!("Compose selhal – viz výstup", "Compose failed – see output").into())
                     }
                 }
             }
@@ -778,21 +812,21 @@ impl Worker {
                     } else {
                         wsl::start(&n)?;
                     }
-                    Ok(format!("Distribuce {n} spuštěna"))
+                    Ok(tf!("Distribuce {n} spuštěna", "Distribution {n} started"))
                 }
                 WslCmd::Terminate(n) => {
                     if n == distro {
                         self.suppress_tracking();
                         self.kill_keepalive();
                     }
-                    wsl::terminate(&n).map(|_| format!("Distribuce {n} ukončena"))
+                    wsl::terminate(&n).map(|_| tf!("Distribuce {n} ukončena", "Distribution {n} terminated"))
                 }
                 WslCmd::Shutdown => {
                     self.suppress_tracking();
                     self.kill_keepalive();
-                    wsl::shutdown().map(|_| "WSL vypnuto".into())
+                    wsl::shutdown().map(|_| t!("WSL vypnuto", "WSL shut down").into())
                 }
-                WslCmd::SetDefault(n) => wsl::set_default(&n).map(|_| format!("{n} je nyní výchozí distribuce")),
+                WslCmd::SetDefault(n) => wsl::set_default(&n).map(|_| tf!("{n} je nyní výchozí distribuce", "{n} is now the default distribution")),
             },
             Cmd::EngineStart => {
                 if cfg.keep_alive {
@@ -805,11 +839,12 @@ impl Worker {
                 a.extend(cfg.engine.services());
                 wsl::run(&distro, Some("root"), None, &a)?;
                 if self.wait_ping(20) {
-                    Ok(format!("{name} běží"))
+                    Ok(tf!("{name} běží", "{name} is running"))
                 } else {
                     self.check_engine();
-                    Err(format!(
+                    Err(tf!(
                         "{name} se nespustil nebo API na 127.0.0.1:{} neodpovídá. Použij „Nastavit TCP API“ nebo „Nainstalovat a nastavit“ na stránce WSL engine.",
+                        "{name} did not start or the API on 127.0.0.1:{} is not responding. Use “Set up TCP API” or “Install and configure” on the WSL engine page.",
                         cfg.port
                     ))
                 }
@@ -819,7 +854,7 @@ impl Worker {
                 let mut a = vec!["systemctl", "stop"];
                 a.extend(cfg.engine.stop_units());
                 wsl::run(&distro, Some("root"), None, &a)?;
-                Ok(format!("{} zastaven", cfg.engine.name()))
+                Ok(tf!("{} zastaven", "{} stopped", cfg.engine.name()))
             }
             Cmd::EngineRestart => {
                 self.suppress_tracking();
@@ -829,14 +864,14 @@ impl Worker {
                 if self.wait_ping(20) {
                     // další obnovení bere jako nové připojení (obnova kontejnerů + zapnutí sledování)
                     self.shared.was_connected.store(false, Ordering::SeqCst);
-                    Ok(format!("{} restartován", cfg.engine.name()))
+                    Ok(tf!("{} restartován", "{} restarted", cfg.engine.name()))
                 } else {
-                    Err(format!("{} po restartu neodpovídá", cfg.engine.name()))
+                    Err(tf!("{} po restartu neodpovídá", "{} is not responding after restart", cfg.engine.name()))
                 }
             }
             Cmd::SetupEngine => self.setup_api(&cfg).map(|(out, _)| out),
             Cmd::UninstallEngine { engine, purge } => {
-                self.send(Msg::Toast(true, format!("Odinstalovávám {}…", engine.name())));
+                self.send(Msg::Toast(true, tf!("Odinstalovávám {}…", "Uninstalling {}…", engine.name())));
                 let r = wsl::run(
                     &distro,
                     Some("root"),
@@ -847,12 +882,17 @@ impl Worker {
                 self.check_engine();
                 match r {
                     Ok(o) => {
-                        self.send(Msg::Output(format!("Odinstalace: {}", engine.name()), o));
-                        Ok(format!("{} odinstalován{}", engine.name(), if purge { " i s daty" } else { "" }))
+                        self.send(Msg::Output(tf!("Odinstalace: {}", "Uninstall: {}", engine.name()), o));
+                        Ok(tf!(
+                            "{} odinstalován{}",
+                            "{} uninstalled{}",
+                            engine.name(),
+                            if purge { t!(" i s daty", " including data") } else { "" }
+                        ))
                     }
                     Err(e) => {
-                        self.send(Msg::Output(format!("Odinstalace: {}", engine.name()), e));
-                        Err("Odinstalace selhala – viz výstup".into())
+                        self.send(Msg::Output(tf!("Odinstalace: {}", "Uninstall: {}", engine.name()), e));
+                        Err(t!("Odinstalace selhala – viz výstup", "Uninstall failed – see output").into())
                     }
                 }
             }
@@ -862,7 +902,7 @@ impl Worker {
             }
             Cmd::AddDistro(spec) => {
                 let mut log = String::new();
-                let title = format!("Nová distribuce: {}", if spec.name.trim().is_empty() { &spec.distro } else { spec.name.trim() });
+                let title = tf!("Nová distribuce: {}", "New distribution: {}", if spec.name.trim().is_empty() { &spec.distro } else { spec.name.trim() });
                 let res = self.add_distro(spec, &mut log);
                 self.send(Msg::Output(title, log));
                 res
@@ -870,22 +910,29 @@ impl Worker {
             Cmd::InstallEngine(engine) => {
                 let mut log = String::new();
                 let res = self.install_engine(engine, &mut log);
-                self.send(Msg::Output(format!("Instalace: {}", engine.name()), log));
+                self.send(Msg::Output(tf!("Instalace: {}", "Installation: {}", engine.name()), log));
                 res
             }
             Cmd::Sleep => {
                 self.suppress_tracking();
                 self.kill_keepalive();
                 wsl::terminate(&distro)?;
-                Ok(format!("{distro} uspána (ukončena). Probudíš ji tlačítkem Spustit."))
+                Ok(tf!(
+                    "{distro} uspána (ukončena). Probudíš ji tlačítkem Spustit.",
+                    "{distro} put to sleep (terminated). Wake it up with the Start button."
+                ))
             }
             Cmd::SetKeepAlive(on) => {
                 if on {
                     self.ensure_keepalive(&distro)?;
-                    Ok("Udržování distribuce zapnuto".into())
+                    Ok(t!("Udržování distribuce zapnuto", "Keep-alive for the distribution enabled").into())
                 } else {
                     self.kill_keepalive_all(&distro);
-                    Ok("Udržování distribuce vypnuto – WSL se může po nečinnosti zastavit".into())
+                    Ok(t!(
+                        "Udržování distribuce vypnuto – WSL se může po nečinnosti zastavit",
+                        "Keep-alive for the distribution disabled – WSL may stop after inactivity"
+                    )
+                    .into())
                 }
             }
             Cmd::PauseAll | Cmd::UnpauseAll => {
@@ -896,7 +943,11 @@ impl Worker {
                     d.container_action(&c.id, if pause { "pause" } else { "unpause" })?;
                     n += 1;
                 }
-                Ok(format!("{} kontejnerů: {n}", if pause { "Pozastaveno" } else { "Obnoveno" }))
+                Ok(if pause {
+                    tf!("Pozastaveno kontejnerů: {n}", "Containers paused: {n}")
+                } else {
+                    tf!("Obnoveno kontejnerů: {n}", "Containers resumed: {n}")
+                })
             }
             Cmd::LoadDaemonJson => {
                 let t = wsl::run(&distro, Some("root"), None, &["sh", "-c", "cat /etc/docker/daemon.json 2>/dev/null || echo '{}'"])?;
@@ -904,14 +955,26 @@ impl Worker {
                 Ok(String::new())
             }
             Cmd::SaveDaemonJson(text) => {
-                let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("Neplatný JSON: {e}"))?;
+                let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| tf!("Neplatný JSON: {e}", "Invalid JSON: {e}"))?;
                 if v.get("hosts").is_some() {
-                    return Err("daemon.json nesmí obsahovat \"hosts\" – koliduje s -H v systemd. Port se nastavuje v Nastavení.".into());
+                    return Err(t!(
+                        "daemon.json nesmí obsahovat \"hosts\" – koliduje s -H v systemd. Port se nastavuje v Nastavení.",
+                        "daemon.json must not contain \"hosts\" – it conflicts with -H in systemd. The port is set in Settings."
+                    )
+                    .into());
                 }
                 let pretty = serde_json::to_string_pretty(&v).unwrap_or(text);
                 wsl::run_stdin(&distro, Some("root"), &["sh", "-c", "mkdir -p /etc/docker && cat > /etc/docker/daemon.json"], &pretty)?;
                 wsl::run(&distro, Some("root"), None, &["systemctl", "restart", "docker"])?;
-                if self.wait_ping(20) { Ok("daemon.json uložen, Docker restartován".into()) } else { Err("Uloženo, ale Docker po restartu neodpovídá – zkontroluj daemon.json".into()) }
+                if self.wait_ping(20) {
+                    Ok(t!("daemon.json uložen, Docker restartován", "daemon.json saved, Docker restarted").into())
+                } else {
+                    Err(t!(
+                        "Uloženo, ale Docker po restartu neodpovídá – zkontroluj daemon.json",
+                        "Saved, but Docker is not responding after restart – check daemon.json"
+                    )
+                    .into())
+                }
             }
             Cmd::Terminal(t) => {
                 let shell = "command -v bash >/dev/null && exec bash || exec sh".to_string();

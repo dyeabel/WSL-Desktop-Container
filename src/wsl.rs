@@ -59,7 +59,7 @@ fn finish(out: std::process::Output) -> Result<String, String> {
         Ok(s)
     } else {
         let msg = if stderr.trim().is_empty() { stdout } else { stderr };
-        Err(format!("{} (kód {})", msg.trim(), out.status.code().unwrap_or(-1)))
+        Err(tf!("{} (kód {})", "{} (code {})", msg.trim(), out.status.code().unwrap_or(-1)))
     }
 }
 
