@@ -3,6 +3,7 @@
 
 pub(crate) mod build;
 mod containers;
+mod detail;
 mod distro;
 mod engine_ops;
 mod events;
@@ -12,6 +13,9 @@ mod spec;
 mod tracking;
 
 pub use spec::{is_windows_path, AddDistroSpec, BuildSpec, RunSpec};
+pub use detail::{start_stats, StatSample, StatsFeed, STATS_WINDOW};
+#[cfg(test)]
+pub use detail::recreate_for_test;
 
 use crate::config::Config;
 use crate::engine::Engine;
@@ -107,6 +111,10 @@ pub enum Cmd {
     Terminal(Term),
     Notepad(String),
     Explorer(String),
+    /// detail kontejneru (inspect) -> Msg::Inspect
+    Inspect(String),
+    /// znovu vytvořit kontejner (id) s novými parametry
+    Recreate { id: String, spec: RunSpec },
 }
 
 pub enum Msg {
@@ -130,6 +138,8 @@ pub enum Msg {
     BuildOutput(String),
     /// sestavení skončilo (text úspěchu / chyba)
     BuildDone(Result<String, String>),
+    /// výsledek inspect kontejneru (id, jak bylo požadováno)
+    Inspect(String, Result<Box<crate::inspect::Detail>, String>),
 }
 
 /// Souhrnný stav pro tray (zapisuje worker, čte vlákno UI/traye).
@@ -315,7 +325,7 @@ impl Worker {
     fn exec(&self, cmd: Cmd) {
         self.shared.busy.fetch_add(1, Ordering::SeqCst);
         self.ctx.request_repaint();
-        let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline);
+        let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline | Cmd::Inspect(_));
         let res = self.exec_inner(cmd);
         self.shared.busy.fetch_sub(1, Ordering::SeqCst);
         match res {
@@ -441,6 +451,8 @@ impl Worker {
                 .spawn()
                 .map(|_| String::new())
                 .map_err(|e| e.to_string()),
+            Cmd::Inspect(id) => self.inspect_detail(id),
+            Cmd::Recreate { id, spec } => self.recreate(id, spec),
         }
     }
 }
