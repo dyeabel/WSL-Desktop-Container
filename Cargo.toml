@@ -1,8 +1,8 @@
 [package]
 name = "wls-desktop"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-description = "Desktop aplikace pro sprĂˇvu Dockeru bÄ›ĹľĂ­cĂ­ho ve WSL distribuci"
+description = "Desktop aplikace pro sprÄ‚Ë‡vu Dockeru bĂ„â€şÄąÄľÄ‚Â­cÄ‚Â­ho ve WSL distribuci"
 
 default-run = "wls-desktop"
 
@@ -10,7 +10,7 @@ default-run = "wls-desktop"
 name = "wls-desktop"
 path = "src/main.rs"
 
-# docker.exe pro Windows â€“ pĹ™edĂˇvĂˇ pĹ™Ă­kazy Dockeru ve WSL
+# docker.exe pro Windows Ă˘â‚¬â€ś pÄąâ„˘edÄ‚Ë‡vÄ‚Ë‡ pÄąâ„˘Ä‚Â­kazy Dockeru ve WSL
 [[bin]]
 name = "docker"
 path = "src/shim/docker.rs"
