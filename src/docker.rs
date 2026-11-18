@@ -535,6 +535,11 @@ impl Docker {
         Ok(self.agent.delete(&self.url(p)).call()?.into_string()?)
     }
 
+    /// Obecný požadavek (HEAD, PUT s tělem, čtení proudu) – soubory v kontejneru (`container_fs`).
+    pub fn request(&self, method: &str, p: &str) -> ureq::Request {
+        self.agent.request(method, &self.url(p))
+    }
+
     pub fn ping(&self) -> bool {
         self.agent
             .get(&self.url("/_ping"))

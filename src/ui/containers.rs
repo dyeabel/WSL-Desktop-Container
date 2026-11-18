@@ -93,7 +93,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             (t!("PORTY", "PORTS"), W::FrOpt(2.2)),
             (t!("SÍŤ", "NETWORK"), W::FrOpt(1.2)),
             (t!("STAV", "STATE"), W::Fr(1.6)),
-            (t!("AKCE", "ACTIONS"), icons_w(7)),
+            (t!("AKCE", "ACTIONS"), icons_w(8)),
         ];
         table_sort(ui, &format!("grid-{g}"), &cols, Sort { key: "containers", cols: &[1, 2, 3, 4, 5] }, |mut body| {
             for c in &list {
@@ -165,6 +165,9 @@ fn row(app: &mut App, r: &mut TableRow<'_>, c: &Container) {
         }
         if icon(ui, "\u{EB7A}", t!("Logy", "Logs")) {
             app.open_logs(id.clone(), name.clone());
+        }
+        if icon(ui, "\u{E260}", t!("Soubory v kontejneru", "Files in the container")) {
+            crate::ui::container_files::open(app, id.clone(), name.clone(), None);
         }
         if icon(ui, "\u{E4A6}", t!("Odstranit", "Remove")) {
             app.ask(

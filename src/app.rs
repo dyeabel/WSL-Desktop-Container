@@ -87,6 +87,8 @@ pub struct App {
     pub logs: Option<LogView>,
     /// otevřený detail kontejneru
     pub detail: Option<ui::detail::DetailView>,
+    /// samostatné okno prohlížeče souborů v kontejneru
+    pub cfiles: Option<ui::container_files::CfState>,
     pub run_open: bool,
     pub run: RunSpec,
     /// výběr existujícího volume v dialogu Spustit kontejner: (název, cesta v kontejneru, jen pro čtení)
@@ -220,6 +222,7 @@ impl App {
             output: None,
             logs: None,
             detail: None,
+            cfiles: None,
             run_open: false,
             run: RunSpec { restart: "no".into(), ..Default::default() },
             run_vol: (String::new(), "/data".into(), false),
@@ -476,6 +479,7 @@ impl App {
                 Msg::VolumeSizes(s) => self.vol.sizes = s,
                 Msg::Stack(m) => ui::compose::on_msg(self, m),
                 Msg::DistroDisk(name, r) => ui::distros::on_disk(self, name, r),
+                Msg::ContainerFs(view, m) => ui::container_files::on_msg(self, view, m),
                 Msg::ConfigChanged => {
                     if let Ok(c) = self.cfg.read() {
                         self.cfg_draft = c.clone();
@@ -736,6 +740,7 @@ impl App {
         ui::distros::dialogs(self, ctx);
         ui::containers::run_dialog(self, ctx);
         ui::detail::window(self, ctx);
+        ui::container_files::window(self, ctx);
         ui::volumes::dialogs(self, ctx);
         ui::compose::dialogs(self, ctx);
     }

@@ -13,6 +13,7 @@ pub enum Tab {
     Stats,
     Logs,
     Recreate,
+    Files,
 }
 
 pub struct DetailView {
@@ -37,6 +38,8 @@ pub struct DetailView {
     recreating: Option<String>,
     /// kontejner už neexistuje
     gone: bool,
+    /// záložka Soubory (vytvoří se při prvním otevření)
+    pub cfiles: Option<super::container_files::CfState>,
 }
 
 /// Akce z okna – provedou se až po vykreslení (okno si půjčuje `app.detail`).
@@ -71,6 +74,7 @@ fn new_view(app: &App, ctx: &egui::Context, id: String, name: String, tab: Tab) 
         podman,
         recreating: None,
         gone: false,
+        cfiles: None,
     }
 }
 
@@ -95,7 +99,7 @@ fn state_key(c: &Container) -> String {
     format!("{}|{}|{}", c.state, h, c.name())
 }
 
-/// Pro ladění/screenshoty: `WLS_DEBUG_DETAIL=<název>[:overview|stats|logs|recreate]`.
+/// Pro ladění/screenshoty: `WLS_DEBUG_DETAIL=<název>[:overview|stats|logs|recreate|files]`.
 fn debug_open(app: &mut App, ctx: &egui::Context) {
     if DEBUG_DONE.load(Ordering::Relaxed) {
         return;
@@ -111,6 +115,7 @@ fn debug_open(app: &mut App, ctx: &egui::Context) {
         "stats" => Tab::Stats,
         "logs" => Tab::Logs,
         "recreate" => Tab::Recreate,
+        "files" => Tab::Files,
         _ => Tab::Overview,
     };
     let (id, name) = (c.id.clone(), c.name());
@@ -184,6 +189,8 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
             Action::Ask(title, text, c) => app.ask(title, text, c),
         }
     }
+    let files = app.detail.as_mut().and_then(|d| d.cfiles.as_mut()).map(|c| c.take_pending()).unwrap_or_default();
+    super::container_files::flush(app, files);
     if !open {
         app.detail = None;
     }
@@ -260,6 +267,7 @@ fn body(ui: &mut egui::Ui, dv: &mut DetailView, c: Option<&Container>, nets: &[S
             (Tab::Stats, t!("\u{E154} Statistiky", "\u{E154} Stats")),
             (Tab::Logs, t!("\u{EB7A} Logy", "\u{EB7A} Logs")),
             (Tab::Recreate, t!("\u{E3B4} Znovu vytvořit", "\u{E3B4} Recreate")),
+            (Tab::Files, t!("\u{E260} Soubory", "\u{E260} Files")),
         ] {
             ui.selectable_value(&mut dv.tab, t, label);
         }
@@ -294,6 +302,10 @@ fn body(ui: &mut egui::Ui, dv: &mut DetailView, c: Option<&Container>, nets: &[S
             } else {
                 loading(ui);
             }
+        }
+        Tab::Files => {
+            let cf = dv.cfiles.get_or_insert_with(|| super::container_files::CfState::new(dv.id.clone(), dv.name.clone(), None));
+            super::container_files::view(ui, cf, running && !dv.gone);
         }
         Tab::Recreate => match &dv.info {
             None => loading(ui),
