@@ -160,8 +160,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     if icon(ui, BACKUP, t!("Zálohovat do souboru .tar.gz", "Back up to a .tar.gz file")) {
                         backup = Some((v.name.clone(), running.clone()));
                     }
-                    ui.menu_button(RichText::new("\u{E1FE}").size(15.0), |ui| {
-                        ui.set_min_width(220.0);
+                    row_menu(ui, |ui| {
                         if ui.button(tf!("{BACKUP} Zálohovat…", "{BACKUP} Back up…")).clicked() {
                             backup = Some((v.name.clone(), running.clone()));
                             ui.close_menu();

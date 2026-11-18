@@ -346,8 +346,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     }
                     // ostatní akce v nabídce řádku
                     let mut download = false;
-                    ui.menu_button(RichText::new("\u{E1FE}").size(15.0), |ui| {
-                        ui.set_min_width(200.0);
+                    row_menu(ui, |ui| {
                         if !e.is_dir() && ui.button(t!("\u{E23A} Otevřít v Notepadu", "\u{E23A} Open in Notepad")).clicked() {
                             app.send(Cmd::Notepad(path.clone()));
                             ui.close_menu();

@@ -349,6 +349,21 @@ pub fn more_menu(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     .on_hover_text(t!("Další akce", "More actions"));
 }
 
+/// Menu „⋯“ v řádku tabulky: menší, bez rámečku, stejně jako ikonová tlačítka (26×24).
+pub fn row_menu<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) {
+    let old = ui.spacing().button_padding;
+    ui.spacing_mut().button_padding = egui::vec2(4.0, 3.0);
+    let button = egui::Button::new(RichText::new("\u{E1FE}").size(15.0)).frame(false).min_size(egui::vec2(26.0, 24.0));
+    let r = egui::menu::menu_custom_button(ui, button, |ui| {
+        ui.spacing_mut().button_padding = old;
+        ui.set_min_width(220.0);
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        add(ui)
+    });
+    ui.spacing_mut().button_padding = old;
+    r.response.on_hover_text(t!("Další akce", "More actions"));
+}
+
 /// Mezera mezi skupinami v liště.
 pub fn gap(ui: &mut egui::Ui) {
     ui.add_space(10.0);

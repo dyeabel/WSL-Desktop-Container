@@ -380,7 +380,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     app.cfg_draft.distro = d.name.clone();
                     app.save_config(c);
                 }
-                super::more_menu(ui, |ui| {
+                super::row_menu(ui, |ui| {
                     if ui.button(t!("\u{EAF0} Exportovat…", "\u{EAF0} Export…")).clicked() {
                         ui.close_menu();
                         super::distros::open_export(app, &d.name);
