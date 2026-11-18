@@ -170,6 +170,8 @@ impl EngineStatus {
 #[derive(Default)]
 pub struct Shared {
     pub status: Mutex<EngineStatus>,
+    /// kontejnery pro podnabídku traye (zapisuje worker při obnovení)
+    pub tray_containers: Mutex<Vec<crate::tray::menu_model::Item>>,
     pub busy: AtomicUsize,
     pub want_stats: AtomicBool,
     pub tcp_checked: AtomicBool,
@@ -256,6 +258,9 @@ impl Worker {
         let connected = snap.connected;
         let (n_run, n_total) = snap.info.as_ref().map(|i| (i.containers_running, i.containers)).unwrap_or((0, 0));
         self.track_running(&snap);
+        if let Ok(mut t) = self.shared.tray_containers.lock() {
+            *t = snap.containers.iter().map(crate::tray::menu_model::Item::from_container).collect();
+        }
         self.send(Msg::Snapshot(Box::new(snap)));
         if let Ok(list) = wsl::list() {
             let distro = self.cfg().distro;
