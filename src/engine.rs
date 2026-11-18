@@ -320,10 +320,25 @@ if command -v pacman >/dev/null; then
   pkg_install docker docker-compose docker-buildx
 elif command -v zypper >/dev/null; then
   pkg_install docker docker-compose
+elif command -v apt-get >/dev/null; then
+  # balíčky distribuce (podepsané, ověřuje apt) – žádné `curl | sh` (bezpečnostní nález F-13)
+  pkg_install docker.io
+  pkg_install docker-compose-v2 2>/dev/null || pkg_install docker-compose || echo "docker compose se nepodařilo nainstalovat" >&2
+  pkg_install docker-buildx 2>/dev/null || true
+elif command -v dnf >/dev/null; then
+  if dnf -q list --available moby-engine >/dev/null 2>&1 || rpm -q moby-engine >/dev/null 2>&1; then
+    # Fedora: Moby z repozitářů distribuce
+    pkg_install moby-engine docker-compose
+  else
+    # RHEL / Alma / Rocky / Oracle: oficiální repozitář Dockeru (balíčky ověřuje dnf přes GPG)
+    dnf install -y -q dnf-plugins-core
+    dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo 2>/dev/null \
+      || dnf config-manager addrepo --from-repofile=https://download.docker.com/linux/centos/docker-ce.repo
+    pkg_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  fi
 else
-  # apt / dnf: oficiální instalační skript Dockeru (Debian, Ubuntu, Fedora, CentOS/RHEL…)
-  pkg_install curl ca-certificates
-  curl -fsSL https://get.docker.com | sh
+  echo "Nepodporovaný správce balíčků (umím apt, dnf, zypper, pacman)." >&2
+  exit 2
 fi
 U=$(getent passwd 1000 | cut -d: -f1)
 [ -n "$U" ] && usermod -aG docker "$U" || true
