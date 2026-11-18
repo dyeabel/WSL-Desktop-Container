@@ -2,8 +2,8 @@
 
 use super::{Msg, RunSpec, Worker};
 use crate::docker::{enc, Docker};
-use crate::inspect;
-use serde_json::Value;
+use crate::inspect::{self, NetEdit};
+use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -99,7 +99,7 @@ fn rename(d: &Docker, id: &str, name: &str) -> Result<String, String> {
 
 /// Pro živé testy: znovuvytvoření stejnou cestou jako z UI (bez běžícího workeru).
 #[cfg(test)]
-pub fn recreate_for_test(cfg: crate::config::Config, id: &str, spec: RunSpec) -> Result<String, String> {
+pub fn recreate_for_test(cfg: crate::config::Config, id: &str, spec: RunSpec, net: NetEdit) -> Result<String, String> {
     let (msg, _msg_rx) = std::sync::mpsc::channel();
     let (cmd, _cmd_rx) = std::sync::mpsc::channel();
     let w = Worker {
@@ -109,7 +109,7 @@ pub fn recreate_for_test(cfg: crate::config::Config, id: &str, spec: RunSpec) ->
         cmd,
         shared: Arc::new(super::Shared::default()),
     };
-    w.recreate(id.to_string(), spec)
+    w.recreate(id.to_string(), spec, net)
 }
 
 impl Worker {
@@ -129,15 +129,15 @@ impl Worker {
 
     /// Vytvoří a spustí kontejner přes API z původního inspectu se změnami z formuláře
     /// (zachová bezpečnostní nastavení, limity, labely, entrypoint…).
-    fn create_from(&self, d: &Docker, orig: &Value, spec: &RunSpec, name: &str) -> Result<String, String> {
-        use super::recreate_body::{create_body, flatten};
+    fn create_from(&self, d: &Docker, orig: &Value, spec: &RunSpec, net: &NetEdit, name: &str) -> Result<String, String> {
+        use super::recreate_body::{create_body, extra_networks, flatten};
         let cfg = self.cfg();
         let image = if cfg.engine == crate::engine::Engine::Podman {
             crate::engine::qualify_image(&spec.image)
         } else {
             spec.image.trim().to_string()
         };
-        let body = flatten(create_body(orig, spec, &image)?);
+        let body = flatten(create_body(orig, spec, &image, net)?);
         let url = format!("/containers/create?name={}", enc(name));
         let resp = match d.post_json(&url, body.clone()) {
             Ok(r) => r,
@@ -152,6 +152,11 @@ impl Worker {
             .ok()
             .and_then(|v| v.get("Id").and_then(|i| i.as_str()).map(String::from))
             .ok_or_else(|| format!("create: {resp}"))?;
+        // další sítě připojit ještě před startem (aliasy, pevné IP a MAC)
+        for (n, ep) in extra_networks(orig, spec, net) {
+            d.post_json(&format!("/networks/{}/connect", enc(&n)), json!({"Container": nid, "EndpointConfig": ep}))
+                .map_err(|e| tf!("Připojení k síti {n} selhalo: {e}", "Connecting to network {n} failed: {e}"))?;
+        }
         d.container_action(&nid, "start")?;
         // chvíli počkat – skončil hned po startu?
         thread::sleep(Duration::from_millis(1800));
@@ -168,7 +173,7 @@ impl Worker {
     /// Znovu vytvoří kontejner s novými parametry. Starý se zastaví a přejmenuje na
     /// `<název>-wls-old`; když nový naběhne, starý se smaže, jinak se nový odstraní
     /// a starý se vrátí (přejmenuje zpět a případně znovu spustí).
-    pub(super) fn recreate(&self, id: String, mut spec: RunSpec) -> Result<String, String> {
+    pub(super) fn recreate(&self, id: String, mut spec: RunSpec, net: NetEdit) -> Result<String, String> {
         let d = self.docker();
         let v: Value = d.get(&format!("/containers/{}/json", enc(&id)))?;
         let old = inspect::parse(&v);
@@ -222,7 +227,8 @@ impl Worker {
         if let Err(e) = rename(&d, &id, &backup) {
             return Err(restore(e));
         }
-        match self.create_from(&d, &v, &spec, &new_name) {
+        match self.create_from(&d, &v, &spec, &net, &new_name) {
+            // bez `v=1` – anonymní volume (teď připojená k novému kontejneru) zůstanou
             Ok(msg) => match d.container_action(&id, "remove") {
                 Ok(_) => Ok(tf!("Kontejner {old_name} znovu vytvořen. {msg}", "Container {old_name} recreated. {msg}")),
                 Err(e) => Err(tf!(

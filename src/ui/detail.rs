@@ -3,7 +3,7 @@
 use super::*;
 use crate::app::{App, LogView};
 use crate::docker::{short_id, Container};
-use crate::inspect::{self, Detail};
+use crate::inspect::{self, Detail, NetEdit};
 use crate::worker::{Cmd, RunSpec, StatSample, StatsFeed, Term, STATS_WINDOW};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -29,6 +29,10 @@ pub struct DetailView {
     tail: u32,
     /// formulář „Znovu vytvořit“ (předvyplní se z inspect)
     form: Option<RunSpec>,
+    /// sítě, které si nový kontejner ponechá (vedle hlavní z formuláře)
+    nets: Option<NetEdit>,
+    /// engine je Podman (nehlásí pevné IP – výchozí je ponechat současné adresy)
+    podman: bool,
     /// název kontejneru, který vznikne znovuvytvořením (nové ID – dohledá se podle názvu)
     recreating: Option<String>,
     /// kontejner už neexistuje
@@ -50,7 +54,7 @@ pub fn open(app: &mut App, ctx: &egui::Context, id: String, name: String) {
 }
 
 fn new_view(app: &App, ctx: &egui::Context, id: String, name: String, tab: Tab) -> DetailView {
-    let port = app.cfg.read().map(|c| c.port).unwrap_or(2375);
+    let (port, podman) = app.cfg.read().map(|c| (c.port, c.engine == crate::engine::Engine::Podman)).unwrap_or((2375, true));
     app.send(Cmd::Inspect(id.clone()));
     DetailView {
         stats: crate::worker::start_stats(ctx.clone(), port, id.clone()),
@@ -63,6 +67,8 @@ fn new_view(app: &App, ctx: &egui::Context, id: String, name: String, tab: Tab) 
         logs: None,
         tail: 500,
         form: None,
+        nets: None,
+        podman,
         recreating: None,
         gone: false,
     }
@@ -77,6 +83,7 @@ pub fn on_inspect(app: &mut App, id: String, r: Result<Box<Detail>, String>) {
     if let Ok(d) = &r {
         if dv.form.is_none() {
             dv.form = Some(d.to_run_spec());
+            dv.nets = Some(d.net_edit(dv.podman));
         }
     }
     dv.info = Some(r);
@@ -560,10 +567,6 @@ fn recreate(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, nets: &[String],
             "The container belongs to compose project {p}. The new container will no longer be managed by compose – consider editing the compose file instead."
         ));
     }
-    let named: Vec<&str> = d.networks.iter().map(|n| n.name.as_str()).filter(|n| !matches!(*n, "bridge" | "podman")).collect();
-    if named.len() > 1 {
-        warn(ui, tf!("Kontejner je ve více sítích ({}); připojí se jen k vybrané.", "The container is in several networks ({}); only the selected one is used.", named.join(", ")));
-    }
     if d.entrypoint_differs() {
         warn(ui, tf!(
             "Vlastní entrypoint ({}) se nepřenese – použije se entrypoint z image.",
@@ -572,12 +575,14 @@ fn recreate(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, nets: &[String],
         ));
     }
     ui.label(muted(t!(
-        "Přenáší se jen pole níže; ostatní nastavení (labely, limity, capabilities, hostname, uživatel…) ne.",
-        "Only the fields below are carried over; other settings (labels, limits, capabilities, hostname, user…) are not."
+        "Mění se jen pole níže; ostatní nastavení (labely, limity, capabilities, uživatel…) se převezme z původního kontejneru.",
+        "Only the fields below change; other settings (labels, limits, capabilities, user…) are taken over from the original container."
     )).small());
     ui.add_space(8.0);
 
     let form = dv.form.get_or_insert_with(|| d.to_run_spec());
+    let podman = dv.podman;
+    let nets_edit = dv.nets.get_or_insert_with(|| d.net_edit(podman));
     let fw = (ui.available_width() - 140.0).clamp(220.0, 560.0);
     egui::Grid::new("recreate-form").num_columns(2).spacing([14.0, 10.0]).show(ui, |ui| {
         ui.label("Image *");
@@ -595,7 +600,19 @@ fn recreate(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, nets: &[String],
         ui.label("Volume");
         ui.add(area(&mut form.volumes).hint_text(t!("data:/var/lib/data (řádek = 1)", "data:/var/lib/data (one per line)")).desired_rows(2).desired_width(fw));
         ui.end_row();
+        let anon = d.anonymous_volumes(&form.volumes);
+        if !anon.is_empty() {
+            let list = anon.iter().map(|m| format!("{} \u{2192} {}", &m.name[..12], m.destination)).collect::<Vec<_>>().join(", ");
+            ui.label("");
+            ui.add(egui::Label::new(muted(tf!("\u{E2CE} Anonymní volume zůstanou připojená: {list}", "\u{E2CE} Anonymous volumes stay attached: {list}")).small()).wrap())
+                .on_hover_text(t!(
+                    "Připojí se znovu podle názvu, takže jejich data přežijí. Cíl uvedený v poli Volume má přednost.",
+                    "They are re-attached by name, so their data survives. A destination listed in the Volume field takes precedence."
+                ));
+            ui.end_row();
+        }
         ui.label(t!("Síť", "Network"));
+        let before = form.network.clone();
         egui::ComboBox::from_id_salt("recreate-net")
             .width(fw.min(300.0))
             .selected_text(if form.network.is_empty() { t!("výchozí (bridge)", "default (bridge)") } else { form.network.as_str() })
@@ -607,8 +624,20 @@ fn recreate(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, nets: &[String],
                 for n in ["host", "none"] {
                     ui.selectable_value(&mut form.network, n.to_string(), n);
                 }
-            });
+            })
+            .response
+            .on_hover_text(t!("Hlavní síť (--network)", "Primary network (--network)"));
         ui.end_row();
+        if form.network != before {
+            // nová hlavní síť nahradí původní; ostatní zůstanou
+            let p = form.network.trim().to_string();
+            nets_edit.keep.retain(|n| *n != p);
+        }
+        if !d.networks.is_empty() && !d.special_network_mode() {
+            ui.label(t!("Sítě", "Networks"));
+            ui.vertical(|ui| networks(ui, d, form.network.trim(), nets_edit));
+            ui.end_row();
+        }
         ui.label("Restart");
         egui::ComboBox::from_id_salt("recreate-restart").width(fw.min(300.0)).selected_text(form.restart.as_str()).show_ui(ui, |ui| {
             let mut opts = vec!["no".to_string(), "always".into(), "unless-stopped".into(), "on-failure".into()];
@@ -646,7 +675,7 @@ fn recreate(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, nets: &[String],
                         "Container {name} will be stopped and replaced by a new container {new_name} from {}. Data outside volumes (in the container's writable layer) will be lost.",
                         form.image.trim()
                     ),
-                    Cmd::Recreate { id: d.id.clone(), spec: form.clone() },
+                    Cmd::Recreate { id: d.id.clone(), spec: form.clone(), net: nets_edit.clone() },
                 ));
             }
             if ui.button(t!("Obnovit z kontejneru", "Reset from container")).on_hover_text(t!("Zahodit úpravy formuláře", "Discard form changes")).clicked() {
@@ -656,5 +685,61 @@ fn recreate(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, nets: &[String],
     });
     if reset {
         dv.form = Some(d.to_run_spec());
+        dv.nets = Some(d.net_edit(dv.podman));
+    }
+}
+
+/// Původní sítě kontejneru: které si nový kontejner ponechá a ve kterých si zachová adresu.
+fn networks(ui: &mut egui::Ui, d: &Detail, primary: &str, edit: &mut NetEdit) {
+    if primary == "host" || primary == "none" || primary.starts_with("container:") {
+        ui.label(muted(tf!("V režimu {primary} se další sítě nepřipojí.", "No other networks are attached in {primary} mode.")).small());
+        return;
+    }
+    for n in &d.networks {
+        let is_primary = n.name == primary || (primary.is_empty() && inspect::is_default_net(&n.name));
+        ui.horizontal_wrapped(|ui| {
+            let mut on = is_primary || edit.keep.contains(&n.name);
+            let r = ui.add_enabled(!is_primary, egui::Checkbox::new(&mut on, RichText::new(&n.name).monospace()));
+            if r.changed() {
+                if on {
+                    edit.keep.push(n.name.clone());
+                } else {
+                    edit.keep.retain(|k| *k != n.name);
+                }
+            }
+            if is_primary {
+                badge(ui, t!("hlavní", "primary"), theme::ACCENT);
+            }
+            let aliases: Vec<&str> = n.aliases.iter().map(String::as_str).filter(|a| !(a.len() >= 12 && d.id.starts_with(a))).collect();
+            if !aliases.is_empty() {
+                ui.label(muted(tf!("aliasy: {}", "aliases: {}", aliases.join(", "))).small());
+            }
+            let addr = if n.has_static() {
+                [n.static_ip4.as_str(), n.static_ip6.as_str()].into_iter().filter(|a| !a.is_empty()).collect::<Vec<_>>().join(", ")
+            } else {
+                n.ip.clone()
+            };
+            if !inspect::is_default_net(&n.name) && !addr.is_empty() {
+                let mut pin = edit.pin.contains(&n.name);
+                let tip = if n.has_static() {
+                    t!("Pevná adresa původního kontejneru.", "Static address of the original container.")
+                } else {
+                    t!(
+                        "Nový kontejner dostane stejnou IP (a MAC) adresu. Podman v inspectu neuvádí, jestli byla adresa pevná.",
+                        "The new container gets the same IP (and MAC) address. Podman does not report whether the address was static."
+                    )
+                };
+                let r = ui
+                    .add_enabled(on, egui::Checkbox::new(&mut pin, RichText::new(tf!("ponechat IP {addr}", "keep IP {addr}")).small()))
+                    .on_hover_text(tip);
+                if r.changed() {
+                    if pin {
+                        edit.pin.push(n.name.clone());
+                    } else {
+                        edit.pin.retain(|k| *k != n.name);
+                    }
+                }
+            }
+        });
     }
 }
