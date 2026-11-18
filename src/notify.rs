@@ -5,7 +5,7 @@ pub const AUMID: &str = "WLS.Desktop";
 
 #[cfg(windows)]
 fn app_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("APPDATA").map(|p| std::path::PathBuf::from(p).join("WLS_Desktop"))
+    crate::config::data_dir()
 }
 
 /// Zaregistruje AUMID (název a ikonu) – jen do HKCU, bez práv správce. Volat jednou při startu.

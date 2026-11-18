@@ -5,7 +5,7 @@
 /// Složka s klientskými certifikáty (Docker konvence: ca.pem, cert.pem, key.pem) –
 /// stejná se dá použít jako DOCKER_CERT_PATH.
 pub fn tls_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("APPDATA").map(|p| std::path::PathBuf::from(p).join("WLS_Desktop").join("tls"))
+    crate::config::data_dir().map(|d| d.join("tls"))
 }
 
 /// Sestaví TLS klienta z PEM souborů ve složce (ověřuje server proti CA, posílá klientský certifikát).

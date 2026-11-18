@@ -56,11 +56,35 @@ impl Default for Config {
     }
 }
 
+/// Název souboru, jehož přítomnost vedle EXE zapne portable režim.
+pub const PORTABLE_MARKER: &str = "PORTABLE.txt";
+
+/// Složka portable balíčku (tam, kde leží EXE vedle `PORTABLE.txt`), jinak None.
+pub fn portable_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    dir.join(PORTABLE_MARKER).exists().then(|| dir.to_path_buf())
+}
+
+/// Složka s daty aplikace (konfigurace, certifikáty, seznam kontejnerů…):
+/// v portable režimu `<složka aplikace>\data`, jinak `%APPDATA%\WLS_Desktop`.
+pub fn data_dir() -> Option<PathBuf> {
+    if let Some(d) = portable_dir() {
+        return Some(d.join("data"));
+    }
+    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("WLS_Desktop"))
+}
+
 fn path() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("WLS_Desktop").join("config.json"))
+    data_dir().map(|d| d.join("config.json"))
 }
 
 impl Config {
+    /// Existuje uložená konfigurace? (false = první spuštění)
+    pub fn exists() -> bool {
+        path().is_some_and(|p| p.exists())
+    }
+
     pub fn load() -> Self {
         path()
             .and_then(|p| std::fs::read_to_string(p).ok())

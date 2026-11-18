@@ -11,7 +11,7 @@ pub(super) mod last_running {
     use std::path::PathBuf;
 
     fn path() -> Option<PathBuf> {
-        std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("WLS_Desktop").join("last_running.json"))
+        crate::config::data_dir().map(|d| d.join("last_running.json"))
     }
 
     fn load_all() -> BTreeMap<String, Vec<String>> {

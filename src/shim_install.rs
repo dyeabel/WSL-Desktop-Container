@@ -76,7 +76,12 @@ pub fn set_docker_host(target: Option<(u16, bool)>) -> Result<String, String> {
     }
 }
 
+/// Kam patří docker.exe v PATH: v portable režimu přímo složka aplikace (nic se nekopíruje),
+/// jinak %LOCALAPPDATA%\WLS_Desktop\bin.
 pub fn bin_dir() -> PathBuf {
+    if let Some(d) = crate::config::portable_dir() {
+        return d;
+    }
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
@@ -134,6 +139,10 @@ pub fn install() -> Result<String, String> {
     let dir = bin_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     for name in ["docker.exe", "docker-compose.exe"] {
+        // portable: docker.exe už ve složce je – zkopírovat jen docker-compose.exe
+        if dir.join(name) == src {
+            continue;
+        }
         std::fs::copy(&src, dir.join(name))
             .map_err(|e| tf!("{name}: {e} (neběží zrovna nějaký docker příkaz?)", "{name}: {e} (is a docker command currently running?)"))?;
     }
@@ -158,7 +167,9 @@ pub fn uninstall() -> Result<String, String> {
            $n = ($p -split ';' | Where-Object {{ $_ -and ($_.TrimEnd('\\') -ne $d) }}) -join ';'; \
            [Environment]::SetEnvironmentVariable('Path', $n, 'User') }}"
     ))?;
-    for name in ["docker.exe", "docker-compose.exe"] {
+    // portable: docker.exe je součást balíčku – smazat jen kopii docker-compose.exe
+    let names: &[&str] = if crate::config::portable_dir().is_some() { &["docker-compose.exe"] } else { &["docker.exe", "docker-compose.exe"] };
+    for name in names {
         let _ = std::fs::remove_file(dir.join(name));
     }
     Ok(t!("Příkaz docker odebrán z PATH", "The docker command was removed from PATH").into())

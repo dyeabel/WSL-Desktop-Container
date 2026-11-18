@@ -135,7 +135,14 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let cfg = Config::load();
+        let mut cfg = Config::load();
+        if !Config::exists() {
+            // první spuštění (i nový portable balíček): výchozí distribuce WSL místo „Ubuntu“
+            if let Some(d) = crate::wsl::list().ok().and_then(|l| l.into_iter().find(|d| d.default)) {
+                cfg.distro = d.name;
+            }
+            let _ = cfg.save();
+        }
         // WLS_THEME=dark|light|system přepíše motiv (ladění, screenshoty)
         theme::apply(&cc.egui_ctx, &std::env::var("WLS_THEME").unwrap_or_else(|_| cfg.theme.clone()));
         crate::i18n::set_language(&cfg.language);
