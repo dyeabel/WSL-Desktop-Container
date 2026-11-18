@@ -42,7 +42,7 @@ impl Worker {
         }
         let out = out?;
         // ID je poslední řádek výstupu (před ním může být průběh stahování)
-        let id = out.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("").to_string();
+        let id = out.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or("").to_string();
         // chvíli počkat a zkontrolovat, jestli kontejner neskončil hned po startu
         thread::sleep(Duration::from_millis(1800));
         let info: Option<serde_json::Value> = d.get(&format!("/containers/{id}/json")).ok();

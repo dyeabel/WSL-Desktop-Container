@@ -161,7 +161,7 @@ pub fn ico(sizes: &[u32]) -> Vec<u8> {
                 }
             }
             // AND maska (vše 0 – průhlednost řeší alfa kanál)
-            bmp.extend(std::iter::repeat(0u8).take((mask_row * s) as usize));
+            bmp.extend(std::iter::repeat_n(0u8, (mask_row * s) as usize));
             (s, bmp)
         })
         .collect();

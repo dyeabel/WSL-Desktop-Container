@@ -36,7 +36,7 @@ pub fn decode(bytes: &[u8]) -> String {
     let zeros = bytes.iter().filter(|b| **b == 0).count();
     if bytes.len() >= 2 && zeros * 4 > bytes.len() {
         let u16s: Vec<u16> = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>().0.iter()
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
         String::from_utf16_lossy(&u16s).replace('\u{feff}', "")

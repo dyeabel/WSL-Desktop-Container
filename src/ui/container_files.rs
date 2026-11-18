@@ -432,11 +432,10 @@ pub fn view(ui: &mut egui::Ui, st: &mut CfState, running: bool) {
                             }
                         } else {
                             let l = ui.add(egui::Label::new(label).selectable(false).sense(egui::Sense::click()));
-                            if e.kind == 'f' || e.is_link() {
-                                if l.on_hover_text(t!("Dvojklik = upravit", "Double-click = edit")).double_clicked() {
+                            if (e.kind == 'f' || e.is_link())
+                                && l.on_hover_text(t!("Dvojklik = upravit", "Double-click = edit")).double_clicked() {
                                     st.send(CfOp::Read(path.clone()));
                                 }
-                            }
                         }
                     });
                     r.col(|ui| {

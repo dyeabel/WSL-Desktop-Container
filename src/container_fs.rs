@@ -1265,7 +1265,7 @@ mod tests {
             std::fs::write(folder.join("a b č.txt"), &content).unwrap();
             std::fs::write(folder.join("sub").join("x.txt"), "x").unwrap();
             let mut ticks = 0;
-            let (files, size) = upload(&d, &id, &[folder.clone()], "/tmp", |_, _| ticks += 1).expect("upload");
+            let (files, size) = upload(&d, &id, std::slice::from_ref(&folder), "/tmp", |_, _| ticks += 1).expect("upload");
             println!("[upload] {files} souborů, tar {size} B, průběh hlášen {ticks}×");
             assert_eq!(files, 2);
             let l = list(&d, &id, "/tmp/wls cfs č").expect("list uploaded");
@@ -1308,7 +1308,7 @@ mod tests {
             println!("[delete] /tmp/wls cfs č smazána");
 
             // zastavený kontejner: výpis a stažení přes archiv
-            upload(&d, &id, &[folder.clone()], "/tmp", |_, _| {}).expect("upload 2");
+            upload(&d, &id, std::slice::from_ref(&folder), "/tmp", |_, _| {}).expect("upload 2");
             d.container_action(&id, "stop").expect("stop");
             assert!(!is_running(&d, &id).unwrap());
             let l = list(&d, &id, "/etc").expect("archive list /etc");

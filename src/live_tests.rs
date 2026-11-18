@@ -22,7 +22,7 @@ fn live_fs_roundtrip() {
     let (home, _) = fs::list(&d, false, "~").expect("list ~");
     assert!(home.starts_with('/'), "{home}");
     let dir = fs::join(&home, ".wls-desktop-test");
-    let _ = fs::delete(&d, false, &[dir.clone()]);
+    let _ = fs::delete(&d, false, std::slice::from_ref(&dir));
     fs::mkdir(&d, false, &dir).unwrap();
     let file = fs::join(&dir, "a b.txt");
     fs::write_text(&d, false, &file, "ahoj\nsvěte\n").unwrap();
@@ -33,7 +33,7 @@ fn live_fs_roundtrip() {
     assert_eq!(e.len(), 1);
     assert_eq!(e[0].name, "c.txt");
     assert_eq!(e[0].size, "ahoj\nsvěte\n".len() as u64);
-    fs::delete(&d, false, &[dir.clone()]).unwrap();
+    fs::delete(&d, false, std::slice::from_ref(&dir)).unwrap();
     assert!(fs::list(&d, false, &dir).is_err());
 }
 
@@ -744,11 +744,11 @@ fn live_compose_new_stack() {
     let files = fs::list(&distro, false, &dir).map(|(_, e)| e.iter().map(|x| format!("{} {}", x.mode, x.name)).collect::<Vec<_>>());
     eprintln!("soubory: {files:?}");
     let compose_file = fs::join(&dir, "compose.yaml");
-    let check_file = validate(&distro, &cli, project, &dir, &[compose_file.clone()], None, "");
+    let check_file = validate(&distro, &cli, project, &dir, std::slice::from_ref(&compose_file), None, "");
     eprintln!("config -q (soubor): {check_file:?}");
     let check_bad = validate(&distro, &cli, project, &dir, &["-".into()], None, "services:\n  redis: [\n");
     eprintln!("config -q (rozbitý obsah editoru): {check_bad:?}");
-    let check_env = validate(&distro, &cli, project, &dir, &[compose_file.clone()], Some("REDIS_PORT=1\n"), "");
+    let check_env = validate(&distro, &cli, project, &dir, std::slice::from_ref(&compose_file), Some("REDIS_PORT=1\n"), "");
     eprintln!("config -q (.env z editoru bez hesla): {check_env:?}");
     let up = compose_cmd(&["up", "-d"]);
     eprintln!("up -d: {up:?}");
@@ -763,7 +763,7 @@ fn live_compose_new_stack() {
     }
     let down = compose_cmd(&["down", "-v"]);
     eprintln!("down -v: {down:?}");
-    let rm = fs::delete(&distro, false, &[dir.clone()]);
+    let rm = fs::delete(&distro, false, std::slice::from_ref(&dir));
     eprintln!("rm složky: {rm:?}");
     let left = d.snapshot().containers.into_iter().any(|c| c.project() == Some(project));
 

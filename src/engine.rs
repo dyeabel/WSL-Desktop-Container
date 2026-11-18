@@ -401,6 +401,17 @@ pub fn short_image(r: &str) -> String {
     r.strip_prefix("library/").unwrap_or(r).to_string()
 }
 
+/// Shell funkce pkg_install / pkg_remove / pkg_installed (pro testy a vlastní skripty).
+#[allow(dead_code)]
+pub fn pkg_helpers() -> &'static str {
+    PKG
+}
+
+/// Skript přípravy nové distribuce včetně funkce pkg_install.
+pub fn distro_prepare_script() -> String {
+    format!("{PKG}{DISTRO_PREPARE}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,15 +439,4 @@ mod tests {
         assert_eq!(Engine::Podman.cli(2375, false), vec!["podman", "--url", "tcp://127.0.0.1:2375"]);
         assert_eq!(Engine::Podman.cli(2376, true), vec!["podman", "--url", "unix:///run/wls-podman/podman.sock"]);
     }
-}
-
-/// Shell funkce pkg_install / pkg_remove / pkg_installed (pro testy a vlastní skripty).
-#[allow(dead_code)]
-pub fn pkg_helpers() -> &'static str {
-    PKG
-}
-
-/// Skript přípravy nové distribuce včetně funkce pkg_install.
-pub fn distro_prepare_script() -> String {
-    format!("{PKG}{DISTRO_PREPARE}")
 }

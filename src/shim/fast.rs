@@ -211,7 +211,7 @@ pub fn tabwrite(text: &str, minwidth: usize, padding: usize) -> String {
             out.push_str(c);
             if ci + 1 < cells.len() {
                 let n = c.chars().count();
-                out.extend(std::iter::repeat(' ').take(widths[li][ci].saturating_sub(n)));
+                out.extend(std::iter::repeat_n(' ', widths[li][ci].saturating_sub(n)));
             }
         }
         if li + 1 < lines.len() {

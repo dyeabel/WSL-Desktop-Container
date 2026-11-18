@@ -320,6 +320,21 @@ pub fn create_stack(distro: &str, cli: &[String], spec: &NewStackSpec) -> Result
     Ok(dir)
 }
 
+/// Pro živé testy: kontrola stacku z labelů stejnou cestou jako před `compose up`.
+#[cfg(test)]
+pub fn check_stack_for_test(cfg: crate::config::Config, dir: &str, project: &str) -> Result<(), String> {
+    let (msg, _m) = std::sync::mpsc::channel();
+    let (cmd, _c) = std::sync::mpsc::channel();
+    let w = Worker {
+        ctx: eframe::egui::Context::default(),
+        cfg: std::sync::Arc::new(std::sync::RwLock::new(cfg)),
+        msg,
+        cmd,
+        shared: std::sync::Arc::new(super::Shared::default()),
+    };
+    w.check_stack_trusted(&w.cfg().distro, dir, project, &["up".into(), "-d".into()])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,19 +357,4 @@ mod tests {
         assert!(!ENV_CHECK_SCRIPT.contains("A="));
         assert_eq!(&a[5..], ["docker", "compose", "-p", "p", "--project-directory", "/s"]);
     }
-}
-
-/// Pro živé testy: kontrola stacku z labelů stejnou cestou jako před `compose up`.
-#[cfg(test)]
-pub fn check_stack_for_test(cfg: crate::config::Config, dir: &str, project: &str) -> Result<(), String> {
-    let (msg, _m) = std::sync::mpsc::channel();
-    let (cmd, _c) = std::sync::mpsc::channel();
-    let w = Worker {
-        ctx: eframe::egui::Context::default(),
-        cfg: std::sync::Arc::new(std::sync::RwLock::new(cfg)),
-        msg,
-        cmd,
-        shared: std::sync::Arc::new(super::Shared::default()),
-    };
-    w.check_stack_trusted(&w.cfg().distro, dir, project, &["up".into(), "-d".into()])
 }

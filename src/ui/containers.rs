@@ -270,41 +270,6 @@ pub fn state_info(state: &str, status: &str) -> StateInfo {
     StateInfo { label, color, detail, health }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn exited_ok() {
-        let s = state_info("exited", "Exited (0) 6 seconds ago");
-        assert_eq!(s.label, "Zastaven");
-        assert_eq!(s.detail, "ukončen před 6 s");
-    }
-
-    #[test]
-    fn exited_error_137() {
-        let s = state_info("exited", "Exited (137) About a minute ago");
-        assert_eq!(s.label, "Chyba (137)");
-        assert!(s.detail.starts_with("ukončen před asi 1 min"));
-        assert!(s.detail.contains("SIGKILL"));
-    }
-
-    #[test]
-    fn running_healthy() {
-        let s = state_info("running", "Up 2 hours (healthy)");
-        assert_eq!(s.label, "Běží");
-        assert_eq!(s.detail, "běží 2 h");
-        assert_eq!(s.health.map(|h| h.0).as_deref(), Some("zdravý"));
-    }
-
-    #[test]
-    fn durations() {
-        assert_eq!(cz_duration("Less than a second"), "méně než 1 s");
-        assert_eq!(cz_duration("3 days"), "3 d");
-        assert_eq!(cz_duration("1 week"), "1 týd.");
-    }
-}
-
 pub fn run_dialog(app: &mut App, ctx: &egui::Context) {
     if !app.run_open {
         return;
@@ -362,7 +327,7 @@ pub fn run_dialog(app: &mut App, ctx: &egui::Context) {
                             .map(str::trim)
                             .filter(|l| !l.is_empty())
                             .filter(|l| {
-                                let dest = l.splitn(3, ':').nth(1).unwrap_or("");
+                                let dest = l.split(':').nth(1).unwrap_or("");
                                 dest != target
                             })
                             .map(String::from)
@@ -455,5 +420,40 @@ pub fn run_dialog(app: &mut App, ctx: &egui::Context) {
     }
     if submit || cancel || close {
         app.run_open = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exited_ok() {
+        let s = state_info("exited", "Exited (0) 6 seconds ago");
+        assert_eq!(s.label, "Zastaven");
+        assert_eq!(s.detail, "ukončen před 6 s");
+    }
+
+    #[test]
+    fn exited_error_137() {
+        let s = state_info("exited", "Exited (137) About a minute ago");
+        assert_eq!(s.label, "Chyba (137)");
+        assert!(s.detail.starts_with("ukončen před asi 1 min"));
+        assert!(s.detail.contains("SIGKILL"));
+    }
+
+    #[test]
+    fn running_healthy() {
+        let s = state_info("running", "Up 2 hours (healthy)");
+        assert_eq!(s.label, "Běží");
+        assert_eq!(s.detail, "běží 2 h");
+        assert_eq!(s.health.map(|h| h.0).as_deref(), Some("zdravý"));
+    }
+
+    #[test]
+    fn durations() {
+        assert_eq!(cz_duration("Less than a second"), "méně než 1 s");
+        assert_eq!(cz_duration("3 days"), "3 d");
+        assert_eq!(cz_duration("1 week"), "1 týd.");
     }
 }
