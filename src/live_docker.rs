@@ -151,7 +151,7 @@ fn live_docker_e2e() {
     let up = wsl::run(DISTRO, None, Some("/srv/e2e"), &["docker", "compose", "-p", "e2e", "up", "-d"]);
     assert!(up.is_ok(), "compose up: {up:?}");
     let snap = d.snapshot();
-    let svc = snap.containers.iter().find(|c| c.project().as_deref() == Some("e2e")).expect("kontejner stacku");
+    let svc = snap.containers.iter().find(|c| c.project() == Some("e2e")).expect("kontejner stacku");
     eprintln!("stack: {} ({})", svc.name(), svc.status);
     assert!(crate::worker::check_stack_for_test(Config::load(), "/srv/e2e", "e2e").is_ok());
     assert!(wsl::run(DISTRO, None, Some("/srv/e2e"), &["docker", "compose", "-p", "e2e", "down"]).is_ok());
