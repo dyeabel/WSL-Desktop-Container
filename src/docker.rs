@@ -510,8 +510,23 @@ pub struct Docker {
 }
 
 impl Docker {
+    /// Klient pro aktuální TLS nastavení. HTTP agent (a jeho pool spojení s keep-alive) se
+    /// sdílí mezi všemi voláními – dřív se pro každý požadavek otevíralo nové TCP/TLS spojení.
     pub fn new(port: u16) -> Self {
-        Self::with_tls(port, tls())
+        static SHARED: std::sync::Mutex<Option<(u16, usize, Docker)>> = std::sync::Mutex::new(None);
+        let tls = tls();
+        let key = tls.as_ref().map(|c| std::sync::Arc::as_ptr(c) as usize).unwrap_or(0);
+        if let Ok(mut g) = SHARED.lock() {
+            if let Some((p, k, d)) = g.as_ref() {
+                if *p == port && *k == key {
+                    return d.clone();
+                }
+            }
+            let d = Self::with_tls(port, tls);
+            *g = Some((port, key, d.clone()));
+            return d;
+        }
+        Self::with_tls(port, tls)
     }
 
     pub fn with_tls(port: u16, tls: Option<std::sync::Arc<rustls::ClientConfig>>) -> Self {

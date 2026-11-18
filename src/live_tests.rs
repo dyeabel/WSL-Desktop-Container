@@ -721,3 +721,22 @@ fn live_distro_manage() {
     drop(guard);
     assert!(!tmp.exists(), "dočasná složka zůstala");
 }
+
+/// Sdílený HTTP agent (keep-alive) proti novému agentovi pro každé volání.
+#[test]
+#[ignore]
+fn live_shared_agent_speed() {
+    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let n = 20;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        assert!(Docker::with_tls(port, None).snapshot().connected);
+    }
+    let fresh = t.elapsed();
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        assert!(Docker::new(port).snapshot().connected);
+    }
+    let shared = t.elapsed();
+    eprintln!("{n}× snapshot: nový agent {fresh:?}, sdílený {shared:?}");
+}

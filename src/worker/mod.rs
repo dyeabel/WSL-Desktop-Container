@@ -141,6 +141,36 @@ pub enum Cmd {
     Recreate { id: String, spec: RunSpec },
 }
 
+impl Cmd {
+    /// Krátká akce (API volání, výpis, otevření okna) – běží v poolu vláken workeru.
+    pub fn is_quick(&self) -> bool {
+        matches!(
+            self,
+            Cmd::Container(..)
+                | Cmd::RemoveImage(_)
+                | Cmd::CreateVolume(_)
+                | Cmd::RemoveVolume(_)
+                | Cmd::CreateNetwork(..)
+                | Cmd::RemoveNetwork(_)
+                | Cmd::HubSearch(_)
+                | Cmd::HubTags(_)
+                | Cmd::Inspect(_)
+                | Cmd::VolumeSizes
+                | Cmd::LoadDaemonJson
+                | Cmd::Terminal(_)
+                | Cmd::Notepad(_)
+                | Cmd::Explorer(_)
+                | Cmd::ListOnline
+        ) || matches!(
+            self,
+            Cmd::Fs { op: FsOp::List(_) | FsOp::Read(_) | FsOp::Mkdir(_) | FsOp::Touch(_) | FsOp::Rename(..) | FsOp::Chmod(..), .. }
+        )
+    }
+}
+
+/// Počet vláken pro krátké akce.
+const POOL_THREADS: usize = 4;
+
 pub enum Msg {
     Snapshot(Box<Snapshot>),
     Distros(Vec<Distro>),
@@ -257,6 +287,7 @@ impl Worker {
         }
         self.refresh();
         self.spawn_events();
+        let pool = self.spawn_pool(POOL_THREADS);
         loop {
             // s živým proudem událostí stačí občasná kontrola (stav WSL, záloha za ztracené události);
             // statistiky na přehledu se ale dál obnovují v nastaveném intervalu
@@ -272,8 +303,14 @@ impl Worker {
                 }
                 Err(RecvTimeoutError::Timeout) => self.refresh(),
                 Ok(cmd) => {
-                    let w = self.clone();
-                    thread::spawn(move || w.exec(cmd));
+                    if cmd.is_quick() {
+                        // krátké akce: omezený počet vláken místo nového vlákna pro každou
+                        let _ = pool.send(cmd);
+                    } else {
+                        // dlouhé (instalace, build, compose…) nesmí blokovat pool
+                        let w = self.clone();
+                        thread::spawn(move || w.exec(cmd));
+                    }
                 }
                 Err(RecvTimeoutError::Disconnected) => break,
             }
@@ -356,6 +393,26 @@ impl Worker {
         let c = self.cfg();
         let ok = wsl::run(&c.distro, Some("root"), None, &["test", "-f", c.engine.api_marker()]).is_ok();
         self.send(Msg::EngineInfo { tcp_configured: ok });
+    }
+
+    /// Pool vláken pro krátké akce; vrací frontu, do které se posílají.
+    fn spawn_pool(&self, n: usize) -> Sender<Cmd> {
+        let (tx, rx) = channel::<Cmd>();
+        let rx = Arc::new(Mutex::new(rx));
+        for i in 0..n {
+            let (w, rx) = (self.clone(), rx.clone());
+            let _ = thread::Builder::new().name(format!("worker-{i}")).spawn(move || loop {
+                let cmd = match rx.lock() {
+                    Ok(r) => r.recv(),
+                    Err(_) => return,
+                };
+                match cmd {
+                    Ok(c) => w.exec(c),
+                    Err(_) => return,
+                }
+            });
+        }
+        tx
     }
 
     fn wait_ping(&self, secs: u64) -> bool {
