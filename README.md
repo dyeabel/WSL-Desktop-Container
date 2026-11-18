@@ -1,144 +1,183 @@
 # WLS Desktop
 
-Nativní desktopová aplikace pro Windows (Rust + egui, jeden EXE bez webového UI)
-pro správu **Docker Engine běžícího ve WSL distribuci**, bez Docker Desktopu
-a bez Docker CLI na Windows.
+A native Windows desktop app (Rust + egui, a single EXE, no web UI) for managing a
+**container engine – Docker or Podman – running inside a WSL distribution**, without
+Docker Desktop and without the Docker CLI for Windows.
 
-## Funkce
+> The user interface is in Czech.
 
-| Stránka | Co umí |
+## Features
+
+| Page | What it does |
 |---|---|
-| **Přehled** | stav enginu, počty kontejnerů, image a volume, CPU a RAM ve WSL, využití disku, úklid (prune), živé statistiky CPU, paměti, sítě a disku |
-| **Kontejnery** | seskupení podle compose projektu, start, stop, restart, pozastavení, odstranění, logy (živě, filtr, kopírování), konzole do kontejneru, dialog „Spustit kontejner“ |
-| **Image** | pull, odstranění, prune, spuštění kontejneru z image, přehled, které kontejnery image používají |
-| **Volume** | vytvoření, odstranění, prune, kdo volume používá, otevření v Průzkumníku |
-| **Sítě** | vytvoření (bridge, ipvlan, macvlan), odstranění, prune, subnety, připojené kontejnery |
-| **Compose** | stacky rozpoznané podle labelů: up, stop, start, restart, pull, build, ps, logs, down; úprava compose souboru v Notepadu; spuštění stacku z libovolné složky (Windows i Linux cesta) |
-| **Soubory** | prohlížeč souborového systému distribuce: procházení, záložky, nová složka nebo soubor, přejmenování a přesun, mazání, chmod, vestavěný textový editor (Ctrl+S), nahrávání z Windows a stahování do Windows, režim „Jako root“ |
-| **WSL engine** | start, stop a restart Dockeru, uspání distribuce, pozastavení všech kontejnerů, nastavení TCP API, udržování distribuce naživu, seznam distribucí (start, ukončení, výchozí, „Použít pro Docker“), editor `/etc/docker/daemon.json` |
-| **Nastavení** | distribuce, port API, interval obnovení, autostart enginu, globální `.wslconfig` (paměť, CPU, swap, `vmIdleTimeout`, `networkingMode`) |
+| **Overview** (Přehled) | engine status, container / image / volume counts, CPU and RAM available to WSL, disk usage with a *Clean up* menu (prune), live CPU, memory, network and disk stats per running container (with the image it runs from) |
+| **Containers** (Kontejnery) | grouped by compose project; start, stop, restart, pause, remove; colored state badges (running, stopped, error with exit code, health); live logs (filter, copy); console in Windows Terminal; *Run container* dialog |
+| **Images** | search Docker Hub (dialog with tag picker, size and update date), pull by exact name, remove, prune, run a container from an image, which containers use an image |
+| **Volumes** | create, remove, prune, which containers use a volume, browse its content (as root), *run a container with this volume* |
+| **Networks** (Sítě) | create (bridge, ipvlan, macvlan), remove, prune, subnets, attached containers |
+| **Compose** | stacks detected from container labels: up, stop, start, restart, pull, build, ps, logs, down; edit the compose file in Notepad; start a stack from any folder (Windows or Linux path) |
+| **Files** (Soubory) | file browser for the distribution: navigation, bookmarks, new folder or file, rename and move, delete, chmod, built-in text editor (Ctrl+S), upload from Windows and download to Windows, *As root* mode |
+| **WSL engine** | start, stop and restart the engine, put the distribution to sleep, terminal; distribution list (start, terminate, default, *use for the engine*); *Install & setup* section: Docker / Podman switch, install, API setup, uninstall, `docker` command in PATH, `DOCKER_HOST`; editor for `/etc/docker/daemon.json` (Docker only) |
+| **Settings** (Nastavení) | distribution, API port, refresh interval, keep-alive, engine autostart, tray behaviour, global `.wslconfig` (memory, CPU, swap, `vmIdleTimeout`, `networkingMode`) |
 
-**Oznamovací oblast (tray):** ikona se stavovou tečkou (zelená = engine běží) a tooltipem.
-Levý klik okno zobrazí nebo schová, pravý klik otevře nabídku: stav, otevřít, start, stop
-a restart Dockeru, uspání distribuce, pozastavení a obnovení kontejnerů, terminál, soubory
-v Průzkumníku, přepínače „zavírat / minimalizovat do oznamovací oblasti“ a Ukončit.
-Křížek i minimalizace ve výchozím stavu okno jen schovají (lze změnit v Nastavení).
-Aplikace běží v jedné instanci, takže další spuštění jen zobrazí běžící okno.
-Windows 11 dává ikony nových aplikací do skryté části oznamovací oblasti (šipka ^).
-Trvale zobrazit ji lze v *Nastavení → Přizpůsobení → Hlavní panel → Ikony v oznamovací oblasti*.
+Less frequent and destructive actions (prune, pause all, …) live in the **⋯** menu next to
+the filter field, which is pinned to the right on every page.
 
-**Engine Docker / Podman:** na stránce *WSL engine* se volí engine pro distribuci.
-- **Nainstalovat a nastavit:** nainstaluje engine přes apt (Debian/Ubuntu). Když neběží systemd,
-  zapne ho v `/etc/wsl.conf` a distribuci restartuje. Pak nastaví TCP API a ověří, že odpovídá.
-  Průběh se ukáže v okně výstupu.
-- **Odinstalovat:** vypne služby, odebere nastavení API a balíčky (apt purge). Volitelně smaže
-  i data (`/var/lib/docker…` nebo `/var/lib/containers`).
-- **Podman** běží jako rootful služba `wls-podman-api` (`podman system service tcp://127.0.0.1:<port>`).
-  Aplikace s ním mluví stejným Docker-kompatibilním API. CLI příkazy (spuštění kontejneru, compose,
-  konzole, logy, shim) se překládají na `podman --url tcp://127.0.0.1:<port> …`, takže vidí tytéž
-  kontejnery. Krátká jména image se doplní na `docker.io/library/…`. Nastavení jednoho enginu
-  druhý vypne, aby nebojovaly o port.
+### Run container dialog
 
-**Příkaz `docker` ve Windows (shim):** projekt obsahuje i malý `docker.exe` (`src/shim/docker.rs`).
-Příkazy předává Dockeru ve WSL: `docker ps` ve Windows se provede jako
-`wsl.exe -d <distribuce> --cd <aktuální složka> -e docker ps`. Distribuci bere z nastavení
-WLS Desktop (nebo z proměnné `WLS_DISTRO`). Windows cesty v argumentech přeloží
-(`-v D:\data:/data`, `--mount source=C:\x`, `-f C:\p\compose.yml`, `.\data`,
-`\\wsl.localhost\Debian\…`) a vrací návratový kód příkazu. Pod jménem `docker-compose.exe`
-se chová jako `docker compose`. Instaluje se v *Nastavení → Příkaz docker ve Windows*: zkopíruje se
-do `%LOCALAPPDATA%\WLS_Desktop\bin` a tato složka se přidá do uživatelského PATH, bez admin práv.
-`WLS_SHIM_DEBUG=1` vypíše spouštěný příkaz, `WLS_ENGINE=podman|docker` a `WLS_PORT` přepíšou nastavení.
+- Image, name, ports, environment variables, volumes, network, restart policy, command.
+- **Shared volumes:** pick an existing volume, set the path inside the container and
+  *read-only*, and click *Add*. One named volume can be mounted into any number of containers.
+- **Interactive (-it)** opens the container shell in Windows Terminal (removed on exit).
+- **sleep infinity** keeps images without their own service (alpine, ubuntu, debian, …) running.
+- A few seconds after start the app checks the container state and reports immediately
+  exited containers including the exit code.
 
-Aby se shim choval co nejvíc jako Docker CLI:
-- **Proměnné prostředí z Windows** se předávají přes `WSLENV`. Předá se, co příkaz potřebuje:
-  `-e VAR` a `--env VAR` bez hodnoty, proměnné použité v compose souborech (`${VAR}`, `$VAR`)
-  a navíc to, co vyjmenuješ v `WLS_FORWARD_ENV=A,B`. `DOCKER_HOST`, `PATH` apod. se nepředávají.
-- **Cesty i v BuildKit volbách:** `--secret src=…`, `--output dest=…`, `--build-context x=…`,
-  `--cache-from` a `--cache-to`, `--ssh`, `save -o …`. Hodnoty `-e`, `--label`, `--build-arg`
-  a `--filter` se nepřekládají. Na síťové cesty `\\server\share`, které WSL nevidí, shim upozorní.
-- **Compose s Podmanem:** instalace Podmanu přidá `docker-compose` jako provider.
-  `podman compose` pak mluví se stejným API, takže stacky vidí i aplikace.
-- **`DOCKER_HOST` pro nástroje** (VS Code Dev Containers, Testcontainers, SDK), které nevolají CLI,
-  ale mluví přímo s API: na stránce *WSL engine → Instalace a nastavení* lze nastavit uživatelskou
-  proměnnou `DOCKER_HOST=tcp://127.0.0.1:<port>`.
+### Tray
 
-Zbývající rozdíly oproti Docker CLI pro Windows: `docker login`, `config.json` a contexts žijí ve WSL.
-Každé volání má režii spuštění `wsl.exe` (~0,1–0,3 s). U Podmanu chybí buildx, swarm a contexts.
+A tray icon with a status dot (green = engine running) and a tooltip. Left click shows or
+hides the window, right click opens a menu: status, open, start / stop / restart the engine,
+sleep the distribution, pause and resume containers, terminal, files in Explorer,
+*close / minimize to tray* toggles and Quit. By default both close and minimize only hide the
+window (configurable in Settings). The app runs as a single instance – starting it again just
+shows the running window. Windows 11 puts icons of new apps into the hidden part of the tray
+(^ arrow); pin it via *Settings → Personalization → Taskbar → Other system tray icons*.
 
-Konzole a logy v terminálu se otevírají ve **Windows Terminalu**
-(`wt.exe`). Pokud není k dispozici, použije se klasické okno konzole.
+### Docker / Podman engine
 
-## Jak to funguje
+The engine is selected per distribution on the *WSL engine* page.
 
-- **Docker API přes TCP:** `dockerd` poslouchá kromě socketu i na `tcp://127.0.0.1:2375`.
-  Zajišťuje to systemd override
-  `/etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf`, který vytvoří tlačítko
-  **Nastavit TCP API**. WSL port automaticky přeposílá na `localhost` ve Windows.
-  API je bez autentizace a dostupné jen lokálně.
-- **WSL operace** (start a stop distribuce, `systemctl`, `docker compose`, souborové
-  operace) běží přes `wsl.exe -d <distribuce> [-u root] -e …`.
-- **Výměna distribuce:** v Nastavení (nebo na stránce WSL engine tlačítkem *Použít pro Docker*)
-  vyber jinou distribuci a jednou v ní klikni na **Nastavit TCP API**. Požadavky na distribuci:
-  systemd (`[boot] systemd=true` v `/etc/wsl.conf`) a nainstalovaný Docker Engine.
-- **Udržování naživu:** WSL po chvíli nečinnosti distribuci zastaví i s Dockerem.
-  Aplikace proto spouští skrytý `wsl.exe … flock … sleep infinity`, který v distribuci
-  běží vždy nejvýš jednou a po zavření aplikace zůstane běžet, takže Docker nespadne.
-  **Uspat** ho ukončí a distribuci vypne.
+- **Install & setup:** installs the engine via apt (Debian / Ubuntu). If systemd is not running,
+  it enables it in `/etc/wsl.conf` and restarts the distribution. Then it sets up the TCP API and
+  verifies it responds. Progress is shown in an output window.
+- **Uninstall:** disables the services, removes the API setup and the packages (apt purge).
+  Optionally deletes the data as well (`/var/lib/docker…` or `/var/lib/containers`).
+- **Podman** runs as the rootful service `wls-podman-api`
+  (`podman system service tcp://127.0.0.1:<port>`). The app talks to it through the same
+  Docker-compatible API. CLI commands (running a container, compose, console, logs, the shim)
+  are translated to `podman --url tcp://127.0.0.1:<port> …`, so they see the same containers.
+  Short image names are expanded to `docker.io/library/…`. `docker-compose` is installed as the
+  compose provider. Setting up one engine disables the other so they don't fight over the port.
 
-Konfigurace aplikace se ukládá do `%APPDATA%\WLS_Desktop\config.json`.
+### `docker` command for Windows (shim)
 
-## Sestavení
+The project also builds a small `docker.exe` (`src/shim/docker.rs`) that forwards commands to
+the engine inside WSL: `docker ps` on Windows runs as
+`wsl.exe -d <distro> --cd <current folder> -e docker ps` (or `podman --url … ps` for Podman).
+The distribution and engine come from the WLS Desktop settings. Windows paths in arguments are
+translated (`-v D:\data:/data`, `--mount source=C:\x`, `-f C:\p\compose.yml`, `.\data`,
+`\\wsl.localhost\Debian\…`) and the exit code of the command is returned. When named
+`docker-compose.exe` it behaves like `docker compose`.
 
-Potřeba: Rust (MSVC toolchain) a Visual Studio Build Tools s C++.
+Install it from *WSL engine → Install & setup* (or *Settings*): it is copied to
+`%LOCALAPPDATA%\WLS_Desktop\bin` and that folder is added to the user PATH (no admin rights).
+
+To behave as close to the Docker CLI as possible:
+
+- **Environment variables from Windows** are forwarded via `WSLENV` – only what the command
+  needs: `-e VAR` / `--env VAR` without a value, variables used in compose files
+  (`${VAR}`, `$VAR`), plus anything listed in `WLS_FORWARD_ENV=A,B`. `DOCKER_HOST`, `PATH`
+  and similar are never forwarded.
+- **Paths in BuildKit options** are translated too: `--secret src=…`, `--output dest=…`,
+  `--build-context x=…`, `--cache-from` / `--cache-to`, `--ssh`, `save -o …`. Values of `-e`,
+  `--label`, `--build-arg` and `--filter` are left untouched. Network paths (`\\server\share`)
+  that WSL cannot see produce a warning.
+- **`DOCKER_HOST` for tools** that talk to the API directly instead of calling the CLI
+  (VS Code Dev Containers, Testcontainers, SDKs): the *WSL engine* page can set the user
+  variable `DOCKER_HOST=tcp://127.0.0.1:<port>`.
+
+Debugging: `WLS_SHIM_DEBUG=1` prints the executed command; `WLS_ENGINE=podman|docker`,
+`WLS_PORT` and `WLS_DISTRO` override the settings.
+
+Remaining differences from the Docker CLI for Windows: `docker login`, `config.json` and
+contexts live inside WSL; every call has the overhead of starting `wsl.exe` (~0.1–0.3 s);
+Podman has no buildx, swarm or contexts.
+
+Consoles and log tails open in **Windows Terminal** (`wt.exe`), falling back to a classic
+console window when it is not available.
+
+## How it works
+
+- **Engine API over TCP:** besides its socket, the engine listens on `tcp://127.0.0.1:2375`.
+  For Docker this is a systemd override
+  `/etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf`, for Podman the unit
+  `/etc/systemd/system/wls-podman-api.service`. WSL forwards the port to `localhost` on Windows
+  automatically. The API has no authentication and is reachable only locally.
+- **WSL operations** (starting / stopping the distribution, `systemctl`, compose, file
+  operations) run via `wsl.exe -d <distro> [-u root] -e …`.
+- **Switching distributions:** pick another distribution in Settings (or *Use for the engine*
+  on the WSL engine page) and run *Install & setup* (or just *Set up API*) there once.
+  Requirements: systemd (`[boot] systemd=true` in `/etc/wsl.conf`, set up automatically by
+  *Install & setup*) and apt for automatic installation.
+- **Keep-alive:** WSL stops an idle distribution – together with the engine. The app therefore
+  runs a hidden `wsl.exe … flock … sleep infinity` that runs at most once per distribution and
+  keeps running after the app is closed, so the engine stays up. **Sleep** stops it and shuts
+  the distribution down.
+
+The app configuration is stored in `%APPDATA%\WLS_Desktop\config.json`.
+
+## Building
+
+Requirements: Rust (MSVC toolchain) and Visual Studio Build Tools with C++ (including the
+Windows SDK – `rc.exe` is used to embed the icon).
 
 ```bash
 cargo build --release
 ```
 
-Výsledek: `target\release\wls-desktop.exe` (cca 6 MB, bez závislostí).
+Output: `target\release\wls-desktop.exe` (~8 MB, no runtime dependencies) and
+`target\release\docker.exe` (the shim).
 
-## Testy
+## Tests
 
 ```bash
 cargo test
 ```
 
-Integrační testy proti skutečnému WSL a Dockeru (distribuce z `WLS_DISTRO`, výchozí `Ubuntu`):
+Integration tests against a real WSL distribution and engine (distribution from `WLS_DISTRO`,
+default `Ubuntu`; the Podman test expects an API on `WLS_PODMAN_PORT`, default 2376):
 
 ```bash
 cargo test -- --ignored --test-threads=1
 ```
 
-Pro ladění lze zvolit úvodní stránku proměnnou `WLS_START_PAGE`
-(`containers`, `images`, `volumes`, `networks`, `compose`, `files`, `engine`, `settings`)
-a `WLS_DEBUG_DIALOG=1` zobrazí po startu ukázkový potvrzovací dialog.
+For debugging and screenshots: `WLS_START_PAGE` selects the start page (`containers`, `images`,
+`volumes`, `networks`, `compose`, `files`, `engine`, `settings`), `WLS_DEBUG_DIALOG=1` shows a
+sample confirmation dialog, `WLS_DEBUG_HUB=<image>` opens the Docker Hub dialog,
+`WLS_DEBUG_EXPAND=1` expands the engine setup section.
 
-## UI konvence
+## UI conventions
 
-- Ikony jsou z fontu [Phosphor](https://phosphoricons.com/) (`egui-phosphor`) a píšou se přímo
-  do textu jako `"\u{E4A6} Smazat"`.
-- Tabulky: `ui::table()` / `ui::table_in()` se sloupci `W::Px` (pevná šířka), `W::Fr` (podíl
-  ze zbytku) a `W::PxOpt` / `W::FrOpt` (méně důležité sloupce, které se v úzkém okně skryjí).
-  Sloupec s ikonami má šířku `icons_w(n)`.
-- Lišty `ui::toolbar()`, vstupy `ui::field()` / `ui::area()`, dialogy `ui::modal()` + `ui::dialog_buttons()`.
+- Icons come from the [Phosphor](https://phosphoricons.com/) font (`egui-phosphor`) and are
+  written directly into text, e.g. `"\u{E4A6} Smazat"`.
+- Tables: `ui::table()` / `ui::table_in()` with columns `W::Px` (fixed width), `W::Fr` (share
+  of the remaining width) and `W::PxOpt` / `W::FrOpt` (less important columns hidden in narrow
+  windows). An icon column uses `icons_w(n)`.
+- Toolbars: `ui::toolbar()`, or `ui::toolbar_lr()` with the right part pinned (filter
+  `ui::filter_field()`, menu `ui::more_menu()`); inputs `ui::field()` / `ui::area()`; dialogs
+  `ui::modal()` + `ui::dialog_buttons()`.
 
-## Struktura
+## Project structure
 
 ```
 src/
-  main.rs        vstupní bod, okno
-  app.rs         stav aplikace, navigace, dialogy, toasty
-  worker.rs      vlákno na pozadí: obnovování a provádění akcí
-  docker.rs      klient Docker Engine API (ureq)
-  wsl.rs         wsl.exe: distribuce, příkazy, terminál, TCP setup skript
-  fs.rs          souborové operace v distribuci
-  wslconfig.rs   úprava %USERPROFILE%\.wslconfig
-  theme.rs       barvy, styl
-  icon_art.rs    kresba ikony (sdílí ji i build.rs pro .ico v EXE)
-  tray.rs        ikona v oznamovací oblasti, nabídka, skrývání okna, jedna instance
-build.rs         vygeneruje .ico a vloží ho do EXE (winresource, potřebuje rc.exe z Windows SDK)
-  ui/            jednotlivé stránky
+  main.rs          entry point, window, single instance
+  app.rs           app state, navigation, dialogs, toasts
+  worker.rs        background thread: refresh and actions
+  docker.rs        Docker Engine API client (ureq), Docker Hub search and tags
+  engine.rs        Docker / Podman: setup, install and uninstall scripts, CLI
+  wsl.rs           wsl.exe: distributions, commands, terminal, keep-alive
+  fs.rs            file operations inside the distribution
+  wslconfig.rs     editing %USERPROFILE%\.wslconfig
+  pathmap.rs       Windows -> WSL path translation (shim)
+  shim_install.rs  installing the shim into PATH, DOCKER_HOST
+  shim/            docker.exe shim (docker.rs, envfwd.rs)
+  tray.rs          tray icon, menu, hiding the window
+  theme.rs         colors, style
+  icon_art.rs      icon drawing (shared with build.rs for the .ico in the EXE)
+  ui/              individual pages
+build.rs           generates the .ico and embeds it into the EXE (winresource)
 ```
 
-Rozložení UI vychází z projektu *WSL Container Desktop* (GPLv3). Převzatý je jen vzhled,
-kód je napsaný nově.
+The UI layout is inspired by the *WSL Container Desktop* project (GPLv3). Only the look was
+taken over; the code is written from scratch.
