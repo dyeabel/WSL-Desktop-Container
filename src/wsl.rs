@@ -143,6 +143,7 @@ pub fn run_stream(
     user: Option<&str>,
     cwd: Option<&str>,
     args: &[String],
+    cancel: Option<&std::sync::atomic::AtomicBool>,
     mut on_line: impl FnMut(&str),
 ) -> Result<i32, String> {
     use std::io::{BufRead, BufReader, Read};
@@ -183,8 +184,18 @@ pub fn run_stream(
     }
     drop(tx);
     // končí, až oba proudy dojdou (všechny odesílatele zahodí čtecí vlákna)
-    for line in rx {
-        on_line(&line);
+    let mut killed = false;
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(line) => on_line(&line),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if !killed && cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::SeqCst)) {
+                    killed = true;
+                    let _ = child.kill();
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
     }
     for r in readers {
         let _ = r.join();

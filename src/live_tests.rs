@@ -527,3 +527,29 @@ fn live_volume_backup_restore() {
     eprintln!("úklid hotov, zbývající volume wls-test-*: {}", left.to_string().matches("\"wls-test-").count());
     assert!(!left.to_string().contains("\"wls-test-backup\"") && !dir.exists());
 }
+
+/// Zrušení sestavení: `RUN sleep 45` se po zrušení nesmí dál provádět v distribuci.
+#[test]
+#[ignore]
+fn live_build_cancel() {
+    let cfg = crate::config::Config::load();
+    let distro = std::env::var("WLS_DISTRO").unwrap_or(cfg.distro.clone());
+    let dir = std::env::temp_dir().join(format!("wls-test-build-cancel-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("Dockerfile"), "FROM docker.io/library/alpine:3.20\nRUN sleep 45 && echo wlscancel\n").unwrap();
+    let spec = crate::worker::BuildSpec { context: dir.to_string_lossy().to_string(), tags: "wls-test-cancel:latest".into(), ..Default::default() };
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        crate::worker::cancel_build();
+    });
+    let t = std::time::Instant::now();
+    let res = crate::worker::build::run_build(&distro, cfg.engine, cfg.port, cfg.tls, &spec, |l| eprintln!("| {l}"));
+    let took = t.elapsed();
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let ps = wsl::run(&distro, Some("root"), None, &["sh", "-c", "ps -eo args | grep 'sleep 45' | grep -v grep || true"]).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&dir);
+    eprintln!("=> {res:?} za {took:?}; procesy: {ps:?}");
+    assert!(res.is_err(), "{res:?}");
+    assert!(took < std::time::Duration::from_secs(30), "{took:?}");
+    assert!(ps.trim().is_empty(), "build běží dál: {ps}");
+}

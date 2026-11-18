@@ -17,6 +17,7 @@ mod volumes;
 pub use volumes::{backup_file_name, valid_volume_name};
 #[cfg(test)]
 pub use volumes::{du_sizes, volume_op_for_test, volume_sizes_for_test, HELPER_IMAGE};
+pub use build::cancel_build;
 pub use spec::{is_windows_path, AddDistroSpec, BuildSpec, RunSpec};
 pub use detail::{start_stats, StatSample, StatsFeed, STATS_WINDOW};
 #[cfg(test)]

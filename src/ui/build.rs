@@ -297,6 +297,9 @@ fn log_window(app: &mut App, ctx: &egui::Context) {
                     if r.clicked() {
                         close = true;
                     }
+                    if running && super::danger_button(ui, t!("\u{E4F6} Zrušit sestavení", "\u{E4F6} Cancel build")).clicked() {
+                        crate::worker::cancel_build();
+                    }
                     if ui.button(t!("\u{E1CA} Kopírovat", "\u{E1CA} Copy")).clicked() {
                         ui.ctx().copy_text(log.text.clone());
                     }
