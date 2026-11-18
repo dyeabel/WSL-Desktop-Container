@@ -62,6 +62,18 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
        `ss -tunp` / conntrack in the container's namespace), with traffic per connection where
        available;
      - refreshed live while the view is open, filterable, copyable.
+8. ★ **`localhost` answers immediately for published ports (IPv6 `::1`)** – in NAT mode the WSL
+   relay (`wslrelay`) listens on Windows only on IPv4 `127.0.0.1`. Windows resolves `localhost`
+   to `::1` first; the connection there is not refused but hangs until a timeout, only then the
+   client falls back to IPv4. `http://127.0.0.1:<port>` works right away, `http://localhost:<port>`
+   only with a delay (browsers and `Invoke-WebRequest` cope with it, tools with a short timeout
+   and health checks fail). Options:
+   - the app runs a small relay on `[::1]:<port>` → `127.0.0.1:<port>` for every published
+     container port (started / stopped from the event stream, like Docker Desktop does), with a
+     setting to turn it off;
+   - or recommend `networkingMode=mirrored` in the `.wslconfig` editor (where Windows 11 22H2+
+     supports it) with an explanation of the trade-offs;
+   - show a hint in the container detail / port list when a port is reachable only on IPv4.
 
 ## Containers, images, compose
 
