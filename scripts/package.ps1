@@ -1,4 +1,4 @@
-# Sestaví portable balíček WLS Desktop: dist\WLS-Desktop-<verze>-win-x64.zip
+﻿# Sestaví portable balíček WLS Desktop: dist\WLS-Desktop-<verze>-win-x64.zip
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\package.ps1 [-NoBuild]
 #

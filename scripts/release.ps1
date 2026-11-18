@@ -1,4 +1,4 @@
-# Produkční build WLS Desktop: kontroly, testy, release build a portable balíček.
+﻿# Produkční build WLS Desktop: kontroly, testy, release build a portable balíček.
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\release.ps1                 # build + balíček z aktuální verze
 #   powershell -ExecutionPolicy Bypass -File scripts\release.ps1 -Version 0.3.0  # nastaví verzi v Cargo.toml (commit)
