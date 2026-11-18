@@ -184,6 +184,8 @@ pub struct Shared {
     pub events_live: AtomicBool,
     refresh_pending: AtomicBool,
     notifier: Mutex<notify::Notifier>,
+    /// předchozí vzorek CPU (čas, kumulované ns) pro výpočet vytížení z rozdílu
+    cpu_prev: Mutex<std::collections::HashMap<String, (Instant, u64)>>,
 }
 
 #[derive(Clone)]
@@ -292,7 +294,22 @@ impl Worker {
                         thread::spawn(move || d.stats(&id, &name))
                     })
                     .collect();
-                let rows: Vec<StatRow> = handles.into_iter().filter_map(|h| h.join().ok().flatten()).collect();
+                let mut rows: Vec<StatRow> = handles.into_iter().filter_map(|h| h.join().ok().flatten()).collect();
+                // CPU z rozdílu kumulovaného času mezi obnoveními (100 % = jedno jádro) – funguje
+                // i na Podmanu, který v jednorázových statistikách nevyplňuje precpu_stats
+                if let Ok(mut prev) = w.shared.cpu_prev.lock() {
+                    let now = Instant::now();
+                    for r in &mut rows {
+                        if let Some((t, total)) = prev.get(&r.id) {
+                            let dt = now.duration_since(*t).as_nanos() as f64;
+                            if dt > 0.0 && r.cpu_total >= *total {
+                                r.cpu = (r.cpu_total - total) as f64 / dt * 100.0;
+                            }
+                        }
+                    }
+                    prev.clear();
+                    prev.extend(rows.iter().map(|r| (r.id.clone(), (now, r.cpu_total))));
+                }
                 let df = d.df();
                 w.send(Msg::Stats(rows, df));
                 w.shared.stats_running.store(false, Ordering::SeqCst);

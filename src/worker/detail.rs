@@ -199,6 +199,10 @@ impl Worker {
                         let _ = d.container_action(&nid, "remove");
                     }
                 }
+                // nový kontejner už neexistuje – rada „viz log kontejneru“ by mátla
+                let e = e
+                    .replace(" Výstup najdeš v logu kontejneru.", " Nový kontejner byl odstraněn.")
+                    .replace(" See the container log for output.", " The new container was removed.");
                 Err(restore(e))
             }
         }
