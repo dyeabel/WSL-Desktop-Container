@@ -5,6 +5,11 @@
 //! Windows cesty v argumentech se přeloží (C:\x -> /mnt/c/x). Pokud se binárka
 //! jmenuje `docker-compose.exe`, chová se jako `docker compose`.
 //!
+//! Jednoduché příkazy jen pro čtení (`ps`, `images`, `volume ls`, `network ls`,
+//! `version --format`, `info --format`) odpoví rychlá cesta (`fast.rs`) přímo z API enginu
+//! bez spouštění wsl.exe; cokoli jiného (nebo chyba API) jde přes wsl.exe.
+//! WLS_SHIM_FAST=0 rychlou cestu vypne.
+//!
 //! WLS_SHIM_DEBUG=1 vypíše na stderr, co se spouští.
 
 #[path = "../config.rs"]
@@ -15,8 +20,12 @@ mod config;
 mod engine;
 #[path = "../pathmap.rs"]
 mod pathmap;
+#[path = "../apitls.rs"]
+mod apitls;
 mod envfwd;
+mod fast;
 
+use std::io::Write;
 use std::process::{Command, ExitCode};
 
 fn main() -> ExitCode {
@@ -44,6 +53,29 @@ fn main() -> ExitCode {
     }
     let distro = std::env::var("WLS_DISTRO").ok().filter(|d| !d.is_empty()).unwrap_or(cfg.distro.clone());
     let debug = std::env::var("WLS_SHIM_DEBUG").is_ok();
+
+    // rychlá cesta: odpověď přímo z API, bez wsl.exe
+    if exe_name != "docker-compose" && std::env::var("WLS_SHIM_FAST").map(|v| v != "0").unwrap_or(true) {
+        let t = std::time::Instant::now();
+        match fast::try_run(&args, cfg.port, cfg.tls) {
+            Ok((out, path)) => {
+                if debug {
+                    eprintln!("[wls-docker] fast path: GET {path} ({} ms)", t.elapsed().as_millis());
+                }
+                let mut so = std::io::stdout().lock();
+                // zavřená roura (`| head`) není chyba
+                let _ = so.write_all(out.as_bytes()).and_then(|_| so.flush());
+                return ExitCode::SUCCESS;
+            }
+            Err(why) => {
+                if debug {
+                    eprintln!("[wls-docker] fast path not used: {why}");
+                }
+            }
+        }
+    } else if debug {
+        eprintln!("[wls-docker] fast path disabled");
+    }
 
     // síťové cesty WSL nevidí – srozumitelné varování místo záhadné chyby
     for p in pathmap::unreachable_paths(&args) {

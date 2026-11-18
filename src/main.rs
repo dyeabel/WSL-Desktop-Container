@@ -3,6 +3,7 @@
 #[macro_use]
 mod i18n;
 mod app;
+mod apitls;
 mod autostart;
 mod config;
 mod docker;
