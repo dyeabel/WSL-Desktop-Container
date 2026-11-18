@@ -335,7 +335,7 @@ impl Worker {
                 ))
             }
             Err(e) => {
-                self.send(Msg::Output(tf!("Odinstalace: {}", "Uninstall: {}", engine.name()), e));
+                self.send(Msg::Output(tf!("Odinstalace: {}", "Uninstall: {}", engine.name()), e.into()));
                 Err(t!("Odinstalace selhala – viz výstup", "Uninstall failed – see output").into())
             }
         }

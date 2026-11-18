@@ -89,7 +89,7 @@ pub fn parent(path: &str) -> String {
 }
 
 fn run(distro: &str, root: bool, args: &[&str]) -> Result<String, String> {
-    wsl::run(distro, user(root), None, args)
+    Ok(wsl::run(distro, user(root), None, args)?)
 }
 
 pub fn mkdir(distro: &str, root: bool, path: &str) -> Result<String, String> {
@@ -172,7 +172,7 @@ mv -fT -- "$t" "$f""#;
 
 pub fn write_text(distro: &str, root: bool, path: &str, text: &str) -> Result<String, String> {
     let script = if root { SAFE_WRITE } else { "cat > \"$1\"" };
-    wsl::run_stdin(distro, user(root), &["sh", "-c", script, "sh", path], text)
+    Ok(wsl::run_stdin(distro, user(root), &["sh", "-c", script, "sh", path], text)?)
 }
 
 #[cfg(test)]

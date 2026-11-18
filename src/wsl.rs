@@ -45,7 +45,9 @@ pub fn decode(bytes: &[u8]) -> String {
     }
 }
 
-fn finish(out: std::process::Output) -> Result<String, String> {
+pub use crate::error::WslError;
+
+fn finish(out: std::process::Output) -> Result<String, WslError> {
     let stdout = decode(&out.stdout);
     let stderr = decode(&out.stderr);
     if out.status.success() {
@@ -58,8 +60,8 @@ fn finish(out: std::process::Output) -> Result<String, String> {
         }
         Ok(s)
     } else {
-        let msg = if stderr.trim().is_empty() { stdout } else { stderr };
-        Err(tf!("{} (kód {})", "{} (code {})", msg.trim(), out.status.code().unwrap_or(-1)))
+        let output = if stderr.trim().is_empty() { stdout } else { stderr };
+        Err(WslError::Failed { code: out.status.code().unwrap_or(-1), output })
     }
 }
 
@@ -106,7 +108,7 @@ pub(crate) fn base(distro: &str, user: Option<&str>, cwd: Option<&str>) -> Comma
 }
 
 /// Spustí program v distribuci a vrátí stdout (+stderr).
-pub fn run(distro: &str, user: Option<&str>, cwd: Option<&str>, args: &[&str]) -> Result<String, String> {
+pub fn run(distro: &str, user: Option<&str>, cwd: Option<&str>, args: &[&str]) -> Result<String, WslError> {
     let out = base(distro, user, cwd)
         .args(args)
         .stdin(Stdio::null())
@@ -115,13 +117,13 @@ pub fn run(distro: &str, user: Option<&str>, cwd: Option<&str>, args: &[&str]) -
     finish(out)
 }
 
-pub fn run_owned(distro: &str, user: Option<&str>, cwd: Option<&str>, args: &[String]) -> Result<String, String> {
+pub fn run_owned(distro: &str, user: Option<&str>, cwd: Option<&str>, args: &[String]) -> Result<String, WslError> {
     let a: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     run(distro, user, cwd, &a)
 }
 
 /// Spustí program a pošle mu `input` na stdin.
-pub fn run_stdin(distro: &str, user: Option<&str>, args: &[&str], input: &str) -> Result<String, String> {
+pub fn run_stdin(distro: &str, user: Option<&str>, args: &[&str], input: &str) -> Result<String, WslError> {
     let mut child = base(distro, user, None)
         .args(args)
         .stdin(Stdio::piped())
@@ -204,19 +206,19 @@ pub fn run_stream(
     Ok(st.code().unwrap_or(-1))
 }
 
-fn wsl_simple(args: &[&str]) -> Result<String, String> {
+fn wsl_simple(args: &[&str]) -> Result<String, WslError> {
     finish(hidden("wsl.exe").args(args).output().map_err(|e| e.to_string())?)
 }
 
-pub fn start(distro: &str) -> Result<String, String> {
+pub fn start(distro: &str) -> Result<String, WslError> {
     run(distro, None, None, &["true"])
 }
 
-pub fn terminate(distro: &str) -> Result<String, String> {
+pub fn terminate(distro: &str) -> Result<String, WslError> {
     wsl_simple(&["--terminate", distro])
 }
 
-pub fn shutdown() -> Result<String, String> {
+pub fn shutdown() -> Result<String, WslError> {
     wsl_simple(&["--shutdown"])
 }
 
@@ -251,7 +253,7 @@ pub fn parse_online(text: &str) -> Vec<(String, String)> {
 }
 
 /// Nainstaluje distribuci bez interaktivního prvního spuštění (může trvat minuty – stahování).
-pub fn install_distro(distro: &str, name: &str) -> Result<String, String> {
+pub fn install_distro(distro: &str, name: &str) -> Result<String, WslError> {
     let mut c = hidden("wsl.exe");
     c.args(["--install", distro, "--no-launch"]);
     if !name.is_empty() && name != distro {
@@ -277,7 +279,7 @@ mod online_tests {
     }
 }
 
-pub fn set_default(distro: &str) -> Result<String, String> {
+pub fn set_default(distro: &str) -> Result<String, WslError> {
     wsl_simple(&["--set-default", distro])
 }
 
@@ -421,30 +423,30 @@ pub fn manage_args(distro: &str, compact: bool) -> Vec<String> {
     v
 }
 
-fn wsl_owned(args: &[String]) -> Result<String, String> {
+fn wsl_owned(args: &[String]) -> Result<String, WslError> {
     let a: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     wsl_simple(&a)
 }
 
 /// Zruší registraci distribuce a smaže její disk (nevratné).
-pub fn unregister(distro: &str) -> Result<String, String> {
+pub fn unregister(distro: &str) -> Result<String, WslError> {
     wsl_simple(&["--unregister", distro])
 }
 
 /// Exportuje distribuci do souboru (může trvat minuty).
-pub fn export(distro: &str, file: &str, format: ExportFormat) -> Result<String, String> {
+pub fn export(distro: &str, file: &str, format: ExportFormat) -> Result<String, WslError> {
     wsl_owned(&export_args(distro, file, format, export_has_format_flag()))
 }
 
 /// Importuje distribuci ze souboru .tar / .tar.gz / .vhdx do složky.
-pub fn import(distro: &str, folder: &str, file: &str) -> Result<String, String> {
+pub fn import(distro: &str, folder: &str, file: &str) -> Result<String, WslError> {
     wsl_owned(&import_args(distro, folder, file))
 }
 
 /// `wsl --manage …`; disk bývá chvíli po `--terminate` ještě připojený (ERROR_SHARING_VIOLATION),
 /// proto se několikrát zopakuje. Na WSL 2.x/3.x zůstává disk spuštěné distribuce připojený
 /// k VM často až do `wsl --shutdown` – pak chyba propadne volajícímu.
-fn manage(args: &[String]) -> Result<String, String> {
+fn manage(args: &[String]) -> Result<String, WslError> {
     let mut res = wsl_owned(args);
     for _ in 0..3 {
         match &res {
@@ -459,12 +461,12 @@ fn manage(args: &[String]) -> Result<String, String> {
 }
 
 /// Zapne zhuštěný (sparse) disk – WSL pak samo vrací uvolněné místo (distribuce musí být ukončená).
-pub fn set_sparse(distro: &str) -> Result<String, String> {
+pub fn set_sparse(distro: &str) -> Result<String, WslError> {
     manage(&manage_args(distro, false))
 }
 
 /// Zkomprimuje VHDX distribuce (distribuce musí být ukončená, disk nesmí být zhuštěný).
-pub fn compact(distro: &str) -> Result<String, String> {
+pub fn compact(distro: &str) -> Result<String, WslError> {
     manage(&manage_args(distro, true))
 }
 

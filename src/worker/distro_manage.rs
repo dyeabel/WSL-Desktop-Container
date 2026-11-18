@@ -78,7 +78,7 @@ impl Worker {
                 self.stop_distro_for(&name);
                 let res = wsl::set_sparse(&name);
                 let _ = self.cmd.send(super::Cmd::Distro(DistroOp::DiskInfo(name.clone())));
-                res.map_err(|e| in_use_hint(&name, e))?;
+                res.map_err(|e| in_use_hint(&name, e.into()))?;
                 Ok(tf!("Disk distribuce {name} je zhuštěný (sparse)", "The disk of {name} is now sparse"))
             }
             DistroOp::Compact(name) => {
@@ -95,7 +95,7 @@ impl Worker {
                             "The disk of {name} is sparse – it cannot be compacted, WSL returns freed space by itself"
                         )
                     } else {
-                        in_use_hint(&name, e)
+                        in_use_hint(&name, e.into())
                     }
                 })?;
                 Ok(match (before, after) {

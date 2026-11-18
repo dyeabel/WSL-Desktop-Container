@@ -522,14 +522,14 @@ impl Worker {
                         self.suppress_tracking();
                         self.kill_keepalive();
                     }
-                    wsl::terminate(&n).map(|_| tf!("Distribuce {n} ukončena", "Distribution {n} terminated"))
+                    wsl::terminate(&n).map(|_| tf!("Distribuce {n} ukončena", "Distribution {n} terminated")).map_err(String::from)
                 }
                 WslCmd::Shutdown => {
                     self.suppress_tracking();
                     self.kill_keepalive();
-                    wsl::shutdown().map(|_| t!("WSL vypnuto", "WSL shut down").into())
+                    wsl::shutdown().map(|_| t!("WSL vypnuto", "WSL shut down").into()).map_err(String::from)
                 }
-                WslCmd::SetDefault(n) => wsl::set_default(&n).map(|_| tf!("{n} je nyní výchozí distribuce", "{n} is now the default distribution")),
+                WslCmd::SetDefault(n) => wsl::set_default(&n).map(|_| tf!("{n} je nyní výchozí distribuce", "{n} is now the default distribution")).map_err(String::from),
             },
             Cmd::EngineStart => self.engine_start(),
             Cmd::EngineStop => self.engine_stop(),
