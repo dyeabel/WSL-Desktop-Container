@@ -5,12 +5,15 @@
 //! Windows cesty v argumentech se přeloží (C:\x -> /mnt/c/x). Pokud se binárka
 //! jmenuje `docker-compose.exe`, chová se jako `docker compose`.
 //!
-//! Jednoduché příkazy jen pro čtení (`ps`, `images`, `volume ls`, `network ls`,
-//! `version --format`, `info --format`) odpoví rychlá cesta (`fast.rs`) přímo z API enginu
+//! Jednoduché příkazy jen pro čtení (`ps`, `images`, `volume ls`, `network ls`, `inspect`,
+//! `logs` bez `-f`, `version --format`, `info --format`) odpoví rychlá cesta (`fast.rs`) přímo z API enginu
 //! bez spouštění wsl.exe; cokoli jiného (nebo chyba API) jde přes wsl.exe.
 //! WLS_SHIM_FAST=0 rychlou cestu vypne.
 //!
-//! WLS_SHIM_DEBUG=1 vypíše na stderr, co se spouští.
+//! Docker kontexty (`docker context …`, `--context`, `DOCKER_CONTEXT`) vybírají cíl WLS –
+//! distribuci, engine, port a TLS (viz `contexts.rs`, `ctxcmd.rs`).
+//!
+//! WLS_SHIM_DEBUG=1 vypíše na stderr, co se spouští (včetně vybraného kontextu).
 
 #[path = "../config.rs"]
 #[allow(dead_code)]
@@ -25,6 +28,9 @@ mod apitls;
 #[path = "../dpapi.rs"]
 #[allow(dead_code, unused_imports)] // shim jen dešifruje
 mod dpapi;
+#[path = "../contexts.rs"]
+mod contexts;
+mod ctxcmd;
 mod envfwd;
 mod fast;
 
@@ -39,8 +45,17 @@ fn main() -> ExitCode {
         .map(|s| s.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
 
-    let mut args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
-    if exe_name == "docker-compose" {
+    let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
+
+    // globální --context / -c se do WSL nepředává (Podman ho nezná, kontext řeší shim)
+    let (ctx_flag, mut args) = match contexts::strip_context_flag(&args) {
+        Ok(x) => x,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(125);
+        }
+    };
+    if exe_name == "docker-compose" && args.first().map(|a| a != "compose").unwrap_or(true) {
         args.insert(0, "compose".into());
     }
 
@@ -55,19 +70,69 @@ fn main() -> ExitCode {
         cfg.port = p;
     }
     let distro = std::env::var("WLS_DISTRO").ok().filter(|d| !d.is_empty()).unwrap_or(cfg.distro.clone());
+    let default_target = contexts::Target { distro, engine: cfg.engine, port: cfg.port, tls: cfg.tls };
     let debug = std::env::var("WLS_SHIM_DEBUG").is_ok();
+    let env_ctx = std::env::var("DOCKER_CONTEXT").ok();
+    let store_path = contexts::path();
+
+    // docker context … – vyřídí shim sám
+    if args.first().map(|a| a == "context").unwrap_or(false) {
+        let Some(store_path) = store_path else {
+            eprintln!("wls-docker: APPDATA is not set, cannot store contexts");
+            return ExitCode::from(1);
+        };
+        let env = ctxcmd::CtxEnv { store_path, default: default_target, env_ctx: env_ctx.clone(), distros: &contexts::wsl_distros };
+        let r = ctxcmd::run(&args[1..], &env);
+        let _ = std::io::stdout().lock().write_all(r.out.as_bytes());
+        let _ = std::io::stderr().lock().write_all(r.err.as_bytes());
+        return ExitCode::from(r.code);
+    }
+
+    // výběr kontextu: --context > DOCKER_CONTEXT > aktuální v contexts.json > default
+    let store = match store_path.as_deref().map(contexts::Store::load_from) {
+        Some(Ok(s)) => s,
+        Some(Err(e)) => {
+            eprintln!("wls-docker: cannot read contexts: {e}");
+            return ExitCode::from(1);
+        }
+        None => contexts::Store::default(),
+    };
+    let ctx_name = contexts::select(ctx_flag.as_deref(), env_ctx.as_deref(), &store).to_string();
+    let target = match store.resolve(&ctx_name, &default_target) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(1);
+        }
+    };
+    if debug {
+        eprintln!(
+            "[wls-docker] context: {ctx_name} (distro {}, {}, port {}{})",
+            target.distro,
+            target.engine.name(),
+            target.port,
+            if target.tls { ", tls" } else { "" }
+        );
+    }
 
     // rychlá cesta: odpověď přímo z API, bez wsl.exe
     if exe_name != "docker-compose" && std::env::var("WLS_SHIM_FAST").map(|v| v != "0").unwrap_or(true) {
         let t = std::time::Instant::now();
-        match fast::try_run(&args, cfg.port, cfg.tls) {
-            Ok((out, path)) => {
+        match fast::try_run(&args, target.port, target.tls) {
+            Ok(out) => {
                 if debug {
-                    eprintln!("[wls-docker] fast path: GET {path} ({} ms)", t.elapsed().as_millis());
+                    eprintln!("[wls-docker] fast path: GET {} ({} ms)", out.paths.join(", GET "), t.elapsed().as_millis());
                 }
-                let mut so = std::io::stdout().lock();
                 // zavřená roura (`| head`) není chyba
-                let _ = so.write_all(out.as_bytes()).and_then(|_| so.flush());
+                for (stream, data) in &out.chunks {
+                    if *stream == 2 {
+                        let mut se = std::io::stderr().lock();
+                        let _ = se.write_all(data).and_then(|_| se.flush());
+                    } else {
+                        let mut so = std::io::stdout().lock();
+                        let _ = so.write_all(data).and_then(|_| so.flush());
+                    }
+                }
                 return ExitCode::SUCCESS;
             }
             Err(why) => {
@@ -98,10 +163,10 @@ fn main() -> ExitCode {
 
     let args = pathmap::translate_args(&args);
     // Docker -> `docker …`, Podman -> `podman --url tcp://127.0.0.1:<port> …`
-    let cli = cfg.engine.cli(cfg.port, cfg.tls);
+    let cli = target.engine.cli(target.port, target.tls);
 
     let mut cmd = Command::new("wsl.exe");
-    cmd.args(["-d", &distro]);
+    cmd.args(["-d", &target.distro]);
     if let Some(cwd) = &cwd_win {
         let cwd = cwd.display().to_string();
         let cwd = cwd.strip_prefix(r"\\?\").unwrap_or(&cwd).to_string();
