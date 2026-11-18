@@ -49,7 +49,12 @@ impl Worker {
             if !pem.contains("-----BEGIN") {
                 return Err(tf!("{src} není platný PEM soubor", "{src} is not a valid PEM file"));
             }
-            std::fs::write(dir.join(f), pem).map_err(|e| e.to_string())?;
+            if f == "key.pem" {
+                // klíč jen šifrovaně (DPAPI) – /mnt/c čte každý uživatel každé distribuce
+                crate::docker::store_client_key(pem.as_bytes())?;
+            } else {
+                std::fs::write(dir.join(f), pem).map_err(|e| e.to_string())?;
+            }
         }
         Ok(())
     }
@@ -107,6 +112,30 @@ impl Worker {
     /// Spustí skript, který zpřístupní API enginu na TCP, a počká na odezvu.
     /// Vrací (výstup skriptu, API odpovídá).
     pub(super) fn setup_api(&self, cfg: &Config) -> Result<(String, bool), String> {
+        self.setup_api_with(cfg, false)
+    }
+
+    /// Přegeneruje TLS certifikáty (nová CA, server i klient) a znovu nastaví API.
+    pub(super) fn regen_certs(&self) -> Result<String, String> {
+        let cfg = self.cfg();
+        if !cfg.tls {
+            return Err(t!("TLS není zapnuté", "TLS is not enabled").into());
+        }
+        self.suppress_tracking();
+        let r = self.setup_api_with(&cfg, true);
+        let out = match &r {
+            Ok((o, _)) => o.clone(),
+            Err(e) => e.clone(),
+        };
+        self.send(Msg::Output(t!("Zabezpečení API", "API security").into(), out));
+        if r.is_ok() && crate::shim_install::status().docker_host.is_some() {
+            // nástroje s DOCKER_CERT_PATH potřebují nový klíč
+            let _ = crate::shim_install::set_docker_host(Some((cfg.port, true)));
+        }
+        r.map(|_| t!("Certifikáty přegenerovány", "Certificates regenerated").into())
+    }
+
+    fn setup_api_with(&self, cfg: &Config, regen: bool) -> Result<(String, bool), String> {
         let port = cfg.port.to_string();
         // výchozí uživatel distribuce – v režimu TLS dostane přístup k unix socketu enginu
         let user = wsl::run(&cfg.distro, None, None, &["id", "-un"]).map(|u| u.trim().to_string()).unwrap_or_default();
@@ -119,6 +148,7 @@ impl Worker {
                 &format!("PORT={port}"),
                 &format!("TLS={}", if cfg.tls { 1 } else { 0 }),
                 &format!("U={user}"),
+                &format!("REGEN={}", if regen { 1 } else { 0 }),
                 "sh",
                 "-c",
                 &cfg.engine.setup_script(),

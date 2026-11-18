@@ -6,6 +6,7 @@ mod app;
 mod autostart;
 mod config;
 mod docker;
+mod dpapi;
 mod engine;
 mod fs;
 mod icon_art;

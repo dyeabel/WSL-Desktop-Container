@@ -263,6 +263,23 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                                 Cmd::SetTls(false),
                             );
                         }
+                        if ui
+                            .button(t!("\u{E094} Přegenerovat certifikáty", "\u{E094} Regenerate certificates"))
+                            .on_hover_text(t!(
+                                "Nová CA, serverový i klientský certifikát. Platí 825 dní; před vypršením se obnoví samy při nastavení API.",
+                                "New CA, server and client certificates. Valid 825 days; renewed automatically on API setup before they expire."
+                            ))
+                            .clicked()
+                        {
+                            app.ask(
+                                t!("Přegenerovat certifikáty?", "Regenerate certificates?"),
+                                t!(
+                                    "Vytvoří se nová CA a certifikáty, staré přestanou platit. Engine se restartuje.",
+                                    "A new CA and certificates are created; the old ones stop working. The engine will restart."
+                                ),
+                                Cmd::RegenCerts,
+                            );
+                        }
                     } else {
                         badge(ui, &tf!("\u{E412} bez ověření · port {port}", "\u{E412} no authentication · port {port}"), theme::YELLOW);
                         if ui.button(t!("\u{E2FA} Zapnout TLS", "\u{E2FA} Turn TLS on")).clicked() {

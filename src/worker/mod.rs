@@ -104,6 +104,8 @@ pub enum Cmd {
     Sleep,
     /// zapnout / vypnout zabezpečení API (TLS s klientským certifikátem)
     SetTls(bool),
+    /// přegenerovat TLS certifikáty
+    RegenCerts,
     SetKeepAlive(bool),
     PauseAll,
     UnpauseAll,
@@ -458,6 +460,7 @@ impl Worker {
             }
             Cmd::Sleep => self.sleep_distro(),
             Cmd::SetTls(on) => self.set_tls(on),
+            Cmd::RegenCerts => self.regen_certs(),
             Cmd::SetKeepAlive(on) => self.set_keep_alive(on),
             Cmd::PauseAll => self.set_paused_all(true),
             Cmd::UnpauseAll => self.set_paused_all(false),

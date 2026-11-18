@@ -44,6 +44,8 @@ pub fn set_docker_host(target: Option<(u16, bool)>) -> Result<String, String> {
     match target {
         Some((p, tls)) => {
             let v = format!("tcp://127.0.0.1:{p}");
+            // nástroje s DOCKER_CERT_PATH potřebují nešifrovaný key.pem
+            crate::docker::export_plain_key(tls)?;
             let (verify, certs) = match (tls, crate::docker::tls_dir()) {
                 (true, Some(d)) => (ps_quote("1"), ps_quote(&d.display().to_string())),
                 _ => ("$null".to_string(), "$null".to_string()),
@@ -52,12 +54,20 @@ pub fn set_docker_host(target: Option<(u16, bool)>) -> Result<String, String> {
                 "[Environment]::SetEnvironmentVariable('DOCKER_HOST', {}, 'User');                  [Environment]::SetEnvironmentVariable('DOCKER_TLS_VERIFY', {verify}, 'User');                  [Environment]::SetEnvironmentVariable('DOCKER_CERT_PATH', {certs}, 'User')",
                 ps_quote(&v)
             ))?;
-            Ok(tf!(
+            let mut msg = tf!(
                 "DOCKER_HOST={v} nastaveno – nástroje je uvidí po restartu (nový terminál / VS Code)",
                 "DOCKER_HOST={v} set – tools will see it after a restart (new terminal / VS Code)"
-            ))
+            );
+            if tls {
+                msg.push_str(t!(
+                    ". Pozor: klientský klíč je teď i nešifrovaně v DOCKER_CERT_PATH (key.pem) – může ho číst každý uživatel ve WSL přes /mnt/c.",
+                    ". Note: the client key is now also unencrypted in DOCKER_CERT_PATH (key.pem) – any WSL user can read it via /mnt/c."
+                ));
+            }
+            Ok(msg)
         }
         None => {
+            let _ = crate::docker::export_plain_key(false);
             powershell(
                 "[Environment]::SetEnvironmentVariable('DOCKER_HOST', $null, 'User');                  [Environment]::SetEnvironmentVariable('DOCKER_TLS_VERIFY', $null, 'User');                  [Environment]::SetEnvironmentVariable('DOCKER_CERT_PATH', $null, 'User')",
             )?;

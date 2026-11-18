@@ -425,13 +425,43 @@ pub fn tls_config(dir: &std::path::Path) -> Result<rustls::ClientConfig, String>
         .map_err(|e| format!("cert.pem: {e}"))?
         .collect::<Result<_, _>>()
         .map_err(|e| format!("cert.pem: {e}"))?;
-    let key = PrivateKeyDer::from_pem_file(f("key.pem")).map_err(|e| format!("key.pem: {e}"))?;
+    // klíč je uložený šifrovaně (DPAPI); key.pem jen když si ho uživatel vyexportoval pro nástroje
+    let key = match std::fs::read(f("key.pem.dpapi")) {
+        Ok(enc) => {
+            let pem = crate::dpapi::unprotect(&enc)?;
+            PrivateKeyDer::from_pem_slice(&pem).map_err(|e| format!("key.pem.dpapi: {e}"))?
+        }
+        Err(_) => PrivateKeyDer::from_pem_file(f("key.pem")).map_err(|e| format!("key.pem: {e}"))?,
+    };
     rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
         .with_safe_default_protocol_versions()
         .map_err(|e| e.to_string())?
         .with_root_certificates(roots)
         .with_client_auth_cert(certs, key)
         .map_err(|e| e.to_string())
+}
+
+/// Uloží klientský klíč šifrovaně (DPAPI) a smaže případný nešifrovaný key.pem.
+pub fn store_client_key(pem: &[u8]) -> Result<(), String> {
+    let dir = tls_dir().ok_or("APPDATA")?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("key.pem.dpapi"), crate::dpapi::protect(pem)?).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(dir.join("key.pem"));
+    Ok(())
+}
+
+/// Nešifrovaný key.pem pro nástroje s DOCKER_CERT_PATH (on) / jeho smazání (off).
+pub fn export_plain_key(on: bool) -> Result<(), String> {
+    let dir = tls_dir().ok_or("APPDATA")?;
+    if on {
+        let enc = std::fs::read(dir.join("key.pem.dpapi")).map_err(|e| format!("key.pem.dpapi: {e}"))?;
+        std::fs::write(dir.join("key.pem"), crate::dpapi::unprotect(&enc)?).map_err(|e| e.to_string())
+    } else {
+        match std::fs::remove_file(dir.join("key.pem")) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Zapne / vypne TLS pro všechna další spojení s enginem.

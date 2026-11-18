@@ -235,6 +235,10 @@ const TLS_FUNCS: &str = r#"tls_proxy() {
   PU=${WLS_TLS_UNIT:-wls-tls-proxy}
   mkdir -p $T
   chmod 700 $T
+  # certifikáty, které do 30 dnů vyprší, se vytvoří znovu
+  for c in $T/server.pem $T/cert.pem; do
+    if [ -s "$c" ] && ! openssl x509 -checkend 2592000 -noout -in "$c" >/dev/null 2>&1; then REGEN=1; fi
+  done
   if [ ! -s $T/ca.pem ] || [ ! -s $T/server.pem ] || [ ! -s $T/cert.pem ] || [ "$REGEN" = "1" ]; then
     ( cd $T
       rm -f ./*.pem ./*.srl ./*.csr ./*.ext
@@ -248,7 +252,8 @@ const TLS_FUNCS: &str = r#"tls_proxy() {
       openssl req $EC -keyout key.pem -out client.csr -subj "/CN=wls-desktop-client" 2>/dev/null
       printf 'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n' > client.ext
       openssl x509 -req -in client.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out cert.pem -days 825 -extfile client.ext 2>/dev/null
-      rm -f ./*.csr ./*.ext ./*.srl )
+      rm -f ./*.csr ./*.ext ./*.srl
+      chmod 400 ca-key.pem )
     echo "Certifikaty vytvoreny v $T"
   fi
   S=$(command -v socat)
@@ -259,7 +264,7 @@ BindsTo=$2
 After=$2
 
 [Service]
-ExecStart=$S OPENSSL-LISTEN:$PORT,bind=127.0.0.1,reuseaddr,fork,cert=$T/server.pem,key=$T/server-key.pem,cafile=$T/ca.pem,verify=1 UNIX-CONNECT:$1
+ExecStart=$S OPENSSL-LISTEN:$PORT,bind=127.0.0.1,reuseaddr,fork,max-children=32,cert=$T/server.pem,key=$T/server-key.pem,cafile=$T/ca.pem,verify=1 UNIX-CONNECT:$1
 Restart=always
 RestartSec=1
 
