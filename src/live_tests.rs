@@ -415,3 +415,92 @@ fn live_tls_proxy() {
     assert!(!no_cert, "spojení bez klientského certifikátu prošlo");
     assert!(!plain, "HTTP bez TLS prošlo");
 }
+
+/// Záloha, obnova a klon volume + velikosti (jen volume `wls-test-*`).
+/// `WLS_DISTRO=Debian cargo test live_volume_backup_restore -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn live_volume_backup_restore() {
+    use crate::engine::Engine;
+    use crate::worker::{volume_op_for_test, Cmd, HELPER_IMAGE};
+    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let d = Docker::new(port);
+    assert!(d.ping(), "API na {port} neodpovídá");
+    let ver: serde_json::Value = d.get("/version").unwrap();
+    let engine = if ver.to_string().contains("Podman") { Engine::Podman } else { Engine::Docker };
+    let cfg = crate::config::Config { distro: distro(), engine, port, ..Default::default() };
+    let cli = engine.cli(port, false);
+    let (src, dst, cln) = ("wls-test-backup", "wls-test-restore", "wls-test-clone");
+    // složka s mezerou a apostrofem (uvozovky Windows v názvech nedovolí)
+    let dir = std::env::temp_dir().join("wls-test backup it's");
+    let cleanup = || {
+        for v in [src, dst, cln] {
+            let _ = d.delete(&format!("/volumes/{v}?force=true"));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    };
+    cleanup();
+    std::fs::create_dir_all(&dir).unwrap();
+    // spustí alpine s volume na /data a vrátí výstup skriptu (skript je konstanta testu)
+    let sh = |vol: &str, ro: bool, script: &str| {
+        let mut a = cli.clone();
+        a.extend(["run", "--rm", "-v"].map(String::from));
+        a.push(format!("{vol}:/data{}", if ro { ":ro" } else { "" }));
+        a.extend([HELPER_IMAGE, "sh", "-c", script].map(String::from));
+        wsl::run_owned(&cfg.distro, None, None, &a).expect("alpine")
+    };
+    let listing = |vol: &str| {
+        sh(vol, true, r#"cd /data && find . | sort && cat a.txt .dot "with space.txt" sub/n && stat -c '%n %s %a' a.txt .dot "with space.txt""#)
+    };
+
+    d.post_json("/volumes/create", serde_json::json!({ "Name": src })).expect("create");
+    sh(src, false, r#"echo a > /data/a.txt && echo hidden > /data/.dot && echo mezera > "/data/with space.txt" && chmod 600 /data/.dot && mkdir /data/sub && echo n > /data/sub/n"#);
+    let orig = listing(src);
+    eprintln!("--- obsah {src}:\n{orig}");
+    assert!(orig.contains("./.dot") && orig.contains("./with space.txt") && orig.contains(".dot 7 600"), "{orig}");
+
+    // velikosti: /system/df (Podman ji vyplňuje) i záložní du
+    let sizes = crate::worker::volume_sizes_for_test(cfg.clone());
+    eprintln!("velikost (worker): {:?}", sizes.get(src));
+    assert!(sizes.get(src).is_some_and(|s| *s > 0), "{sizes:?}");
+    let mp: serde_json::Value = d.get(&format!("/volumes/{src}")).unwrap();
+    let mp = mp["Mountpoint"].as_str().unwrap().to_string();
+    let du = crate::worker::du_sizes(&cfg.distro, &[(mp.clone(), src.to_string())].into());
+    eprintln!("du -sb {mp}: {:?}", du.get(src));
+    assert!(du.get(src).is_some_and(|s| *s > 0), "{du:?}");
+
+    // záloha do Windows
+    let target = dir.join("wls-test-backup 'x'.tar.gz").to_string_lossy().to_string();
+    let r = volume_op_for_test(cfg.clone(), Cmd::BackupVolume { volume: src.into(), target: target.clone(), stop: false });
+    eprintln!("záloha: {r:?}");
+    assert!(r.is_ok(), "{r:?}");
+    assert!(std::fs::metadata(&target).expect("soubor zálohy").len() > 0);
+
+    // obnova do nového volume
+    let r = volume_op_for_test(cfg.clone(), Cmd::RestoreVolume { source: target.clone(), volume: dst.into(), create: true, clear: false });
+    eprintln!("obnova: {r:?}");
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(listing(dst), orig);
+
+    // obnova do existujícího s vyprázdněním: přidané soubory (i skryté) zmizí
+    sh(dst, false, "echo x > /data/extra && echo y > /data/.extra && echo z > /data/..extra");
+    let r = volume_op_for_test(cfg.clone(), Cmd::RestoreVolume { source: target.clone(), volume: dst.into(), create: false, clear: true });
+    eprintln!("obnova s vyprázdněním: {r:?}");
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(listing(dst), orig);
+    // nový volume se jménem existujícího nejde
+    let r = volume_op_for_test(cfg.clone(), Cmd::RestoreVolume { source: target.clone(), volume: dst.into(), create: true, clear: false });
+    eprintln!("obnova do existujícího jako nový: {r:?}");
+    assert!(r.is_err(), "{r:?}");
+
+    // klon
+    let r = volume_op_for_test(cfg.clone(), Cmd::CloneVolume { from: src.into(), to: cln.into() });
+    eprintln!("klon: {r:?}");
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(listing(cln), orig);
+
+    cleanup();
+    let left: serde_json::Value = d.get("/volumes").unwrap();
+    eprintln!("úklid hotov, zbývající volume wls-test-*: {}", left.to_string().matches("\"wls-test-").count());
+    assert!(!left.to_string().contains("\"wls-test-backup\"") && !dir.exists());
+}

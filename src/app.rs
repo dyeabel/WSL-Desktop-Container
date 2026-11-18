@@ -108,6 +108,8 @@ pub struct App {
     pub hub: ui::images::HubState,
     /// sestavení image z Dockerfile (dialog, průběh)
     pub build: ui::build::BuildState,
+    /// volume: velikosti, dialogy zálohy / obnovy / klonu
+    pub vol: ui::volumes::VolState,
     /// otevřený dialog „Přidat distribuci“
     pub add_distro: Option<crate::worker::AddDistroSpec>,
     /// distribuce k instalaci (wsl --list --online); None = načítá se
@@ -215,6 +217,7 @@ impl App {
             files: ui::files::FilesState::default(),
             hub: ui::images::HubState::default(),
             build: ui::build::BuildState::default(),
+            vol: ui::volumes::VolState::new(),
             uninstall: None,
             add_distro: None,
             online: None,
@@ -424,6 +427,7 @@ impl App {
                 Msg::BuildOutput(line) => ui::build::on_output(self, line),
                 Msg::BuildDone(r) => ui::build::on_done(self, r),
                 Msg::Inspect(id, r) => ui::detail::on_inspect(self, id, r),
+                Msg::VolumeSizes(s) => self.vol.sizes = s,
                 Msg::ConfigChanged => {
                     if let Ok(c) = self.cfg.read() {
                         self.cfg_draft = c.clone();
@@ -682,6 +686,7 @@ impl App {
         ui::settings::add_distro_dialog(self, ctx);
         ui::containers::run_dialog(self, ctx);
         ui::detail::window(self, ctx);
+        ui::volumes::dialogs(self, ctx);
     }
 
     fn toasts(&mut self, ctx: &egui::Context) {

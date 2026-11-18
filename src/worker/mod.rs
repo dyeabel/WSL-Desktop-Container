@@ -11,7 +11,11 @@ mod fs_ops;
 mod notify;
 mod spec;
 mod tracking;
+mod volumes;
 
+pub use volumes::{backup_file_name, valid_volume_name};
+#[cfg(test)]
+pub use volumes::{du_sizes, volume_op_for_test, volume_sizes_for_test, HELPER_IMAGE};
 pub use spec::{is_windows_path, AddDistroSpec, BuildSpec, RunSpec};
 pub use detail::{start_stats, StatSample, StatsFeed, STATS_WINDOW};
 #[cfg(test)]
@@ -80,6 +84,14 @@ pub enum Cmd {
     CreateVolume(String),
     RemoveVolume(String),
     PruneVolumes,
+    /// velikosti volume -> Msg::VolumeSizes
+    VolumeSizes,
+    /// záloha volume do .tar.gz ve Windows (stop = zastavit běžící kontejnery s volume)
+    BackupVolume { volume: String, target: String, stop: bool },
+    /// obnova volume ze zálohy (create = nový volume, clear = nejdřív vyprázdnit)
+    RestoreVolume { source: String, volume: String, create: bool, clear: bool },
+    /// kopie volume pod novým názvem
+    CloneVolume { from: String, to: String },
     CreateNetwork(String, String),
     RemoveNetwork(String),
     PruneNetworks,
@@ -140,6 +152,8 @@ pub enum Msg {
     BuildDone(Result<String, String>),
     /// výsledek inspect kontejneru (id, jak bylo požadováno)
     Inspect(String, Result<Box<crate::inspect::Detail>, String>),
+    /// velikosti volume v bajtech (chybí = neznámá)
+    VolumeSizes(std::collections::HashMap<String, u64>),
 }
 
 /// Souhrnný stav pro tray (zapisuje worker, čte vlákno UI/traye).
@@ -342,7 +356,7 @@ impl Worker {
     fn exec(&self, cmd: Cmd) {
         self.shared.busy.fetch_add(1, Ordering::SeqCst);
         self.ctx.request_repaint();
-        let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline | Cmd::Inspect(_));
+        let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline | Cmd::Inspect(_) | Cmd::VolumeSizes);
         let res = self.exec_inner(cmd);
         self.shared.busy.fetch_sub(1, Ordering::SeqCst);
         match res {
@@ -390,6 +404,10 @@ impl Worker {
             Cmd::CreateVolume(n) => d.post_json("/volumes/create", serde_json::json!({ "Name": n })).map(|_| tf!("Volume {n} vytvořen", "Volume {n} created")),
             Cmd::RemoveVolume(n) => d.delete(&format!("/volumes/{}", crate::docker::enc(&n))).map(|_| tf!("Volume {n} odstraněn", "Volume {n} removed")),
             Cmd::PruneVolumes => d.prune("volumes", Some(r#"{"all":["true"]}"#)),
+            Cmd::VolumeSizes => self.volume_sizes(),
+            Cmd::BackupVolume { volume, target, stop } => self.backup_volume(volume, target, stop),
+            Cmd::RestoreVolume { source, volume, create, clear } => self.restore_volume(source, volume, create, clear),
+            Cmd::CloneVolume { from, to } => self.clone_volume(from, to),
             Cmd::CreateNetwork(n, drv) => d
                 .post_json("/networks/create", serde_json::json!({ "Name": n, "Driver": drv }))
                 .map(|_| tf!("Síť {n} vytvořena", "Network {n} created")),
