@@ -86,14 +86,37 @@ fn live_podman_api() {
     assert!(d.df().is_some(), "df");
 }
 
+/// Přidání distribuce: instalace (Debian jako WLS-Test-Debian), příprava, kontrola, odregistrace.
+/// Stahuje ~100 MB – spouštěj jen ručně: `cargo test live_add_distro -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn live_add_distro() {
+    let name = "WLS-Test-Debian";
+    let _ = std::process::Command::new("wsl.exe").args(["--unregister", name]).output();
+    let out = wsl::install_distro("Debian", name).expect("install");
+    eprintln!("install: {}", out.trim());
+    let prep = wsl::run(name, Some("root"), None, &["env", "U=tester", "sh", "-c", &crate::engine::distro_prepare_script()]).expect("prepare");
+    assert!(prep.contains("systemd=true"), "{prep}");
+    assert!(prep.contains("default=tester"), "{prep}");
+    let _ = wsl::terminate(name);
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    // výchozí uživatel a sudo bez hesla
+    let who = wsl::run(name, None, None, &["sh", "-c", "id -un; sudo -n true && echo SUDO_OK; test -d /run/systemd/system && echo SYSTEMD_OK"]).expect("run");
+    eprintln!("{who}");
+    let _ = std::process::Command::new("wsl.exe").args(["--unregister", name]).output();
+    assert!(who.contains("tester"), "{who}");
+    assert!(who.contains("SUDO_OK"), "{who}");
+    assert!(who.contains("SYSTEMD_OK"), "{who}");
+}
+
 /// Syntaktická kontrola všech skriptů enginu (`sh -n`) přímo v distribuci.
 #[test]
 #[ignore]
 fn live_engine_scripts_syntax() {
     use crate::engine::Engine;
     for e in Engine::ALL {
-        for (what, s) in [("setup", e.setup_script()), ("install", e.install_script()), ("uninstall", e.uninstall_script())] {
-            let r = wsl::run(&distro(), None, None, &["sh", "-n", "-c", s]);
+        for (what, s) in [("setup", e.setup_script().to_string()), ("install", e.install_script()), ("uninstall", e.uninstall_script().to_string()), ("prepare", crate::engine::distro_prepare_script())] {
+            let r = wsl::run(&distro(), None, None, &["sh", "-n", "-c", &s]);
             assert!(r.is_ok(), "{} {what}: {:?}", e.name(), r);
         }
     }

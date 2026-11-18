@@ -151,6 +151,58 @@ pub fn shutdown() -> Result<String, String> {
     wsl_simple(&["--shutdown"])
 }
 
+/// Distribuce dostupné k instalaci (`wsl --list --online`): (název, popis).
+pub fn list_online() -> Result<Vec<(String, String)>, String> {
+    let out = hidden("wsl.exe").args(["--list", "--online"]).output().map_err(|e| e.to_string())?;
+    let text = decode(&out.stdout);
+    Ok(parse_online(&text))
+}
+
+/// Rozebere výstup `wsl --list --online` (řádky pod hlavičkou NAME … FRIENDLY NAME).
+pub fn parse_online(text: &str) -> Vec<(String, String)> {
+    let mut started = false;
+    let mut v = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if !started {
+            started = t.starts_with("NAME");
+            continue;
+        }
+        if t.is_empty() {
+            continue;
+        }
+        let mut it = t.splitn(2, char::is_whitespace);
+        let name = it.next().unwrap_or("").to_string();
+        let friendly = it.next().unwrap_or("").trim().to_string();
+        if !name.is_empty() {
+            v.push((name, friendly));
+        }
+    }
+    v
+}
+
+/// Nainstaluje distribuci bez interaktivního prvního spuštění (může trvat minuty – stahování).
+pub fn install_distro(distro: &str, name: &str) -> Result<String, String> {
+    let mut c = hidden("wsl.exe");
+    c.args(["--install", distro, "--no-launch"]);
+    if !name.is_empty() && name != distro {
+        c.args(["--name", name]);
+    }
+    finish(c.output().map_err(|e| e.to_string())?)
+}
+
+#[cfg(test)]
+mod online_tests {
+    #[test]
+    fn parse() {
+        let t = "Následuje seznam…\n\nNAME                            FRIENDLY NAME\nUbuntu                          Ubuntu\nDebian                          Debian GNU/Linux\nFedoraLinux-44                  Fedora Linux 44\n";
+        let v = super::parse_online(t);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[1], ("Debian".to_string(), "Debian GNU/Linux".to_string()));
+        assert_eq!(v[2].1, "Fedora Linux 44");
+    }
+}
+
 pub fn set_default(distro: &str) -> Result<String, String> {
     wsl_simple(&["--set-default", distro])
 }

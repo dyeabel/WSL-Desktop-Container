@@ -102,6 +102,10 @@ pub struct App {
     pub wsl_saved: wslconfig::Draft,
     pub files: ui::files::FilesState,
     pub hub: ui::images::HubState,
+    /// otevřený dialog „Přidat distribuci“
+    pub add_distro: Option<crate::worker::AddDistroSpec>,
+    /// distribuce k instalaci (wsl --list --online); None = načítá se
+    pub online: Option<Result<Vec<(String, String)>, String>>,
     /// otevřený dialog odinstalace: (engine, smazat data)
     pub uninstall: Option<(crate::engine::Engine, bool)>,
     /// stav instalace docker shimu (zjišťuje se na pozadí)
@@ -118,6 +122,7 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
         let cfg = Config::load();
+        crate::i18n::set_language(&cfg.language);
         let cfg_draft = cfg.clone();
         let cfg = Arc::new(RwLock::new(cfg));
         let (tx, rx, shared) = worker::spawn(cc.egui_ctx.clone(), cfg.clone());
@@ -191,6 +196,8 @@ impl App {
             files: ui::files::FilesState::default(),
             hub: ui::images::HubState::default(),
             uninstall: None,
+            add_distro: None,
+            online: None,
             shim: Arc::new(Mutex::new(None)),
             shim_checking: Arc::new(AtomicBool::new(false)),
             shim_msg: Arc::new(Mutex::new(None)),
@@ -387,6 +394,16 @@ impl App {
                     self.files.editor = Some(ui::files::Editor { path, orig: text.clone(), text });
                 }
                 Msg::FsChanged => ui::files::reload(self),
+                Msg::OnlineDistros(r) => self.online = Some(r),
+                Msg::ConfigChanged => {
+                    if let Ok(c) = self.cfg.read() {
+                        self.cfg_draft = c.clone();
+                    }
+                    self.tcp_configured = None;
+                    self.daemon_loaded = false;
+                    self.files.path = "~".into();
+                    self.files.loaded = false;
+                }
                 Msg::HubResults(term, r) => {
                     let h = &mut self.hub;
                     // starší dotaz mohl doběhnout později – zajímá nás jen poslední
@@ -632,6 +649,7 @@ impl App {
         ui::files::dialogs(self, ctx);
         ui::images::hub_dialog(self, ctx);
         ui::engine::uninstall_dialog(self, ctx);
+        ui::settings::add_distro_dialog(self, ctx);
         ui::containers::run_dialog(self, ctx);
     }
 

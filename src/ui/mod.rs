@@ -316,11 +316,16 @@ pub fn toolbar_lr(ui: &mut egui::Ui, right_width: f32, mut content: impl FnMut(&
                 content(ui, false);
             },
         );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            ui.spacing_mut().item_spacing.x = 6.0;
-            content(ui, true);
-        });
+        // pravá část: výška přesně jednoho ovládacího prvku, prvky svisle na střed
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), theme::CONTROL_H),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                ui.spacing_mut().item_spacing.x = 6.0;
+                content(ui, true);
+            },
+        );
     });
 }
 
@@ -331,7 +336,7 @@ pub fn filter_field(ui: &mut egui::Ui, text: &mut String) {
 
 /// Nabídka „⋯“ pro méně častné akce (úklid apod.).
 pub fn more_menu(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    ui.menu_button(RichText::new("\u{E1FE}").size(18.0), |ui| {
+    ui.menu_button(RichText::new("\u{E1FE}").size(16.0), |ui| {
         ui.set_min_width(240.0);
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         add(ui);
@@ -347,7 +352,11 @@ pub fn gap(ui: &mut egui::Ui) {
 
 /// Jednořádkové vstupní pole s vnitřním okrajem.
 pub fn field(s: &mut String) -> egui::TextEdit<'_> {
-    egui::TextEdit::singleline(s).margin(egui::Margin::symmetric(8, 5))
+    // výška pole = výška tlačítka (theme::CONTROL_H)
+    egui::TextEdit::singleline(s)
+        .margin(egui::Margin::symmetric(8, 6))
+        .min_size(egui::vec2(0.0, theme::CONTROL_H))
+        .vertical_align(egui::Align::Center)
 }
 
 /// Víceřádkové vstupní pole s vnitřním okrajem.

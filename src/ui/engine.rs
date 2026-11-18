@@ -241,6 +241,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // --- WSL distribuce ---
     section(ui, "WSL distribuce");
     ui.horizontal(|ui| {
+        if accent_button(ui, "\u{E3D4} Přidat distribuci…").clicked() {
+            super::settings::open_add_distro(app);
+        }
         if ui.button("\u{E094} Obnovit").clicked() {
             app.send(Cmd::Refresh);
         }

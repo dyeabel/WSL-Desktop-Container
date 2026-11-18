@@ -23,6 +23,10 @@ pub struct Config {
     pub minimize_to_tray: bool,
     /// Spustit rovnou schované v oznamovací oblasti
     pub start_hidden: bool,
+    /// Po startu enginu znovu spustit kontejnery, které naposledy běžely
+    pub restore_containers: bool,
+    /// Jazyk rozhraní: "cs" nebo "en"
+    pub language: String,
 }
 
 impl Default for Config {
@@ -37,6 +41,8 @@ impl Default for Config {
             close_to_tray: true,
             minimize_to_tray: true,
             start_hidden: false,
+            restore_containers: false,
+            language: "cs".into(),
         }
     }
 }

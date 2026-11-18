@@ -1,5 +1,8 @@
 use eframe::egui::{self, Color32, FontId, TextStyle};
 
+/// Výška všech ovládacích prvků v lištách (tlačítka, vstupní pole, rozbalovací seznamy).
+pub const CONTROL_H: f32 = 30.0;
+
 pub const ACCENT: Color32 = Color32::from_rgb(0xDB, 0xB4, 0x7C);
 pub const ACCENT_TEXT: Color32 = Color32::from_rgb(0x1E, 0x1A, 0x14);
 pub const BG: Color32 = Color32::from_rgb(0x1F, 0x1F, 0x1F);
@@ -39,8 +42,9 @@ pub fn apply(ctx: &egui::Context) {
         v.interact_cursor = Some(egui::CursorIcon::PointingHand);
         s.spacing.window_margin = egui::Margin::same(14);
         s.spacing.item_spacing = egui::vec2(8.0, 7.0);
-        s.spacing.button_padding = egui::vec2(10.0, 5.0);
-        s.spacing.interact_size.y = 26.0;
+        // jednotná výška ovládacích prvků (tlačítka, pole, seznamy, menu) = CONTROL_H
+        s.spacing.button_padding = egui::vec2(10.0, 6.0);
+        s.spacing.interact_size.y = CONTROL_H;
         s.text_styles.insert(TextStyle::Body, FontId::proportional(14.5));
         s.text_styles.insert(TextStyle::Button, FontId::proportional(14.5));
         s.text_styles.insert(TextStyle::Heading, FontId::proportional(16.0)); // titulky oken

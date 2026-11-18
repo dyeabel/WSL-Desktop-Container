@@ -70,12 +70,13 @@ impl Engine {
         }
     }
 
-    /// Instalace přes apt (Debian/Ubuntu).
-    pub fn install_script(self) -> &'static str {
-        match self {
-            Engine::Docker => DOCKER_INSTALL,
-            Engine::Podman => PODMAN_INSTALL,
-        }
+    /// Instalace přes apt / dnf / zypper / pacman.
+    pub fn install_script(self) -> String {
+        let body = match self {
+            Engine::Docker => DOCKER_INSTALL_BODY,
+            Engine::Podman => PODMAN_INSTALL_BODY,
+        };
+        format!("{PKG}{body}")
     }
 
     /// Odinstalace (běží jako root; PURGE=1 smaže i data).
@@ -178,26 +179,60 @@ echo "Podman API nastaveno na tcp://127.0.0.1:$PORT"
 "#
 );
 
-const DOCKER_INSTALL: &str = r#"set -e
-command -v apt-get >/dev/null || { echo "Automaticka instalace umi jen Debian/Ubuntu (apt)." >&2; exit 2; }
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq curl ca-certificates
-curl -fsSL https://get.docker.com | sh
+/// Společná shell funkce `pkg_install balíček…` pro apt / dnf / zypper / pacman.
+const PKG: &str = r#"pkg_install() {
+  if command -v apt-get >/dev/null; then export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq "$@";
+  elif command -v dnf >/dev/null; then dnf install -y -q "$@";
+  elif command -v zypper >/dev/null; then zypper --non-interactive install -y "$@";
+  elif command -v pacman >/dev/null; then pacman -Sy --noconfirm --needed "$@";
+  else echo "Nepodporovaný správce balíčků (umím apt, dnf, zypper, pacman)." >&2; return 2; fi
+}
+"#;
+
+const DOCKER_INSTALL_BODY: &str = r#"set -e
+if command -v pacman >/dev/null; then
+  pkg_install docker docker-compose docker-buildx
+elif command -v zypper >/dev/null; then
+  pkg_install docker docker-compose
+else
+  # apt / dnf: oficiální instalační skript Dockeru (Debian, Ubuntu, Fedora, CentOS/RHEL…)
+  pkg_install curl ca-certificates
+  curl -fsSL https://get.docker.com | sh
+fi
 U=$(getent passwd 1000 | cut -d: -f1)
 [ -n "$U" ] && usermod -aG docker "$U" || true
 docker --version
 "#;
 
-const PODMAN_INSTALL: &str = r#"set -e
-command -v apt-get >/dev/null || { echo "Automaticka instalace umi jen Debian/Ubuntu (apt)." >&2; exit 2; }
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq podman
+const PODMAN_INSTALL_BODY: &str = r#"set -e
+pkg_install podman
 # compose provider pro `podman compose` (mluví se stejným API přes DOCKER_HOST z podman --url)
-apt-get install -y -qq docker-compose || echo "docker-compose se nepodařilo nainstalovat – podman compose nebude fungovat" >&2
+pkg_install docker-compose || echo "docker-compose se nepodařilo nainstalovat – podman compose nebude fungovat" >&2
 podman --version
 docker-compose version 2>/dev/null || true
+"#;
+
+/// Příprava nové distribuce (běží jako root, proměnná U = uživatel):
+/// systemd, výchozí uživatel se sudo bez hesla.
+pub const DISTRO_PREPARE: &str = r#"set -e
+pkg_install sudo >/dev/null 2>&1 || true
+# systemd + výchozí uživatel v /etc/wsl.conf
+touch /etc/wsl.conf
+if ! grep -q '^systemd=true' /etc/wsl.conf; then printf '\n[boot]\nsystemd=true\n' >> /etc/wsl.conf; fi
+if [ -n "$U" ]; then
+  if ! id "$U" >/dev/null 2>&1; then
+    G=""
+    getent group sudo >/dev/null && G="sudo"
+    getent group wheel >/dev/null && G="${G:+$G,}wheel"
+    if [ -n "$G" ]; then useradd -m -s /bin/bash -G "$G" "$U"; else useradd -m -s /bin/bash "$U"; fi
+    echo "Uživatel $U vytvořen"
+  fi
+  mkdir -p /etc/sudoers.d
+  echo "$U ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/wls-$U
+  chmod 440 /etc/sudoers.d/wls-$U
+  if ! grep -q '^\[user\]' /etc/wsl.conf; then printf '\n[user]\ndefault=%s\n' "$U" >> /etc/wsl.conf; fi
+fi
+cat /etc/wsl.conf
 "#;
 
 /// Doplní krátký název image na plně kvalifikovaný (Podman krátká jména
@@ -251,4 +286,9 @@ mod tests {
         assert_eq!(Engine::Docker.cli(2375), vec!["docker"]);
         assert_eq!(Engine::Podman.cli(2375), vec!["podman", "--url", "tcp://127.0.0.1:2375"]);
     }
+}
+
+/// Skript přípravy nové distribuce včetně funkce pkg_install.
+pub fn distro_prepare_script() -> String {
+    format!("{PKG}{DISTRO_PREPARE}")
 }

@@ -84,6 +84,23 @@ impl RunSpec {
     }
 }
 
+/// Parametry přidání nové distribuce.
+#[derive(Debug, Clone, Default)]
+pub struct AddDistroSpec {
+    /// název z `wsl --list --online` (např. Debian)
+    pub distro: String,
+    /// název nové instance (prázdné = stejný jako distro)
+    pub name: String,
+    /// výchozí uživatel (sudo bez hesla)
+    pub user: String,
+    /// volitelné heslo uživatele
+    pub password: String,
+    /// engine k instalaci (None = žádný)
+    pub engine: Option<Engine>,
+    /// přepnout aplikaci na novou distribuci (a nastavit API enginu)
+    pub use_for_app: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum FsOp {
     List(String),
@@ -131,6 +148,10 @@ pub enum Cmd {
     SetupEngine,
     /// nainstalovat engine (apt), případně zapnout systemd, a nastavit API
     InstallEngine(Engine),
+    /// seznam distribucí k instalaci (wsl --list --online)
+    ListOnline,
+    /// nainstalovat a připravit novou distribuci
+    AddDistro(AddDistroSpec),
     /// odinstalovat engine (a odebrat nastavení API); purge = smazat i data
     UninstallEngine { engine: Engine, purge: bool },
     Sleep,
@@ -158,6 +179,9 @@ pub enum Msg {
     FsChanged,
     HubResults(String, Result<Vec<crate::docker::HubRepo>, String>),
     HubTags(String, Result<Vec<crate::docker::HubTag>, String>),
+    OnlineDistros(Result<Vec<(String, String)>, String>),
+    /// worker změnil konfiguraci (např. přepnul distribuci) – UI si má obnovit koncept nastavení
+    ConfigChanged,
 }
 
 /// Souhrnný stav pro tray (zapisuje worker, čte vlákno UI/traye).
@@ -192,6 +216,48 @@ pub struct Shared {
     pub tcp_checked: AtomicBool,
     stats_running: AtomicBool,
     keepalive: Mutex<Option<(Child, Instant)>>,
+    /// engine byl při minulém obnovení připojený (pro detekci nového připojení)
+    was_connected: AtomicBool,
+    /// neukládat seznam běžících kontejnerů (aplikace právě vypíná / uspává engine)
+    suppress_track: AtomicBool,
+    /// naposledy uložený seznam (abychom zbytečně nezapisovali soubor)
+    last_tracked: Mutex<Vec<String>>,
+}
+
+/// Uložený seznam kontejnerů, které naposledy běžely – pro každou distribuci a engine zvlášť.
+mod last_running {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    fn path() -> Option<PathBuf> {
+        std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("WLS_Desktop").join("last_running.json"))
+    }
+
+    fn load_all() -> BTreeMap<String, Vec<String>> {
+        path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn key(distro: &str, engine: &str) -> String {
+        format!("{distro}/{engine}")
+    }
+
+    pub fn load(key: &str) -> Vec<String> {
+        load_all().remove(key).unwrap_or_default()
+    }
+
+    pub fn save(key: &str, ids: &[String]) {
+        let mut all = load_all();
+        all.insert(key.to_string(), ids.to_vec());
+        if let Some(p) = path() {
+            if let Some(d) = p.parent() {
+                let _ = std::fs::create_dir_all(d);
+            }
+            let _ = std::fs::write(p, serde_json::to_string_pretty(&all).unwrap_or_default());
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -248,12 +314,64 @@ impl Worker {
         }
     }
 
+    /// Pamatuje si běžící kontejnery; po novém připojení k enginu je případně znovu spustí.
+    fn track_running(&self, snap: &Snapshot) {
+        let cfg = self.cfg();
+        let key = last_running::key(&cfg.distro, cfg.engine.name());
+        if !snap.connected {
+            self.shared.was_connected.store(false, Ordering::SeqCst);
+            return;
+        }
+        let first = !self.shared.was_connected.swap(true, Ordering::SeqCst);
+        if first {
+            // nové připojení: nejdřív obnovit, ukládat až při dalším obnovení
+            self.shared.suppress_track.store(false, Ordering::SeqCst);
+            if let Ok(mut g) = self.shared.last_tracked.lock() {
+                *g = last_running::load(&key);
+            }
+            if cfg.restore_containers {
+                let saved = last_running::load(&key);
+                let to_start: Vec<String> = saved
+                    .into_iter()
+                    .filter(|id| snap.containers.iter().any(|c| &c.id == id && !c.running() && !c.paused()))
+                    .collect();
+                if !to_start.is_empty() {
+                    let w = self.clone();
+                    thread::spawn(move || {
+                        let d = w.docker();
+                        let ok = to_start.iter().filter(|id| d.container_action(id, "start").is_ok()).count();
+                        w.send(Msg::Toast(true, format!("Obnoveno kontejnerů: {ok}/{}", to_start.len())));
+                        let _ = w.cmd.send(Cmd::Refresh);
+                    });
+                }
+            }
+            return;
+        }
+        if self.shared.suppress_track.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut ids: Vec<String> = snap.containers.iter().filter(|c| c.running()).map(|c| c.id.clone()).collect();
+        ids.sort();
+        if let Ok(mut g) = self.shared.last_tracked.lock() {
+            if *g != ids {
+                last_running::save(&key, &ids);
+                *g = ids;
+            }
+        }
+    }
+
+    /// Aplikace sama vypíná engine – seznam běžících kontejnerů nepřepisovat.
+    fn suppress_tracking(&self) {
+        self.shared.suppress_track.store(true, Ordering::SeqCst);
+    }
+
     fn refresh(&self) {
         let snap = self.docker().snapshot();
         let running: Vec<(String, String)> =
             snap.containers.iter().filter(|c| c.running()).map(|c| (c.id.clone(), c.name())).collect();
         let connected = snap.connected;
         let (n_run, n_total) = snap.info.as_ref().map(|i| (i.containers_running, i.containers)).unwrap_or((0, 0));
+        self.track_running(&snap);
         self.send(Msg::Snapshot(Box::new(snap)));
         if let Ok(list) = wsl::list() {
             let distro = self.cfg().distro;
@@ -352,7 +470,7 @@ impl Worker {
     fn exec(&self, cmd: Cmd) {
         self.shared.busy.fetch_add(1, Ordering::SeqCst);
         self.ctx.request_repaint();
-        let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_));
+        let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline);
         let res = self.exec_inner(cmd);
         self.shared.busy.fetch_sub(1, Ordering::SeqCst);
         match res {
@@ -388,9 +506,9 @@ impl Worker {
         };
 
         // 1) instalace balíčků
-        step(log, &format!("Instalace {} (apt)", engine.name()));
+        step(log, &format!("Instalace {}", engine.name()));
         self.send(Msg::Toast(true, format!("Instaluji {} do {distro}… (může trvat několik minut)", engine.name())));
-        match wsl::run(&distro, Some("root"), None, &["sh", "-c", engine.install_script()]) {
+        match wsl::run(&distro, Some("root"), None, &["sh", "-c", &engine.install_script()]) {
             Ok(o) => log.push_str(&o),
             Err(e) => {
                 log.push_str(&e);
@@ -444,6 +562,82 @@ impl Worker {
                 Err("Engine je nainstalovaný, ale API neodpovídá – viz výstup".into())
             }
         }
+    }
+
+    /// Nainstaluje novou WSL distribuci a připraví ji (systemd, uživatel, volitelně engine).
+    fn add_distro(&self, spec: AddDistroSpec, log: &mut String) -> Result<String, String> {
+        let name = if spec.name.trim().is_empty() { spec.distro.clone() } else { spec.name.trim().to_string() };
+        let step = |log: &mut String, s: &str| log.push_str(&format!("\n=== {s} ===\n"));
+        if wsl::list().map(|l| l.iter().any(|d| d.name.eq_ignore_ascii_case(&name))).unwrap_or(false) {
+            return Err(format!("Distribuce {name} už existuje – zvol jiný název"));
+        }
+
+        // 1) instalace
+        step(log, &format!("Instalace {} jako {name}", spec.distro));
+        self.send(Msg::Toast(true, format!("Instaluji distribuci {name}… (stahování může trvat několik minut)")));
+        match wsl::install_distro(&spec.distro, &name) {
+            Ok(o) => log.push_str(&o),
+            Err(e) => {
+                log.push_str(&e);
+                return Err(format!("Instalace distribuce {name} selhala – viz výstup"));
+            }
+        }
+
+        // 2) systemd, uživatel, sudo
+        step(log, "Příprava (systemd, uživatel, sudo)");
+        let user = spec.user.trim().to_string();
+        match wsl::run(&name, Some("root"), None, &["env", &format!("U={user}"), "sh", "-c", &crate::engine::distro_prepare_script()]) {
+            Ok(o) => log.push_str(&o),
+            Err(e) => {
+                log.push_str(&e);
+                return Err("Příprava distribuce selhala – viz výstup".into());
+            }
+        }
+        if !user.is_empty() && !spec.password.is_empty() {
+            match wsl::run_stdin(&name, Some("root"), &["chpasswd"], &format!("{user}:{}\n", spec.password)) {
+                Ok(_) => log.push_str("Heslo nastaveno\n"),
+                Err(e) => log.push_str(&format!("Heslo se nepodařilo nastavit: {e}\n")),
+            }
+        }
+
+        // 3) restart kvůli systemd a výchozímu uživateli
+        step(log, "Restart distribuce");
+        let _ = wsl::terminate(&name);
+        thread::sleep(Duration::from_secs(3));
+        wsl::start(&name)?;
+        thread::sleep(Duration::from_secs(3));
+        let systemd = wsl::run(&name, Some("root"), None, &["test", "-d", "/run/systemd/system"]).is_ok();
+        log.push_str(if systemd { "systemd běží\n" } else { "systemd zatím neběží – může pomoci „Vypnout celé WSL“\n" });
+
+        // 4) přepnout aplikaci a/nebo nainstalovat engine
+        if spec.use_for_app {
+            step(log, "Přepnutí aplikace na novou distribuci");
+            self.kill_keepalive();
+            if let Ok(mut g) = self.cfg.write() {
+                g.distro = name.clone();
+                if let Some(e) = spec.engine {
+                    g.engine = e;
+                }
+                let _ = g.save();
+            }
+            self.shared.tcp_checked.store(false, Ordering::SeqCst);
+            self.send(Msg::ConfigChanged);
+            if let Some(e) = spec.engine {
+                return self.install_engine(e, log).map(|_| format!("Distribuce {name} je připravená s {} a aplikace ji používá", e.name()));
+            }
+            return Ok(format!("Distribuce {name} je připravená a aplikace ji používá – nainstaluj engine na stránce WSL engine"));
+        }
+        if let Some(e) = spec.engine {
+            step(log, &format!("Instalace {} (bez nastavení API)", e.name()));
+            match wsl::run(&name, Some("root"), None, &["sh", "-c", &e.install_script()]) {
+                Ok(o) => log.push_str(&o),
+                Err(err) => {
+                    log.push_str(&err);
+                    return Err(format!("Instalace {} selhala – viz výstup", e.name()));
+                }
+            }
+        }
+        Ok(format!("Distribuce {name} je nainstalovaná a připravená"))
     }
 
     fn exec_inner(&self, cmd: Cmd) -> Result<String, String> {
@@ -588,11 +782,13 @@ impl Worker {
                 }
                 WslCmd::Terminate(n) => {
                     if n == distro {
+                        self.suppress_tracking();
                         self.kill_keepalive();
                     }
                     wsl::terminate(&n).map(|_| format!("Distribuce {n} ukončena"))
                 }
                 WslCmd::Shutdown => {
+                    self.suppress_tracking();
                     self.kill_keepalive();
                     wsl::shutdown().map(|_| "WSL vypnuto".into())
                 }
@@ -619,16 +815,20 @@ impl Worker {
                 }
             }
             Cmd::EngineStop => {
+                self.suppress_tracking();
                 let mut a = vec!["systemctl", "stop"];
                 a.extend(cfg.engine.stop_units());
                 wsl::run(&distro, Some("root"), None, &a)?;
                 Ok(format!("{} zastaven", cfg.engine.name()))
             }
             Cmd::EngineRestart => {
+                self.suppress_tracking();
                 let mut a = vec!["systemctl", "restart"];
                 a.extend(cfg.engine.services());
                 wsl::run(&distro, Some("root"), None, &a)?;
                 if self.wait_ping(20) {
+                    // další obnovení bere jako nové připojení (obnova kontejnerů + zapnutí sledování)
+                    self.shared.was_connected.store(false, Ordering::SeqCst);
                     Ok(format!("{} restartován", cfg.engine.name()))
                 } else {
                     Err(format!("{} po restartu neodpovídá", cfg.engine.name()))
@@ -656,6 +856,17 @@ impl Worker {
                     }
                 }
             }
+            Cmd::ListOnline => {
+                self.send(Msg::OnlineDistros(wsl::list_online()));
+                Ok(String::new())
+            }
+            Cmd::AddDistro(spec) => {
+                let mut log = String::new();
+                let title = format!("Nová distribuce: {}", if spec.name.trim().is_empty() { &spec.distro } else { spec.name.trim() });
+                let res = self.add_distro(spec, &mut log);
+                self.send(Msg::Output(title, log));
+                res
+            }
             Cmd::InstallEngine(engine) => {
                 let mut log = String::new();
                 let res = self.install_engine(engine, &mut log);
@@ -663,6 +874,7 @@ impl Worker {
                 res
             }
             Cmd::Sleep => {
+                self.suppress_tracking();
                 self.kill_keepalive();
                 wsl::terminate(&distro)?;
                 Ok(format!("{distro} uspána (ukončena). Probudíš ji tlačítkem Spustit."))

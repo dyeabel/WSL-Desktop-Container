@@ -28,6 +28,10 @@ struct Handles {
     unpause: MenuItem,
     close_tray: CheckMenuItem,
     min_tray: CheckMenuItem,
+    open: MenuItem,
+    term: MenuItem,
+    explorer: MenuItem,
+    quit: MenuItem,
     icon_on: Icon,
     icon_off: Icon,
     last: Option<EngineStatus>,
@@ -201,6 +205,10 @@ pub fn init(
             unpause,
             close_tray,
             min_tray,
+            open,
+            term,
+            explorer,
+            quit,
             icon_on,
             icon_off,
             last: None,
@@ -263,7 +271,7 @@ pub fn init(
             _ => {}
         }
     }));
-    refresh();
+    retranslate();
     Ok(())
 }
 
@@ -282,8 +290,8 @@ pub fn refresh() {
         let _ = h.tray.set_icon(Some(if st.connected { h.icon_on.clone() } else { h.icon_off.clone() }));
         h.start.set_enabled(!st.connected);
         if !st.engine.is_empty() {
-            h.stop.set_text(format!("Zastavit {}", st.engine));
-            h.restart.set_text(format!("Restartovat {}", st.engine));
+            h.stop.set_text(tf!("Zastavit {}", "Stop {}", st.engine));
+            h.restart.set_text(tf!("Restartovat {}", "Restart {}", st.engine));
         }
         h.stop.set_enabled(st.connected);
         h.restart.set_enabled(st.connected);
@@ -306,4 +314,25 @@ pub fn sync_checks(close: bool, min: bool) {
             }
         }
     });
+}
+
+/// Nastaví texty nabídky podle aktuálního jazyka (po startu a po přepnutí jazyka).
+pub fn retranslate() {
+    TRAY.with(|t| {
+        if let Some(h) = t.borrow_mut().as_mut() {
+            h.open.set_text(t!("Otevřít WLS Desktop", "Open WLS Desktop"));
+            h.start.set_text(t!("Spustit / probudit engine", "Start / wake engine"));
+            h.sleep.set_text(t!("Uspat distribuci (uvolnit RAM)", "Put distribution to sleep (free RAM)"));
+            h.pause.set_text(t!("Pozastavit všechny kontejnery", "Pause all containers"));
+            h.unpause.set_text(t!("Obnovit pozastavené kontejnery", "Resume paused containers"));
+            h.term.set_text(t!("Terminál distribuce", "Distribution terminal"));
+            h.explorer.set_text(t!("Soubory distribuce v Průzkumníku", "Distribution files in Explorer"));
+            h.close_tray.set_text(t!("Zavírat do oznamovací oblasti", "Close to tray"));
+            h.min_tray.set_text(t!("Minimalizovat do oznamovací oblasti", "Minimize to tray"));
+            h.quit.set_text(t!("Ukončit", "Quit"));
+            // stavové texty a tooltip se přepočítají
+            h.last = None;
+        }
+    });
+    refresh();
 }
