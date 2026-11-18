@@ -43,11 +43,14 @@ pub fn set_docker_host(port: Option<u16>) -> Result<String, String> {
         Some(p) => {
             let v = format!("tcp://127.0.0.1:{p}");
             powershell(&format!("[Environment]::SetEnvironmentVariable('DOCKER_HOST', {}, 'User')", ps_quote(&v)))?;
-            Ok(format!("DOCKER_HOST={v} nastaveno – nástroje je uvidí po restartu (nový terminál / VS Code)"))
+            Ok(tf!(
+                "DOCKER_HOST={v} nastaveno – nástroje je uvidí po restartu (nový terminál / VS Code)",
+                "DOCKER_HOST={v} set – tools will see it after a restart (new terminal / VS Code)"
+            ))
         }
         None => {
             powershell("[Environment]::SetEnvironmentVariable('DOCKER_HOST', $null, 'User')")?;
-            Ok("DOCKER_HOST odebráno".into())
+            Ok(t!("DOCKER_HOST odebráno", "DOCKER_HOST removed").into())
         }
     }
 }
@@ -103,11 +106,15 @@ pub fn status() -> Status {
 }
 
 pub fn install() -> Result<String, String> {
-    let src = source().ok_or("docker.exe (shim) nebyl nalezen vedle aplikace – sestav projekt (cargo build --release)")?;
+    let src = source().ok_or(t!(
+        "docker.exe (shim) nebyl nalezen vedle aplikace – sestav projekt (cargo build --release)",
+        "docker.exe (shim) was not found next to the application – build the project (cargo build --release)"
+    ))?;
     let dir = bin_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     for name in ["docker.exe", "docker-compose.exe"] {
-        std::fs::copy(&src, dir.join(name)).map_err(|e| format!("{name}: {e} (neběží zrovna nějaký docker příkaz?)"))?;
+        std::fs::copy(&src, dir.join(name))
+            .map_err(|e| tf!("{name}: {e} (neběží zrovna nějaký docker příkaz?)", "{name}: {e} (is a docker command currently running?)"))?;
     }
     let d = ps_quote(&dir.display().to_string());
     powershell(&format!(
@@ -115,7 +122,11 @@ pub fn install() -> Result<String, String> {
          if(($p -split ';' | ForEach-Object {{ $_.TrimEnd('\\') }}) -notcontains $d){{ \
            [Environment]::SetEnvironmentVariable('Path', (($p.TrimEnd(';') + ';' + $d).TrimStart(';')), 'User') }}"
     ))?;
-    Ok(format!("Příkaz docker nainstalován do {} – otevři nový terminál", dir.display()))
+    Ok(tf!(
+        "Příkaz docker nainstalován do {} – otevři nový terminál",
+        "The docker command was installed to {} – open a new terminal",
+        dir.display()
+    ))
 }
 
 pub fn uninstall() -> Result<String, String> {
@@ -129,5 +140,5 @@ pub fn uninstall() -> Result<String, String> {
     for name in ["docker.exe", "docker-compose.exe"] {
         let _ = std::fs::remove_file(dir.join(name));
     }
-    Ok("Příkaz docker odebrán z PATH".into())
+    Ok(t!("Příkaz docker odebrán z PATH", "The docker command was removed from PATH").into())
 }

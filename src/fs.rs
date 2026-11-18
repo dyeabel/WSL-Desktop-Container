@@ -71,7 +71,7 @@ pub fn list(distro: &str, root: bool, path: &str) -> Result<(String, Vec<Entry>)
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
         let e = wsl::decode(&out.stderr);
-        return Err(if e.trim().is_empty() { format!("Adresář {path} nelze otevřít") } else { e.trim().to_string() });
+        return Err(if e.trim().is_empty() { tf!("Adresář {path} nelze otevřít", "Cannot open directory {path}") } else { e.trim().to_string() });
     }
     Ok(parse_listing(&String::from_utf8_lossy(&out.stdout)))
 }
@@ -108,7 +108,7 @@ pub fn delete(distro: &str, root: bool, paths: &[String]) -> Result<String, Stri
     let mut a: Vec<&str> = vec!["rm", "-rf", "--"];
     for p in paths {
         if p == "/" || p.is_empty() {
-            return Err("Mazání kořenového adresáře není povoleno".into());
+            return Err(t!("Mazání kořenového adresáře není povoleno", "Deleting the root directory is not allowed").into());
         }
         a.push(p);
     }
@@ -139,12 +139,16 @@ pub fn read_text(distro: &str, root: bool, path: &str) -> Result<String, String>
         return Err(wsl::decode(&out.stderr).trim().to_string());
     }
     if out.stdout.len() > MAX_EDIT {
-        return Err("Soubor je větší než 2 MB – otevři ho v Notepadu nebo terminálu".into());
+        return Err(t!(
+            "Soubor je větší než 2 MB – otevři ho v Notepadu nebo terminálu",
+            "The file is larger than 2 MB – open it in Notepad or a terminal"
+        )
+        .into());
     }
     if out.stdout.contains(&0) {
-        return Err("Binární soubor nelze upravit v textovém editoru".into());
+        return Err(t!("Binární soubor nelze upravit v textovém editoru", "A binary file cannot be edited in the text editor").into());
     }
-    String::from_utf8(out.stdout).map_err(|_| "Soubor není v UTF-8".to_string())
+    String::from_utf8(out.stdout).map_err(|_| t!("Soubor není v UTF-8", "The file is not UTF-8").to_string())
 }
 
 pub fn write_text(distro: &str, root: bool, path: &str, text: &str) -> Result<String, String> {

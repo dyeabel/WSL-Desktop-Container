@@ -414,7 +414,7 @@ impl Docker {
     pub fn snapshot(&self) -> Snapshot {
         if !self.ping() {
             return Snapshot {
-                error: Some(format!("API enginu není dostupné na 127.0.0.1:{}", self.port)),
+                error: Some(tf!("API enginu není dostupné na 127.0.0.1:{}", "Engine API is not available on 127.0.0.1:{}", self.port)),
                 ..Default::default()
             };
         }
@@ -493,7 +493,7 @@ impl Docker {
                 }
             }
         }
-        Ok(format!("Image {shown} stažen"))
+        Ok(tf!("Image {shown} stažen", "Image {shown} pulled"))
     }
 
     /// Hledání image na Docker Hubu přes démona (jako `docker search`).
@@ -521,7 +521,7 @@ impl Docker {
             .filter_map(|k| v.get(*k).and_then(|a| a.as_array()).map(|a| a.len()))
             .sum::<usize>();
         let space = v.get("SpaceReclaimed").and_then(|s| s.as_u64()).unwrap_or(0);
-        Ok(format!("Odstraněno položek: {n}, uvolněno {}", crate::ui::fmt_bytes(space)))
+        Ok(tf!("Odstraněno položek: {n}, uvolněno {}", "Items removed: {n}, reclaimed {}", crate::ui::fmt_bytes(space)))
     }
 
     pub fn is_tty(&self, id: &str) -> bool {
