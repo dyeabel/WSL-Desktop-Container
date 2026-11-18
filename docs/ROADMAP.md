@@ -43,6 +43,16 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
      (dockerd / Podman service) and the rest of the distribution;
    - a history chart (last hour) and the effect of *Free WSL memory* (before / after), so it is
      visible whether the automatic freeing helps.
+7. ★ **Network overview** – what uses the network and where it is reachable:
+   - traffic of the whole WSL VM (the `vEthernet (WSL)` adapter / `eth0` in Linux) vs. per
+     container and per compose stack – current rate (rx / tx per second) and totals, history chart;
+   - **published ports**: which `127.0.0.1:port` / `0.0.0.0:port` on Windows leads to which
+     container and container port, with conflicts (a port already taken in Windows or by another
+     distribution) and a quick *open in browser*;
+   - container networks (bridge, custom) with their subnets, gateways and connected containers as a
+     simple map; networking mode of WSL (NAT / mirrored) and the WSL IP address;
+   - listening sockets inside the distribution (`ss -ltnp`) that are not containers – e.g. the
+     engine API, the TLS proxy – so it is visible what is exposed on localhost.
 
 ## Containers, images, compose
 
