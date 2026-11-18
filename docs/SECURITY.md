@@ -497,4 +497,10 @@ WSL idles the engine out. This is denial of service only.
 | F-11 (partly) | Wider secret-name heuristic (AUTH, CREDENTIAL, PRIVATE, DSN, DATABASE_URL, …); secret build-arg values are masked in the echoed build command. Env values are still passed on the command line. |
 | F-14 | Single instance via a named mutex (`Local\WLS-Desktop-single-instance`) instead of only the window title. |
 
-Still open: F-01 / F-02 (TLS is opt-in, not the default), F-05 (compose labels), F-11 (argv), F-13, F-15 (event lines), F-16 – F-19.
+| F-01 / F-02 (mitigated) | New installations use TLS by default; existing plain setups get a one-time hint with *Turn TLS on*. A named-pipe relay (user + SYSTEM DACL, remote clients rejected) lets tools reach the API without the plain key. Plain mode remains possible for existing setups. |
+| F-05 | Before `up` / `build` / `pull` / `start` of a label-detected stack the worker refuses stacks whose compose labels come from the image (`Config.Labels`) and requires an existing folder with a compose file. |
+| F-11 | Container env values are passed through a temporary 0600 `--env-file` (deleted right after `run`), not on the command line; recreate goes through the API. |
+| F-13 | Docker is installed from distribution packages (`docker.io` / `moby-engine` / openSUSE / Arch) or, on RHEL-like systems, from Docker's GPG-verified dnf repository – no `curl \| sh`. |
+| TLS client | Session resumption is disabled – the socat/OpenSSL proxy rejected resumed sessions, so only the first new connection per client config worked. |
+
+Still open: plain mode for existing setups (F-01 / F-02 when TLS is not turned on), F-15 (event lines), F-16 – F-19.

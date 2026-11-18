@@ -11,17 +11,18 @@ Docker Desktop and without the Docker CLI for Windows.
 | Page | What it does |
 |---|---|
 | **Overview** (Přehled) | engine status, container / image / volume counts, CPU and RAM available to WSL, disk usage with a *Clean up* menu (prune), live CPU, memory, network and disk stats per running container (with the image it runs from) |
-| **Containers** (Kontejnery) | grouped by compose project; start, stop, restart, pause, remove; colored state badges (running, stopped, error with exit code, health); live logs (filter, copy); console in Windows Terminal; *Run container* dialog; **container detail** (see below) |
+| **Containers** (Kontejnery) | grouped by compose project; start, stop, restart, pause, remove; colored state badges (running, stopped, error with exit code, health); live logs (see *Logs*); **files inside the container**; console in Windows Terminal; *Run container* dialog; **container detail** (see below) |
 | **Images** | **build from a Dockerfile** (see below), search Docker Hub (dialog with tag picker, size and update date), pull by exact name, remove, prune, run a container from an image, which containers use an image |
 | **Volumes** | create, remove, prune, **size**, which containers use a volume, browse its content (as root), *run a container with this volume*, **back up to `.tar.gz`, restore, clone** |
 | **Networks** (Sítě) | create (bridge, ipvlan, macvlan), remove, prune, subnets, attached containers |
 | **Compose** | stacks detected from container labels: up, stop, start, restart, pull, build, ps, logs, down, **scale a service**; **new stack from a template**; **built-in editor for the compose file and `.env` with validation** (Notepad still available); start a stack from any folder (Windows or Linux path) |
 | **Files** (Soubory) | file browser for the distribution: navigation, bookmarks, *New* menu (folder, file), *Upload from Windows* menu (files, folder), rename and move, delete, chmod, built-in text editor (Ctrl+S), download to Windows, *Work as root* mode; bulk actions appear only when something is selected, row actions live in a per-row ⋯ menu |
 | **WSL engine** | start, stop and restart the engine, put the distribution to sleep, terminal; distribution list (start, terminate, default, *use for the engine*, ⋯ **export, disk & compacting, remove with confirmation**), **import**; *Install & setup* section: Docker / Podman switch, install, API setup, uninstall, `docker` command in PATH, `DOCKER_HOST`, **API security (TLS)**; editor for `/etc/docker/daemon.json` (Docker only) |
-| **Settings** (Nastavení) | language (Czech / English), distribution (+ *Add distribution* wizard), API port, refresh interval, keep-alive, engine autostart, restoring containers that were running last time, **start with Windows**, **Windows notifications**, tray behaviour, `docker` command in PATH, global `.wslconfig` (memory, CPU, swap, `vmIdleTimeout`, `networkingMode`) |
+| **Settings** (Nastavení) | language (Czech / English), **theme (dark / light / follow Windows)**, distribution (+ *Add distribution* wizard), API port, refresh interval, keep-alive, engine autostart, restoring containers that were running last time, **start with Windows**, **Windows notifications**, tray behaviour, `docker` command in PATH, global `.wslconfig` (memory, CPU, swap, `vmIdleTimeout`, `networkingMode`) |
 
 Less frequent and destructive actions (prune, pause all, …) live in the **⋯** menu next to
-the filter field, which is pinned to the right on every page.
+the filter field, which is pinned to the right on every page. Tables can be **sorted** by clicking
+a column header (ascending → descending → off); directories stay on top in file listings.
 
 ### Run container dialog
 
@@ -81,8 +82,30 @@ The ⓘ icon in a container row opens a resizable window with tabs:
   capabilities, security options, read-only rootfs, limits, labels, entrypoint, healthcheck and
   log options are kept. The old container is stopped and renamed to `<name>-wls-old`, the new one
   is started; on success the old one is removed, on failure the new
-  one is removed and the old one renamed back and started again. Additional networks are not
-  carried over (a warning is shown).
+  one is removed and the old one renamed back and started again. **All networks** are kept
+  (primary network selectable, aliases, optionally the current / static IP and MAC) and
+  **anonymous volumes** are re-attached by name, so their data survives.
+- **Files** – the file browser inside the container (also from the folder icon in the row).
+
+### Logs
+
+The log window (and the *Logs* tab of the container detail) has **search with highlighting**
+(match count, next / previous with Enter / Shift+Enter, case-sensitive toggle) next to the line
+filter, a **timestamps** toggle (local time, full RFC 3339 on hover), **Save…** (all or only the
+shown lines) and copy. Only visible rows are laid out, so tens of thousands of lines stay fast;
+the buffer keeps the last ~50 000 lines.
+
+*Compose → stack → Logs* opens **merged live logs of the whole stack**: one stream per container,
+lines prefixed with the colored service name, ordered by timestamp (300 ms reorder buffer) and
+filterable per service.
+
+### Files inside a container
+
+A file browser for the container's filesystem – sortable listing, navigation, breadcrumbs,
+**download to Windows** and **upload from Windows** (`docker cp` style, via the engine's archive
+API with a tar guard against path traversal), a built-in editor (≤ 2 MB, UTF-8), new folder,
+rename and delete. Running containers are listed through `exec` (busybox and GNU), stopped ones
+and images without a shell through the archive API (read-only listing; upload and edit still work).
 
 ### Build from a Dockerfile
 
@@ -168,9 +191,11 @@ The engine is selected per distribution on the *WSL engine* page.
 
 ### API security (TLS)
 
-By default the engine API on `tcp://127.0.0.1:2375` has **no authentication** – any process that
+Without TLS the engine API on `tcp://127.0.0.1:2375` has **no authentication** – any process that
 can reach localhost can control the (rootful) engine, including other WSL distributions and
 containers with host networking, because all WSL 2 distributions share one network namespace.
+**New installations** (*Install and set up*, *Add distribution* with an engine) therefore use TLS
+by default (checkbox *Secure the API with TLS*); existing setups show a one-time hint.
 
 *WSL engine → Install & setup → API security → Turn TLS on* switches to mutual TLS:
 
@@ -191,6 +216,12 @@ Certificates expiring within 30 days are renewed on the next API setup; *Regener
 certificates* creates a new CA and certificates at any time. *Turn TLS off* switches back to the plain API on port 2375 and removes the proxy (the
 certificates are kept and reused). See [docs/SECURITY.md](docs/SECURITY.md) for the security
 review.
+
+**Named pipe for tools:** *Settings → Named pipe for tools* starts a relay on
+`\\.\pipe\wls_docker_engine` (DACL: only the current user and SYSTEM, remote clients rejected)
+that forwards to the engine API – over TLS when enabled. Tools then use
+`DOCKER_HOST=npipe:////./pipe/wls_docker_engine` and never need the client key; the pipe exists
+only while the app runs.
 
 ### `docker` command for Windows (shim)
 
@@ -222,17 +253,29 @@ To behave as close to the Docker CLI as possible:
 
 **Fast path:** simple read-only commands – `ps` / `container ls` (with `-a -q -l -s -n
 --no-trunc`, `--filter status|name|label|ancestor`, `--format table|json|{{.Field}}`), `images`,
-`volume ls`, `network ls`, `version --format`, `info --format` – are answered directly from the
-engine API (also over TLS) in ~50 ms instead of ~250 ms via `wsl.exe`. Output mimics the Docker
+`volume ls`, `network ls` (with filters and `--format json`), `inspect` / `container inspect` /
+`image inspect`, `logs` without `-f`, `version --format`, `info --format` – are answered directly
+from the engine API (also over TLS) in ~50 ms instead of ~250 ms via `wsl.exe`. Output mimics the Docker
 CLI. Anything else (unknown flag, template function, API error) silently falls back to
 `wsl.exe`. `WLS_SHIM_FAST=0` disables the fast path.
 
 Debugging: `WLS_SHIM_DEBUG=1` prints the executed command (and whether the fast path was used); `WLS_ENGINE=podman|docker`,
 `WLS_PORT` and `WLS_DISTRO` override the settings.
 
-Remaining differences from the Docker CLI for Windows: `docker login`, `config.json` and
-contexts live inside WSL; every call has the overhead of starting `wsl.exe` (~0.1–0.3 s);
-Podman has no buildx, swarm or contexts.
+**Path translation** covers volume and mount flags, file flags (`--env-file`, `--label-file`,
+`--cidfile`, `--iidfile`, `--metadata-file`, `--device`, `--security-opt seccomp=`, `--log-opt
+path=`), `cp` (only the host side), `build -f`, BuildKit options, `compose -f/--env-file/
+--project-directory`, `load -i`, `save`/`export -o`, `import <file>` and the global `--config`;
+the list of deliberately untranslated flags is at the top of `src/pathmap.rs`.
+
+**Contexts:** `docker context ls|show|use|create|rm|inspect` manage WLS targets (distribution +
+engine + port + TLS) stored in `contexts.json` next to the app configuration; `default` is the
+app's current setting. `docker context create dev --distro Ubuntu --engine docker`, then
+`docker --context dev ps`, `DOCKER_CONTEXT=dev` or `docker context use dev`.
+
+Remaining differences from the Docker CLI for Windows: `docker login` and `config.json` live
+inside WSL; commands outside the fast path have the overhead of starting `wsl.exe`
+(~0.1–0.3 s); Podman has no buildx or swarm.
 
 Consoles and log tails open in **Windows Terminal** (`wt.exe`), falling back to a classic
 console window when it is not available.
@@ -260,7 +303,8 @@ console window when it is not available.
   keeps running after the app is closed, so the engine stays up. **Sleep** stops it and shuts
   the distribution down.
 
-The app configuration is stored in `%APPDATA%\WLS_Desktop\config.json`.
+The app configuration is stored in `%APPDATA%\WLS_Desktop\config.json` (in portable mode in
+`data\` next to the EXE).
 
 ## Building
 
@@ -273,6 +317,34 @@ cargo build --release
 
 Output: `target\release\wls-desktop.exe` (~8 MB, no runtime dependencies) and
 `target\release\docker.exe` (the shim).
+
+### Portable package
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts\package.ps1
+```
+
+creates `dist\WLS-Desktop-<version>-win-x64.zip` (+ `.sha256`) with both EXEs, the README and
+`PORTABLE.txt`. When `PORTABLE.txt` lies next to `wls-desktop.exe`, the app runs in **portable
+mode**: settings, certificates and other data go to `data\` next to the EXE instead of
+`%APPDATA%\WLS_Desktop`, and *docker command in PATH* adds the app folder itself to PATH. Delete
+the file to switch to the normal mode. On the first start the default WSL distribution is
+preselected.
+
+### Production build / release
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts\release.ps1 -Version 1.0.0 -Tag
+```
+
+1. checks that the working tree is clean (the package must match a commit);
+2. with `-Version` sets the version in `Cargo.toml` and commits it;
+3. runs `cargo clippy --all-targets -- -D warnings` and `cargo test` (`-LiveTests` also runs the
+   ignored live tests against WSL);
+4. builds the release and the portable ZIP;
+5. with `-Tag` creates the tag `vX.Y.Z` – `git push origin main vX.Y.Z` then lets GitHub
+   Actions (`.github/workflows/release.yml`: clippy, tests, package) publish a GitHub release with
+   the ZIP and its SHA-256. Every push to `main` builds the ZIP as a workflow artifact.
 
 ## Tests
 
@@ -363,6 +435,10 @@ src/
   i18n.rs          Czech / English texts (t!, tf!)
   theme.rs         colors, style
   icon_art.rs      icon drawing (shared with build.rs for the .ico in the EXE)
+  logbuf.rs        log buffer, search, timestamps, merged stack streams
+  container_fs.rs  files inside a container (exec listing, archive API, tar)
+  contexts.rs      docker contexts for the shim
+  npipe.rs         named-pipe relay for tools
   ui/              individual pages
 build.rs           generates the .ico and embeds it into the EXE (winresource)
 ```
