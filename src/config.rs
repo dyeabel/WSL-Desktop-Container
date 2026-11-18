@@ -33,6 +33,10 @@ pub struct Config {
     pub notifications: bool,
     /// API enginu jen přes TLS s klientským certifikátem (port 2376, certifikáty v %APPDATA%\WLS_Desktop\tls)
     pub tls: bool,
+    /// Upozornění „API bez ověření“ na stránce WSL engine bylo zavřeno
+    pub security_hint_dismissed: bool,
+    /// Pojmenovaná roura `\\.\pipe\wls_docker_engine` pro nástroje (relay běží jen s aplikací)
+    pub npipe: bool,
 }
 
 impl Default for Config {
@@ -52,6 +56,8 @@ impl Default for Config {
             theme: "dark".into(),
             notifications: true,
             tls: false,
+            security_hint_dismissed: false,
+            npipe: false,
         }
     }
 }

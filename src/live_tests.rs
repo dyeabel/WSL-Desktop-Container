@@ -532,6 +532,17 @@ fn live_tls_proxy() {
         Docker::with_tls(2377, Some(std::sync::Arc::new(c))).ping()
     };
     let plain = Docker::with_tls(2377, None).ping();
+    // druhé nové spojení se stejnou konfigurací (dřív selhalo na obnově TLS relace)
+    let second = cfg.as_ref().map(|c| Docker::with_tls(2377, Some(std::sync::Arc::new(c.clone()))).ping()).unwrap_or(false);
+    // relay pojmenované roury -> TLS proxy na 2377 (testovací roura, ne roura aplikace)
+    let via_pipe = cfg.as_ref().ok().map(|c| {
+        let name = format!(r"\\.\pipe\wls_test_tls_{}", std::process::id());
+        let c = std::sync::Arc::new(c.clone());
+        let relay = crate::npipe::Relay::start(&name, std::sync::Arc::new(move || Ok(crate::npipe::Target::Tls(2377, c.clone())))).expect("relay");
+        let r = (crate::npipe::tests::ping_pipe(&name), crate::npipe::tests::get_via_pipe(&name, "/version"));
+        drop(relay);
+        r
+    });
     let _ = std::fs::remove_dir_all(&dir);
     cleanup();
     let snap = ok.expect("tls_config");
@@ -539,6 +550,29 @@ fn live_tls_proxy() {
     assert!(snap.connected && snap.error.is_none(), "{:?}", snap.error);
     assert!(!no_cert, "spojení bez klientského certifikátu prošlo");
     assert!(!plain, "HTTP bez TLS prošlo");
+    assert!(second, "druhé TLS spojení se stejnou konfigurací selhalo");
+    let (ping, version) = via_pipe.expect("tls_config");
+    eprintln!("npipe -> TLS /_ping: {ping:?}");
+    assert!(ping.starts_with("HTTP/1.1 200") && ping.ends_with("OK"), "{ping}");
+    assert!(version.starts_with("HTTP/1.1 200") && version.contains("\"ApiVersion\""), "{version}");
+}
+
+/// Relay pojmenované roury proti běžícímu API bez TLS na 127.0.0.1:2375 (jen čte /_ping),
+/// na testovací rouře `\\.\pipe\wls_test_engine_<pid>` – roura aplikace se nepoužije.
+/// `cargo test live_npipe_plain -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn live_npipe_plain() {
+    let name = format!(r"\\.\pipe\wls_test_engine_{}", std::process::id());
+    let relay = crate::npipe::Relay::start(&name, std::sync::Arc::new(|| Ok(crate::npipe::Target::Plain(2375)))).expect("relay");
+    let r = crate::npipe::tests::ping_pipe(&name);
+    let version = crate::npipe::tests::get_via_pipe(&name, "/version");
+    drop(relay);
+    eprintln!("npipe /_ping: {r:?}");
+    assert!(r.starts_with("HTTP/1.1 200") && r.ends_with("OK"), "{r}");
+    assert!(version.contains("\"ApiVersion\""), "{version}");
+    // po zastavení relay roura zmizí
+    assert!(std::fs::OpenOptions::new().read(true).write(true).open(&name).is_err());
 }
 
 /// Operace jako root nesmí psát / měnit práva skrz symlink (F-10).

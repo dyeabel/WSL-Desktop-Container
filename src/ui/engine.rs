@@ -31,6 +31,101 @@ pub fn uninstall_dialog(app: &mut App, ctx: &egui::Context) {
     app.uninstall = if close || esc { None } else { Some((engine, purge)) };
 }
 
+/// Dialog „Nainstalovat a nastavit“ s volbou zabezpečení API (TLS je výchozí).
+pub fn install_dialog(app: &mut App, ctx: &egui::Context) {
+    let Some((engine, mut tls)) = app.install else { return };
+    let distro = app.distro();
+    let ename = engine.name();
+    let port = app.cfg.read().map(|c| c.port).unwrap_or(2375);
+    let port = crate::worker::api_port(tls, port);
+    let other = if engine == crate::engine::Engine::Docker { "Podman API" } else { "Docker" };
+    let mut run = false;
+    let mut close = false;
+    let (_, esc) = modal(ctx, "install-engine", &tf!("Nainstalovat {ename} do {distro}?", "Install {ename} into {distro}?"), 480.0, |ui| {
+        ui.label(tf!(
+            "Do distribuce {distro} se přes apt nainstaluje {ename}. Pokud neběží systemd, zapne se v /etc/wsl.conf a distribuce se restartuje (kontejnery se zastaví). \
+             Nakonec se nastaví API na 127.0.0.1:{port} – {other} se přitom vypne, aby nebojoval o port.",
+            "{ename} will be installed into the {distro} distribution via apt. If systemd is not running, it is enabled in /etc/wsl.conf and the distribution restarts (containers will stop). \
+             Finally the API is set up on 127.0.0.1:{port} – {other} is disabled so they do not fight over the port."
+        ));
+        ui.add_space(8.0);
+        ui.checkbox(&mut tls, t!("Zabezpečit API pomocí TLS (doporučeno)", "Secure the API with TLS (recommended)"));
+        ui.label(
+            muted(if tls {
+                t!(
+                    "Engine bude jen na unix socketu, na 127.0.0.1 pustí TLS proxy jen klienta s certifikátem aplikace.",
+                    "The engine listens only on a unix socket; a TLS proxy on 127.0.0.1 accepts only the app's client certificate."
+                )
+            } else {
+                t!(
+                    "API bez ověření může ovládat každý proces, který se dostane na 127.0.0.1.",
+                    "Without authentication any process that can reach 127.0.0.1 can control the API."
+                )
+            })
+            .small(),
+        );
+        let (ok, cancel) = dialog_buttons(ui, t!("\u{E20C} Nainstalovat", "\u{E20C} Install"), false, true);
+        run = ok;
+        close = ok || cancel;
+    });
+    if run {
+        app.send(Cmd::InstallEngine(engine, tls));
+    }
+    app.install = if close || esc { None } else { Some((engine, tls)) };
+}
+
+/// Potvrzení „Zapnout TLS“ (tlačítko v nastavení i upozornění nahoře).
+fn ask_tls_on(app: &mut App) {
+    app.ask(
+        t!("Zabezpečit API pomocí TLS?", "Secure the API with TLS?"),
+        t!(
+            "Engine bude poslouchat jen na unix socketu v distribuci a na 127.0.0.1:2376 bude TLS proxy (socat), která pustí jen klienta s certifikátem. \
+             Vytvoří se CA a certifikáty, klientský se uloží do %APPDATA%\\WLS_Desktop\\tls. Příkaz docker ve Windows i CLI ve WSL půjdou přes socket. \
+             Engine se restartuje.",
+            "The engine will listen only on a unix socket in the distribution and a TLS proxy (socat) on 127.0.0.1:2376 will accept only clients with a certificate. \
+             A CA and certificates are created; the client one is saved to %APPDATA%\\WLS_Desktop\\tls. The docker command in Windows and the CLI in WSL will use the socket. \
+             The engine will restart."
+        ),
+        Cmd::SetTls(true),
+    );
+}
+
+/// Jednorázové (zavíratelné) upozornění, že API běží bez ověření.
+fn security_hint(app: &mut App, ui: &mut egui::Ui, tls: bool) {
+    let dismissed = app.cfg.read().map(|c| c.security_hint_dismissed).unwrap_or(true);
+    if tls || dismissed || app.tcp_configured != Some(true) {
+        return;
+    }
+    card(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(RichText::new(t!("\u{E4E0} API enginu běží bez ověření", "\u{E4E0} The engine API runs without authentication")).color(theme::yellow()).strong());
+        ui.label(muted(t!(
+            "Každý proces, který se dostane na 127.0.0.1 (i jiné WSL distribuce, kontejnery se sítí host nebo webová stránka v prohlížeči), může engine ovládat jako root. TLS s klientským certifikátem tomu zabrání.",
+            "Any process that can reach 127.0.0.1 (including other WSL distributions, host-network containers or a web page in the browser) can control the engine as root. TLS with a client certificate prevents that."
+        )));
+        ui.add_space(4.0);
+        toolbar(ui, |ui| {
+            if accent_button(ui, t!("\u{E2FA} Zapnout TLS", "\u{E2FA} Turn TLS on")).clicked() {
+                ask_tls_on(app);
+            }
+            if ui.button(t!("Už nezobrazovat", "Don't show again")).clicked() {
+                let res = match app.cfg.write() {
+                    Ok(mut g) => {
+                        g.security_hint_dismissed = true;
+                        g.save()
+                    }
+                    Err(e) => Err(e.to_string()),
+                };
+                if let Err(e) = res {
+                    app.toast(false, tf!("Nastavení nelze uložit: {e}", "Cannot save settings: {e}"));
+                }
+                app.cfg_draft.security_hint_dismissed = true;
+            }
+        });
+    });
+    ui.add_space(8.0);
+}
+
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let distro = app.distro();
     let engine = app.cfg.read().map(|c| c.engine).unwrap_or_default();
@@ -42,6 +137,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let running = app.snap.connected;
     let port = app.cfg.read().map(|c| c.port).unwrap_or(2375);
     let tls = app.cfg.read().map(|c| c.tls).unwrap_or(false);
+    let npipe_on = app.cfg.read().map(|c| c.npipe).unwrap_or(false);
+    security_hint(app, ui, tls);
     card(ui, |ui| {
         ui.set_width(ui.available_width());
 
@@ -138,25 +235,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         ))
                         .clicked()
                     {
-                        app.ask(
-                            tf!("Nainstalovat {ename} do {distro}?", "Install {ename} into {distro}?"),
-                            tf!(
-                                "Do distribuce {distro} se přes apt nainstaluje {ename}. Pokud neběží systemd, zapne se v /etc/wsl.conf a distribuce se restartuje (kontejnery se zastaví). \
-                                 Nakonec se nastaví API na 127.0.0.1:{port} – {} se přitom vypne, aby nebojoval o port.",
-                                "{ename} will be installed into the {distro} distribution via apt. If systemd is not running, it is enabled in /etc/wsl.conf and the distribution restarts (containers will stop). \
-                                 Finally the API is set up on 127.0.0.1:{port} – {} is disabled so they do not fight over the port.",
-                                if engine == crate::engine::Engine::Docker { "Podman API" } else { "Docker" }
-                            ),
-                            Cmd::InstallEngine(engine),
-                        );
+                        // TLS je pro nové instalace výchozí
+                        app.install = Some((engine, true));
                     }
                     if ui.button(t!("\u{E5D4} Nastavit jen API", "\u{E5D4} Set up API only")).on_hover_text(t!("Engine už je nainstalovaný, jen zpřístupnit API na TCP", "The engine is already installed, just expose the API over TCP")).clicked() {
                         app.ask(
                             tf!("Nastavit {ename} API?", "Set up the {ename} API?"),
                             tf!(
-                                "V distribuci {distro} se vytvoří {} a {ename} se restartuje. API bude dostupné bez autentizace na 127.0.0.1:{port} (jen lokálně).",
-                                "{} will be created in the {distro} distribution and {ename} restarted. The API will be available without authentication on 127.0.0.1:{port} (local only).",
-                                engine.api_marker()
+                                "V distribuci {distro} se vytvoří {} a {ename} se restartuje. API bude na 127.0.0.1:{port} {}.",
+                                "{} will be created in the {distro} distribution and {ename} restarted. The API will be on 127.0.0.1:{port} {}.",
+                                engine.api_marker(),
+                                if tls { t!("jen s klientským certifikátem (TLS)", "with a client certificate only (TLS)") } else { t!("bez autentizace (jen lokálně)", "without authentication (local only)") }
                             ),
                             Cmd::SetupEngine,
                         );
@@ -216,7 +305,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 // DOCKER_HOST pro nástroje, které mluví přímo s API
                 ui.add_space(8.0);
                 ui.label(RichText::new(t!("DOCKER_HOST pro nástroje", "DOCKER_HOST for tools")).strong());
-                let want = format!("tcp://127.0.0.1:{port}");
+                let pipe_url = crate::npipe::docker_host_url(crate::npipe::PIPE_NAME);
+                let want = if npipe_on { pipe_url.clone() } else { format!("tcp://127.0.0.1:{port}") };
+                let relay = crate::npipe::state();
                 toolbar(ui, |ui| match &st {
                     None => {
                         ui.spinner();
@@ -235,7 +326,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         }
                         ui.add_enabled_ui(!checking && s.docker_host.as_deref() != Some(want.as_str()), |ui| {
                             if ui.button(tf!("\u{E3D4} Nastavit na {want}", "\u{E3D4} Set to {want}")).clicked() {
-                                app.shim_action(ui.ctx(), crate::shim_install::Action::SetDockerHost(port, tls));
+                                let action = if npipe_on {
+                                    crate::shim_install::Action::SetDockerHostPipe
+                                } else {
+                                    crate::shim_install::Action::SetDockerHost(port, tls)
+                                };
+                                app.shim_action(ui.ctx(), action);
                             }
                         });
                         ui.add_enabled_ui(!checking && s.docker_host.is_some(), |ui| {
@@ -246,6 +342,39 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
                 ui.label(muted(t!("Pro VS Code Dev Containers, Testcontainers, Docker SDK a další nástroje, které nevolají příkaz docker, ale mluví přímo s API. Projeví se v nově spuštěných programech.", "For VS Code Dev Containers, Testcontainers, Docker SDK and other tools that talk to the API directly instead of calling the docker command. Takes effect in newly started programs.")).small());
+                // pojmenovaná roura: stav relay (běží jen s aplikací)
+                let host_is_pipe = st
+                    .as_ref()
+                    .and_then(|s| s.docker_host.as_deref())
+                    .and_then(crate::npipe::pipe_from_docker_host)
+                    .is_some_and(|p| p.eq_ignore_ascii_case(crate::npipe::PIPE_NAME));
+                match (&relay, npipe_on) {
+                    (crate::npipe::State::Running, _) => {
+                        ui.label(
+                            RichText::new(tf!(
+                                "\u{E184} Roura {} běží – jen dokud běží WLS Desktop (ukončením aplikace přestane fungovat).",
+                                "\u{E184} Pipe {} is running – only while WLS Desktop runs (quitting the app stops it).",
+                                crate::npipe::PIPE_NAME
+                            ))
+                            .color(theme::green())
+                            .small(),
+                        );
+                    }
+                    (crate::npipe::State::Failed(e), true) => {
+                        ui.label(RichText::new(tf!("\u{E4E0} Rouru nelze spustit: {e}", "\u{E4E0} Cannot start the pipe: {e}")).color(theme::red()).small());
+                    }
+                    _ if host_is_pipe => {
+                        ui.label(
+                            RichText::new(t!(
+                                "\u{E4E0} DOCKER_HOST míří na rouru, ale ta je vypnutá – zapni ji v Nastavení.",
+                                "\u{E4E0} DOCKER_HOST points to the pipe, but it is turned off – enable it in Settings."
+                            ))
+                            .color(theme::yellow())
+                            .small(),
+                        );
+                    }
+                    _ => {}
+                }
 
                 // zabezpečení API (TLS s klientským certifikátem)
                 ui.add_space(8.0);
@@ -283,26 +412,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     } else {
                         badge(ui, &tf!("\u{E412} bez ověření · port {port}", "\u{E412} no authentication · port {port}"), theme::yellow());
                         if ui.button(t!("\u{E2FA} Zapnout TLS", "\u{E2FA} Turn TLS on")).clicked() {
-                            app.ask(
-                                t!("Zabezpečit API pomocí TLS?", "Secure the API with TLS?"),
-                                t!(
-                                    "Engine bude poslouchat jen na unix socketu v distribuci a na 127.0.0.1:2376 bude TLS proxy (socat), která pustí jen klienta s certifikátem. \
-                                     Vytvoří se CA a certifikáty, klientský se uloží do %APPDATA%\\WLS_Desktop\\tls. Příkaz docker ve Windows i CLI ve WSL půjdou přes socket. \
-                                     Engine se restartuje.",
-                                    "The engine will listen only on a unix socket in the distribution and a TLS proxy (socat) on 127.0.0.1:2376 will accept only clients with a certificate. \
-                                     A CA and certificates are created; the client one is saved to %APPDATA%\\WLS_Desktop\\tls. The docker command in Windows and the CLI in WSL will use the socket. \
-                                     The engine will restart."
-                                ),
-                                Cmd::SetTls(true),
-                            );
+                            ask_tls_on(app);
                         }
                     }
                 });
                 ui.label(
                     muted(if tls {
                         t!(
-                            "Nástroje s DOCKER_HOST potřebují DOCKER_TLS_VERIFY=1 a DOCKER_CERT_PATH – tlačítko výše je nastaví.",
-                            "Tools using DOCKER_HOST need DOCKER_TLS_VERIFY=1 and DOCKER_CERT_PATH – the button above sets them."
+                            "Nástroje s DOCKER_HOST=tcp://… potřebují DOCKER_TLS_VERIFY=1 a DOCKER_CERT_PATH (nešifrovaný klíč) – tlačítko výše je nastaví. Bez klíče na disku: pojmenovaná roura v Nastavení.",
+                            "Tools using DOCKER_HOST=tcp://… need DOCKER_TLS_VERIFY=1 and DOCKER_CERT_PATH (unencrypted key) – the button above sets them. Without a key on disk: the named pipe in Settings."
                         )
                     } else {
                         t!(

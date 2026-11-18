@@ -24,6 +24,7 @@ pub use spec::{is_windows_path, AddDistroSpec, BuildSpec, RunSpec};
 pub use compose::{NewStackSpec, StackMsg, StackOp};
 pub use detail::{start_stats, StatSample, StatsFeed, STATS_WINDOW};
 pub use distro_manage::{default_import_folder, DistroDisk, DistroOp};
+pub use engine_ops::api_port;
 #[cfg(test)]
 pub use detail::recreate_for_test;
 #[cfg(test)]
@@ -116,8 +117,8 @@ pub enum Cmd {
     EngineStop,
     EngineRestart,
     SetupEngine,
-    /// nainstalovat engine (apt), případně zapnout systemd, a nastavit API
-    InstallEngine(Engine),
+    /// nainstalovat engine (apt), případně zapnout systemd, a nastavit API (true = s TLS)
+    InstallEngine(Engine, bool),
     /// seznam distribucí k instalaci (wsl --list --online)
     ListOnline,
     /// nainstalovat a připravit novou distribuci
@@ -547,9 +548,9 @@ impl Worker {
                 res
             }
             Cmd::Distro(op) => self.distro_op(op),
-            Cmd::InstallEngine(engine) => {
+            Cmd::InstallEngine(engine, tls) => {
                 let mut log = String::new();
-                let res = self.install_engine(engine, &mut log);
+                let res = self.install_engine(engine, tls, &mut log);
                 self.send(Msg::Output(tf!("Instalace: {}", "Installation: {}", engine.name()), log));
                 res
             }
