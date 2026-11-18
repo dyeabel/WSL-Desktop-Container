@@ -23,14 +23,18 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
   Actions release).
 - Logs: search with highlighting, timestamps, save, merged live logs of a compose stack;
   file browser inside a container.
+- Docker end-to-end test in a fresh WSL distribution; code signing support (`scripts/sign.ps1`,
+  Azure Artifact Signing in CI) and winget manifest generation (`scripts/winget.ps1`).
 
 ## Recommended next steps
 
-1. ★ **Code signing** of the EXEs and the ZIP (Authenticode) and a winget manifest.
+1. ★ **Publish**: make the releases public, choose a license, get an Azure Artifact Signing
+   account (or SignPath for OSS) and submit the winget manifest to `microsoft/winget-pkgs`.
 2. ★ **Self-update**: check GitHub releases and offer the new portable ZIP.
 3. ★ **Embedded terminal** inside the app instead of Windows Terminal (exec / console).
 4. ★ Logs: follow containers that start later in a merged stack view automatically.
-5. ★ Docker engine end-to-end tests (TLS mode, notifications) – only Podman is tested live.
+5. ★ Run the Docker end-to-end test (`live_docker_e2e`) in CI on a self-hosted Windows runner
+   with WSL.
 
 ## Containers, images, compose
 

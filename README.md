@@ -346,6 +346,39 @@ powershell -ExecutionPolicy Bypass -File scripts\release.ps1 -Version 1.0.0 -Tag
    Actions (`.github/workflows/release.yml`: clippy, tests, package) publish a GitHub release with
    the ZIP and its SHA-256. Every push to `main` builds the ZIP as a workflow artifact.
 
+Besides the portable ZIP, `package.ps1` builds `…-winget.zip` without `PORTABLE.txt` (data in
+`%APPDATA%`, so it survives upgrades) for the Windows Package Manager.
+
+### Code signing
+
+`scripts/sign.ps1` signs `wls-desktop.exe` and `docker.exe` with Authenticode (SHA-256, RFC 3161
+timestamp); `package.ps1 -Sign` / `release.ps1 -Sign` call it before packaging. The signing method
+is chosen by environment variables:
+
+| Method | Variables | Notes |
+|---|---|---|
+| **Azure Artifact Signing** (formerly Trusted Signing) | `WLS_SIGN_DLIB` (x64 `Azure.CodeSigning.Dlib.dll`), `WLS_SIGN_METADATA` (`metadata.json` with endpoint, account, certificate profile) + `AZURE_*` credentials or `az login` | recommended; ~10 USD / month; individuals only in the USA / Canada, organizations also in the EU; client tools: `winget install -e --id Microsoft.Azure.ArtifactSigningClientTools` |
+| Certificate in the Windows store (USB token, HSM, cloud HSM such as DigiCert KeyLocker or SSL.com eSigner) | `WLS_SIGN_THUMBPRINT` | classic OV / EV certificate; since 2023 private keys must be on an HSM |
+| PFX file | `WLS_SIGN_PFX`, `WLS_SIGN_PFX_PASSWORD` | older certificates or testing (`-AllowUntrusted` accepts a self-signed test certificate) |
+
+The ZIP itself cannot carry an Authenticode signature – the signed EXEs inside it and the published
+SHA-256 are what users verify (`Get-AuthenticodeSignature`, `Get-FileHash`). In GitHub Actions the
+EXEs are signed automatically when the repository has the secrets `AZURE_TENANT_ID`,
+`AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` and the variables `SIGNING_ENDPOINT`, `SIGNING_ACCOUNT`,
+`SIGNING_PROFILE` (see `.github/workflows/release.yml`); otherwise the packages are unsigned.
+Open-source projects can alternatively apply to the free SignPath Foundation (public repository
+and an OSI license required).
+
+### winget
+
+`scripts/winget.ps1` generates the manifests (`dist\winget\manifests\d\dyeabel\WLSDesktop\<version>\`:
+version, installer and en-US locale, schema 1.10) for the `-winget.zip` release asset – installer
+type `zip` with the nested portable `wls-desktop.exe` and the command alias `wls-desktop` – and
+checks them with `winget validate`. CI attaches the manifest to the workflow artifacts. Publishing
+to the community repository means a pull request to `microsoft/winget-pkgs` (e.g.
+`wingetcreate submit <folder>`); it requires a **public** download URL, i.e. a public repository
+(or another public host for the ZIP), and a license entry (`-License`).
+
 ## Tests
 
 ```bash

@@ -1,4 +1,12 @@
-# Build + testy na každý push; portable ZIP jako artefakt. Na tag v* vytvoří GitHub release se ZIPem.
+# Build + testy na každý push; portable ZIP, winget ZIP a winget manifest jako artefakt.
+# Na tag v* vytvoří GitHub release se ZIPy.
+#
+# Podpis EXE (Azure Artifact Signing) se zapne nastavením v repozitáři:
+#   secrets: AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET (service principal s rolí
+#            "Artifact Signing Certificate Profile Signer")
+#   variables: SIGNING_ENDPOINT (např. https://weu.codesigning.azure.net), SIGNING_ACCOUNT,
+#              SIGNING_PROFILE
+# Bez nich se balíček vytvoří nepodepsaný.
 name: build
 
 on:
@@ -13,6 +21,10 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -23,15 +35,39 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests
         run: cargo test
-      - name: Package
+      - name: Package (unsigned)
+        if: env.AZURE_CLIENT_ID == ''
         shell: pwsh
         run: ./scripts/package.ps1
+      - name: Package (signed – Azure Artifact Signing)
+        if: env.AZURE_CLIENT_ID != ''
+        shell: pwsh
+        run: |
+          nuget install Microsoft.ArtifactSigning.Client -x -OutputDirectory "$env:RUNNER_TEMP\as"
+          $dlib = Get-ChildItem "$env:RUNNER_TEMP\as" -Recurse -Filter Azure.CodeSigning.Dlib.dll |
+            Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1
+          if (-not $dlib) { throw 'Azure.CodeSigning.Dlib.dll (x64) nenalezena' }
+          @{
+            Endpoint = '${{ vars.SIGNING_ENDPOINT }}'
+            CodeSigningAccountName = '${{ vars.SIGNING_ACCOUNT }}'
+            CertificateProfileName = '${{ vars.SIGNING_PROFILE }}'
+            ExcludeCredentials = @('ManagedIdentityCredential', 'WorkloadIdentityCredential', 'SharedTokenCacheCredential',
+              'VisualStudioCredential', 'VisualStudioCodeCredential', 'AzureCliCredential', 'AzurePowerShellCredential',
+              'AzureDeveloperCliCredential', 'InteractiveBrowserCredential')
+          } | ConvertTo-Json | Set-Content "$env:RUNNER_TEMP\metadata.json"
+          $env:WLS_SIGN_DLIB = $dlib.FullName
+          $env:WLS_SIGN_METADATA = "$env:RUNNER_TEMP\metadata.json"
+          ./scripts/package.ps1 -Sign
+      - name: Winget manifest
+        shell: pwsh
+        run: ./scripts/winget.ps1 -NoValidate
       - uses: actions/upload-artifact@v4
         with:
-          name: wls-desktop-portable
+          name: wls-desktop-packages
           path: |
             dist/*.zip
             dist/*.sha256
+            dist/winget/
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -40,4 +76,3 @@ jobs:
             dist/*.zip
             dist/*.sha256
           generate_release_notes: true
-

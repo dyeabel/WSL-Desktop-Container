@@ -8,7 +8,8 @@
 #   1. čistý pracovní strom (žádné necommitnuté změny) – balíček odpovídá commitu
 #   2. volitelně nová verze v Cargo.toml (+ commit „Verze X.Y.Z“)
 #   3. cargo clippy (varování = chyba) a cargo test
-#   4. cargo build --release a scripts\package.ps1 -> dist\WLS-Desktop-<verze>-win-x64.zip (+ .sha256)
+#   4. cargo build --release a scripts\package.ps1 -> dist\WLS-Desktop-<verze>-win-x64.zip (portable)
+#      a -winget.zip (+ .sha256); s -Sign se EXE podepíšou (scripts\sign.ps1, proměnné WLS_SIGN_*)
 #   5. volitelně git tag vX.Y.Z – po `git push origin vX.Y.Z` vytvoří GitHub Actions release se ZIPem
 #
 # Živé testy (cargo test -- --ignored) se nespouští – potřebují WSL distribuci s enginem;
@@ -17,7 +18,8 @@ param(
     [string]$Version,
     [switch]$Tag,
     [switch]$LiveTests,
-    [switch]$AllowDirty
+    [switch]$AllowDirty,
+    [switch]$Sign
 )
 # nativní příkazy (cargo, git) píší průběh na stderr – úspěch se kontroluje přes $LASTEXITCODE
 $ErrorActionPreference = 'Continue'
@@ -61,7 +63,7 @@ if ($LiveTests) {
 }
 
 Step 'Release build a balíček'
-& (Join-Path $PSScriptRoot 'package.ps1')
+if ($Sign) { & (Join-Path $PSScriptRoot 'package.ps1') -Sign } else { & (Join-Path $PSScriptRoot 'package.ps1') }
 Check 'package.ps1'
 
 if ($Tag) {
