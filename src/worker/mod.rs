@@ -4,7 +4,9 @@
 mod containers;
 mod distro;
 mod engine_ops;
+mod events;
 mod fs_ops;
+mod notify;
 mod spec;
 mod tracking;
 
@@ -159,6 +161,10 @@ pub struct Shared {
     suppress_track: AtomicBool,
     /// naposledy uložený seznam (abychom zbytečně nezapisovali soubor)
     last_tracked: Mutex<Vec<String>>,
+    /// proud událostí běží – dotazování stačí zřídka
+    pub events_live: AtomicBool,
+    refresh_pending: AtomicBool,
+    notifier: Mutex<notify::Notifier>,
 }
 
 #[derive(Clone)]
@@ -197,8 +203,14 @@ impl Worker {
             thread::spawn(move || w.exec(Cmd::EngineStart));
         }
         self.refresh();
+        self.spawn_events();
         loop {
-            let secs = self.cfg().refresh_secs.clamp(1, 600);
+            // s živým proudem událostí stačí občasná kontrola (stav WSL, záloha za ztracené události);
+            // statistiky na přehledu se ale dál obnovují v nastaveném intervalu
+            let mut secs = self.cfg().refresh_secs.clamp(1, 600);
+            if self.shared.events_live.load(Ordering::SeqCst) && !self.shared.want_stats.load(Ordering::Relaxed) {
+                secs = secs.max(30);
+            }
             match rx.recv_timeout(Duration::from_secs(secs)) {
                 Ok(Cmd::Refresh) => {
                     // sloučit nahromaděné požadavky na obnovení
@@ -310,7 +322,12 @@ impl Worker {
         match cmd {
             Cmd::Refresh => Ok(String::new()),
             Cmd::Fs { root, op } => self.fs_op(root, op),
-            Cmd::Container(id, action) => d.container_action(&id, action).map(|_| String::new()),
+            Cmd::Container(id, action) => {
+                if matches!(action, "stop" | "restart" | "kill" | "remove") {
+                    self.mark_intended(&id);
+                }
+                d.container_action(&id, action).map(|_| String::new())
+            }
             Cmd::PruneContainers => d.prune("containers", None),
             Cmd::Run(spec) => self.run_container(spec),
             Cmd::Pull(r) => {
@@ -337,7 +354,12 @@ impl Worker {
                 .map(|_| tf!("Síť {n} vytvořena", "Network {n} created")),
             Cmd::RemoveNetwork(id) => d.delete(&format!("/networks/{id}")).map(|_| t!("Síť odstraněna", "Network removed").into()),
             Cmd::PruneNetworks => d.prune("networks", None),
-            Cmd::Compose { dir, project, args } => self.compose(dir, project, args),
+            Cmd::Compose { dir, project, args } => {
+                if args.iter().any(|a| matches!(a.as_str(), "down" | "stop" | "restart" | "rm" | "kill")) {
+                    self.quiet_notifications(Duration::from_secs(60));
+                }
+                self.compose(dir, project, args)
+            }
             Cmd::ComposeUpPath(path) => {
                 let dir = wsl::to_linux_path(&distro, &path)?;
                 self.exec_inner(Cmd::Compose { dir, project: None, args: vec!["up".into(), "-d".into()] })

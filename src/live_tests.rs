@@ -176,3 +176,43 @@ fn live_docker_snapshot() {
     let df = Docker::new(2375).df();
     assert!(df.is_some());
 }
+
+/// Zápis a odebrání hodnoty Run v HKCU (jen když autostart předtím nebyl zapnutý).
+#[test]
+#[ignore]
+fn live_autostart_roundtrip() {
+    use crate::autostart;
+    if autostart::is_enabled() {
+        eprintln!("autostart už je zapnutý – test přeskočen");
+        return;
+    }
+    autostart::set(true).expect("set");
+    assert!(autostart::is_enabled());
+    autostart::set(false).expect("clear");
+    assert!(!autostart::is_enabled());
+}
+
+/// Proud událostí: vytvoření a smazání testovacího kontejneru musí přijít jako události.
+#[test]
+#[ignore]
+fn live_events_stream() {
+    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = Docker::new(port).stream_events(|| {}, |e| tx.send((e.action().to_string(), e.name(), e.triggers_refresh())).is_ok());
+    });
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let d = Docker::new(port);
+    d.post_json("/containers/create?name=wls-test-events", serde_json::json!({"Image": "docker.io/library/alpine:3.20", "Cmd": ["true"]}))
+        .expect("create");
+    d.delete("/containers/wls-test-events?force=1").expect("remove");
+    let mut seen = vec![];
+    while let Ok(ev) = rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        if ev.1 == "wls-test-events" {
+            seen.push(ev);
+        }
+    }
+    eprintln!("{seen:?}");
+    assert!(seen.iter().any(|e| e.0 == "create" && e.2), "{seen:?}");
+    assert!(seen.iter().any(|e| e.0 == "remove" && e.2), "{seen:?}");
+}

@@ -333,6 +333,71 @@ pub fn enc(s: &str) -> String {
         .collect()
 }
 
+/// Událost z `/events` (Docker i Podman compat API).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct Event {
+    #[serde(rename = "Type", default)]
+    pub kind: String,
+    #[serde(rename = "Action", default)]
+    action: String,
+    #[serde(default)]
+    status: String,
+    #[serde(rename = "Actor", default)]
+    pub actor: Actor,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct Actor {
+    #[serde(rename = "ID", default)]
+    pub id: String,
+    #[serde(rename = "Attributes", default)]
+    pub attributes: HashMap<String, Value>,
+}
+
+impl Event {
+    /// Akce bez parametrů – Docker posílá např. `health_status: unhealthy`.
+    pub fn action(&self) -> &str {
+        let a = if self.action.is_empty() { &self.status } else { &self.action };
+        a.split(':').next().unwrap_or("").trim()
+    }
+
+    /// Parametr akce (`health_status: unhealthy` -> `unhealthy`).
+    pub fn action_arg(&self) -> Option<&str> {
+        let a = if self.action.is_empty() { &self.status } else { &self.action };
+        a.split_once(':').map(|(_, v)| v.trim()).filter(|v| !v.is_empty())
+    }
+
+    pub fn attr(&self, k: &str) -> Option<String> {
+        match self.actor.attributes.get(k)? {
+            Value::String(s) => Some(s.clone()),
+            Value::Null => None,
+            v => Some(v.to_string()),
+        }
+    }
+
+    pub fn name(&self) -> String {
+        self.attr("name").unwrap_or_else(|| short_id(&self.actor.id).to_string())
+    }
+
+    pub fn exit_code(&self) -> Option<i64> {
+        self.attr("exitCode").or_else(|| self.attr("containerExitCode")).and_then(|c| c.trim().parse().ok())
+    }
+
+    /// Mění událost něco, co aplikace zobrazuje? (Podman posílá `sync` při každém výpisu
+    /// kontejnerů – na ten se reagovat nesmí, jinak by obnovování běželo pořád dokola.)
+    pub fn triggers_refresh(&self) -> bool {
+        const IGNORE: &[&str] = &[
+            "sync", "health_status", "attach", "detach", "resize", "top", "archive-path", "extract-to-dir", "copy",
+            "export", "save", "push", "mount", "unmount", "init", "cleanup", "checkpoint", "exec",
+        ];
+        let a = self.action();
+        if a.is_empty() || a.starts_with("exec") || IGNORE.contains(&a) {
+            return false;
+        }
+        matches!(self.kind.as_str(), "container" | "image" | "volume" | "network")
+    }
+}
+
 #[derive(Clone)]
 pub struct Docker {
     agent: ureq::Agent,
@@ -567,6 +632,36 @@ impl Docker {
         Ok(())
     }
 
+    /// Odebírá `/events`. `on_connected` se zavolá po navázání spojení, `on_event` pro každou
+    /// událost (vrací false = skončit). Při 120 s ticha vrátí Ok(()) – volající se připojí znovu,
+    /// aby se nezasekl na spojení, které zaniklo bez ukončení (např. vypnuté WSL).
+    pub fn stream_events(&self, on_connected: impl FnOnce(), mut on_event: impl FnMut(Event) -> bool) -> Result<(), String> {
+        use std::io::BufRead;
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(2))
+            .timeout_read(Duration::from_secs(120))
+            .build();
+        let resp = agent.get(&self.url("/events")).call().map_err(Self::err)?;
+        on_connected();
+        let r = std::io::BufReader::new(resp.into_reader());
+        for line in r.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => return Ok(()),
+                Err(e) => return Err(e.to_string()),
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(ev) = serde_json::from_str::<Event>(&line) {
+                if !on_event(ev) {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn stats(&self, id: &str, name: &str) -> Option<StatRow> {
         let v: Value = self.get(&format!("/containers/{id}/stats?stream=false")).ok()?;
         let u = |p: &str| v.pointer(p).and_then(|x| x.as_u64()).unwrap_or(0);
@@ -660,6 +755,30 @@ mod tests {
         assert!(d[0].is_official && d[0].star_count == 5 && d[0].name == "nginx");
         assert!(p[0].is_official && p[0].star_count == 5 && p[0].name == "docker.io/library/nginx");
         assert!(!p[1].is_official);
+    }
+
+    #[test]
+    fn parses_events() {
+        // Podman compat
+        let p: Event = serde_json::from_str(
+            r#"{"status":"die","id":"abc","Type":"container","Action":"die","Actor":{"ID":"abc123","Attributes":{"name":"web","exitCode":"3","containerExitCode":"3"}},"time":1}"#,
+        )
+        .unwrap();
+        assert_eq!((p.action(), p.name().as_str(), p.exit_code()), ("die", "web", Some(3)));
+        assert!(p.triggers_refresh());
+        // Docker: parametr v akci
+        let d: Event = serde_json::from_str(
+            r#"{"Type":"container","Action":"health_status: unhealthy","Actor":{"ID":"x","Attributes":{"name":"db"}}}"#,
+        )
+        .unwrap();
+        assert_eq!((d.action(), d.action_arg()), ("health_status", Some("unhealthy")));
+        assert!(!d.triggers_refresh());
+        let s: Event = serde_json::from_str(r#"{"Type":"container","Action":"sync","Actor":{"ID":"x"}}"#).unwrap();
+        assert!(!s.triggers_refresh());
+        let e: Event = serde_json::from_str(r#"{"Type":"container","Action":"exec_start: sh","Actor":{"ID":"x"}}"#).unwrap();
+        assert!(!e.triggers_refresh());
+        let v: Event = serde_json::from_str(r#"{"Type":"volume","Action":"create","Actor":{"ID":"data"}}"#).unwrap();
+        assert!(v.triggers_refresh());
     }
 
     #[test]

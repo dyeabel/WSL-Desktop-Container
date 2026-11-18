@@ -115,6 +115,8 @@ pub struct App {
     logo: egui::TextureHandle,
     /// první snímek (kvůli „spustit schované“)
     first_frame: bool,
+    /// spouštění s Windows (načte se při prvním zobrazení Nastavení)
+    pub autostart: Option<bool>,
     was_minimized: bool,
 }
 
@@ -207,6 +209,7 @@ impl App {
             shim_msg: Arc::new(Mutex::new(None)),
             logo,
             first_frame: true,
+            autostart: None,
             was_minimized: false,
         }
         .with_toasts(startup_toasts)
@@ -239,7 +242,7 @@ impl App {
         }
         if self.first_frame {
             self.first_frame = false;
-            if start_hidden {
+            if start_hidden || crate::autostart::launched_at_login() {
                 crate::tray::hide_window();
             }
         }

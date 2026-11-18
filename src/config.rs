@@ -27,6 +27,8 @@ pub struct Config {
     pub restore_containers: bool,
     /// Jazyk rozhraní: "cs" nebo "en"
     pub language: String,
+    /// Oznámení ve Windows při pádu kontejneru, selhání healthchecku, opakovaných restartech
+    pub notifications: bool,
 }
 
 impl Default for Config {
@@ -43,6 +45,7 @@ impl Default for Config {
             start_hidden: false,
             restore_containers: false,
             language: "cs".into(),
+            notifications: true,
         }
     }
 }

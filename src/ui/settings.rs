@@ -222,20 +222,42 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         open_add_distro(app);
     }
 
-    section(ui, t!("Oznamovací oblast (tray)", "Notification area (tray)"));
+    section(ui, t!("Na pozadí a oznámení", "Background and notifications"));
     card(ui, |ui| {
         ui.set_width(ui.available_width());
+        let mut auto = *app.autostart.get_or_insert_with(crate::autostart::is_enabled);
+        if ui
+            .checkbox(&mut auto, t!("Spouštět s Windows (po přihlášení, schované v oznamovací oblasti)", "Start with Windows (after sign-in, hidden in the tray)"))
+            .changed()
+        {
+            match crate::autostart::set(auto) {
+                Ok(()) => app.autostart = Some(auto),
+                Err(e) => app.toast(false, tf!("Spouštění s Windows nelze nastavit: {e}", "Cannot set start with Windows: {e}")),
+            }
+        }
         let mut c = app.cfg.read().map(|c| c.clone()).unwrap_or_default();
-        let before = (c.close_to_tray, c.minimize_to_tray, c.start_hidden);
+        let before = (c.close_to_tray, c.minimize_to_tray, c.start_hidden, c.notifications);
+        ui.checkbox(
+            &mut c.notifications,
+            t!(
+                "Oznámení ve Windows: pád kontejneru, nedostatek paměti, selhávající healthcheck, opakované restarty",
+                "Windows notifications: container crash, out of memory, failing health check, restart loop"
+            ),
+        )
+        .on_hover_text(t!(
+            "Zastavení z aplikace, z příkazu docker ani compose down se za pád nepovažuje.",
+            "Stopping a container from the app, the docker command or compose down does not count as a crash."
+        ));
         ui.checkbox(&mut c.close_to_tray, t!("Zavření okna (křížek) aplikaci jen schová do oznamovací oblasti", "Closing the window (×) only hides the app to the tray"));
         ui.checkbox(&mut c.minimize_to_tray, t!("Minimalizace schová okno do oznamovací oblasti", "Minimizing hides the window to the tray"));
         ui.checkbox(&mut c.start_hidden, t!("Spouštět rovnou schované v oznamovací oblasti", "Start hidden in the tray"));
-        if (c.close_to_tray, c.minimize_to_tray, c.start_hidden) != before {
+        if (c.close_to_tray, c.minimize_to_tray, c.start_hidden, c.notifications) != before {
             let _ = c.save();
             crate::tray::sync_checks(c.close_to_tray, c.minimize_to_tray);
             app.cfg_draft.close_to_tray = c.close_to_tray;
             app.cfg_draft.minimize_to_tray = c.minimize_to_tray;
             app.cfg_draft.start_hidden = c.start_hidden;
+            app.cfg_draft.notifications = c.notifications;
             if let Ok(mut g) = app.cfg.write() {
                 *g = c;
             }

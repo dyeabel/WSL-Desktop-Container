@@ -91,5 +91,6 @@ impl Worker {
     /// Aplikace sama vypíná engine – seznam běžících kontejnerů nepřepisovat.
     pub(super) fn suppress_tracking(&self) {
         self.shared.suppress_track.store(true, Ordering::SeqCst);
+        self.quiet_notifications(std::time::Duration::from_secs(90));
     }
 }

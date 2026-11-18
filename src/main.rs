@@ -3,11 +3,13 @@
 #[macro_use]
 mod i18n;
 mod app;
+mod autostart;
 mod config;
 mod docker;
 mod engine;
 mod fs;
 mod icon_art;
+mod notify;
 #[allow(dead_code)] // používá docker shim, tady jen kvůli testům
 mod pathmap;
 mod shim_install;
@@ -25,6 +27,10 @@ fn main() -> eframe::Result<()> {
     if tray::activate_existing("WLS Desktop") {
         return Ok(());
     }
+    std::thread::spawn(|| {
+        notify::register();
+        autostart::fix_path();
+    });
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("WLS Desktop")
