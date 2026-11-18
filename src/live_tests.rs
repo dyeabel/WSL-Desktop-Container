@@ -782,3 +782,31 @@ fn live_compose_label_trust() {
     eprintln!("evil: {evil:?}\ngone: {gone:?}\nok: {ok:?}");
     assert!(evil.is_err() && gone.is_err() && ok.is_ok());
 }
+
+/// F-11: proměnné prostředí se při spuštění předají souborem, ne v příkazové řádce.
+#[test]
+#[ignore]
+fn live_run_env_file() {
+    let mut cfg = crate::config::Config::load();
+    if let Ok(d) = std::env::var("WLS_DISTRO") {
+        cfg.distro = d;
+    }
+    let d = Docker::new(cfg.port);
+    let _ = d.delete("/containers/wls-test-envfile?force=1");
+    let spec = crate::worker::RunSpec {
+        image: "alpine:3.20".into(),
+        name: "wls-test-envfile".into(),
+        env: "SECRET_TOKEN=tajne heslo=1\nPLAIN=x".into(),
+        command: "sleep 60".into(),
+        ..Default::default()
+    };
+    let r = crate::worker::run_for_test(cfg.clone(), spec);
+    let v: serde_json::Value = d.get("/containers/wls-test-envfile/json").expect("inspect");
+    let env: Vec<String> = serde_json::from_value(v.pointer("/Config/Env").cloned().unwrap_or_default()).unwrap_or_default();
+    let left = wsl::run(&cfg.distro, None, None, &["sh", "-c", "ls ${TMPDIR:-/tmp}/wls-env.* 2>/dev/null | wc -l"]).unwrap_or_default();
+    let _ = d.delete("/containers/wls-test-envfile?force=1");
+    eprintln!("{r:?} env={env:?} zbylé soubory={}", left.trim());
+    assert!(r.is_ok(), "{r:?}");
+    assert!(env.iter().any(|e| e == "SECRET_TOKEN=tajne heslo=1") && env.iter().any(|e| e == "PLAIN=x"), "{env:?}");
+    assert_eq!(left.trim(), "0");
+}

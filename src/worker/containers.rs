@@ -5,6 +5,9 @@ use crate::wsl;
 use std::thread;
 use std::time::Duration;
 
+/// Uloží stdin do nového souboru čitelného jen vlastníkem a vypíše jeho cestu.
+const ENV_FILE_SCRIPT: &str = r#"umask 077; f=$(mktemp "${TMPDIR:-/tmp}/wls-env.XXXXXX") && cat > "$f" && echo "$f""#;
+
 impl Worker {
     pub(super) fn run_container(&self, spec: RunSpec) -> Result<String, String> {
         let cfg = self.cfg();
@@ -19,7 +22,25 @@ impl Worker {
             wsl::open_terminal(&tf!("{image} (interaktivně)", "{image} (interactive)"), &w)?;
             return Ok(tf!("{image} spuštěn interaktivně v terminálu", "{image} started interactively in a terminal"));
         }
-        let out = wsl::run_owned(&distro, None, None, &args)?;
+        // proměnné prostředí přes dočasný soubor (0600) místo `-e K=V` v příkazové řádce,
+        // kterou ve WSL přečte kdokoli přes /proc/*/cmdline (F-11)
+        let env: Vec<&str> = spec.env.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        let (args, env_file) = if env.is_empty() {
+            (args, None)
+        } else {
+            let file = wsl::run_stdin(&distro, None, &["sh", "-c", ENV_FILE_SCRIPT], &format!("{}\n", env.join("\n")))?;
+            let file = file.trim().to_string();
+            let spec2 = RunSpec { env: String::new(), ..spec.clone() };
+            let mut a = spec2.args_for(cfg.engine, cfg.port, cfg.tls);
+            let at = a.iter().position(|x| x == "-d").map(|i| i + 1).unwrap_or(a.len());
+            a.splice(at..at, ["--env-file".to_string(), file.clone()]);
+            (a, Some(file))
+        };
+        let out = wsl::run_owned(&distro, None, None, &args);
+        if let Some(f) = &env_file {
+            let _ = wsl::run(&distro, None, None, &["rm", "-f", "--", f]);
+        }
+        let out = out?;
         // ID je poslední řádek výstupu (před ním může být průběh stahování)
         let id = out.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("").to_string();
         // chvíli počkat a zkontrolovat, jestli kontejner neskončil hned po startu
@@ -85,4 +106,19 @@ impl Worker {
         wsl::open_terminal(&title, &args)
     }
 
+}
+
+/// Pro živé testy: spuštění kontejneru stejnou cestou jako z dialogu.
+#[cfg(test)]
+pub fn run_for_test(cfg: crate::config::Config, spec: RunSpec) -> Result<String, String> {
+    let (msg, _m) = std::sync::mpsc::channel();
+    let (cmd, _c) = std::sync::mpsc::channel();
+    let w = Worker {
+        ctx: eframe::egui::Context::default(),
+        cfg: std::sync::Arc::new(std::sync::RwLock::new(cfg)),
+        msg,
+        cmd,
+        shared: std::sync::Arc::new(super::Shared::default()),
+    };
+    w.run_container(spec)
 }

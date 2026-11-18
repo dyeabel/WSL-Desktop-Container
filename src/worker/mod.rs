@@ -28,6 +28,8 @@ pub use distro_manage::{default_import_folder, DistroDisk, DistroOp};
 pub use detail::recreate_for_test;
 #[cfg(test)]
 pub use compose::check_stack_for_test;
+#[cfg(test)]
+pub use containers::run_for_test;
 
 use crate::config::Config;
 use crate::engine::Engine;
