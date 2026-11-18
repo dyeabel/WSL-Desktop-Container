@@ -5,24 +5,24 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
     let mut term = None;
     let Some(lv) = app.logs.as_mut() else { return };
     let mut open = true;
-    egui::Window::new(format!("\u{EB7A} Logy: {}", lv.name))
+    egui::Window::new(tf!("\u{EB7A} Logy: {}", "\u{EB7A} Logs: {}", lv.name))
         .open(&mut open)
         .default_size([900.0, 520.0])
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.add(field(&mut lv.filter).hint_text("\u{E30C} Filtr řádků…").desired_width(220.0));
-                ui.checkbox(&mut lv.wrap, "Zalamovat");
-                if ui.button("Vymazat").clicked() {
+                ui.add(field(&mut lv.filter).hint_text(t!("\u{E30C} Filtr řádků…", "\u{E30C} Filter lines…")).desired_width(220.0));
+                ui.checkbox(&mut lv.wrap, t!("Zalamovat", "Wrap"));
+                if ui.button(t!("Vymazat", "Clear")).clicked() {
                     if let Ok(mut g) = lv.buf.lock() {
                         g.clear();
                     }
                 }
-                if ui.button("\u{E1CA} Kopírovat").clicked() {
+                if ui.button(t!("\u{E1CA} Kopírovat", "\u{E1CA} Copy")).clicked() {
                     if let Ok(g) = lv.buf.lock() {
                         ui.ctx().copy_text(g.clone());
                     }
                 }
-                if ui.button("\u{EAE8} V terminálu").clicked() {
+                if ui.button(t!("\u{EAE8} V terminálu", "\u{EAE8} In terminal")).clicked() {
                     term = Some(crate::worker::Term::Logs { id: lv.id.clone(), name: lv.name.clone() });
                 }
             });
