@@ -2,6 +2,7 @@
 //! aby UI vlákno nikdy neblokovalo.
 
 pub(crate) mod build;
+pub(crate) mod compose;
 mod containers;
 mod detail;
 mod distro;
@@ -13,6 +14,7 @@ mod spec;
 mod tracking;
 
 pub use spec::{is_windows_path, AddDistroSpec, BuildSpec, RunSpec};
+pub use compose::{NewStackSpec, StackMsg, StackOp};
 pub use detail::{start_stats, StatSample, StatsFeed, STATS_WINDOW};
 #[cfg(test)]
 pub use detail::recreate_for_test;
@@ -87,6 +89,8 @@ pub enum Cmd {
     Compose { dir: String, project: Option<String>, args: Vec<String> },
     /// docker compose up -d pro složku (Windows nebo Linux cesta)
     ComposeUpPath(String),
+    /// nový stack ze šablony, editor compose souborů, kontrola (-> Msg::Stack)
+    Stack(StackOp),
     Wsl(WslCmd),
     EngineStart,
     EngineStop,
@@ -140,6 +144,8 @@ pub enum Msg {
     BuildDone(Result<String, String>),
     /// výsledek inspect kontejneru (id, jak bylo požadováno)
     Inspect(String, Result<Box<crate::inspect::Detail>, String>),
+    /// výsledky operací se stacky (Cmd::Stack)
+    Stack(StackMsg),
 }
 
 /// Souhrnný stav pro tray (zapisuje worker, čte vlákno UI/traye).
@@ -342,7 +348,8 @@ impl Worker {
     fn exec(&self, cmd: Cmd) {
         self.shared.busy.fetch_add(1, Ordering::SeqCst);
         self.ctx.request_repaint();
-        let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline | Cmd::Inspect(_));
+        let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline | Cmd::Inspect(_))
+            || matches!(cmd, Cmd::Stack(StackOp::Read { .. } | StackOp::Validate { .. }));
         let res = self.exec_inner(cmd);
         self.shared.busy.fetch_sub(1, Ordering::SeqCst);
         match res {
@@ -401,6 +408,7 @@ impl Worker {
                 }
                 self.compose(dir, project, args)
             }
+            Cmd::Stack(op) => self.stack_op(op),
             Cmd::ComposeUpPath(path) => {
                 let dir = wsl::to_linux_path(&distro, &path)?;
                 self.exec_inner(Cmd::Compose { dir, project: None, args: vec!["up".into(), "-d".into()] })

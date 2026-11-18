@@ -1,6 +1,6 @@
-//! Kontejnery: spuštění z image, compose, hromadné pozastavení, terminál.
+//! Kontejnery: spuštění z image, hromadné pozastavení, terminál.
 
-use super::{Msg, RunSpec, Term, Worker};
+use super::{RunSpec, Term, Worker};
 use crate::wsl;
 use std::thread;
 use std::time::Duration;
@@ -41,29 +41,6 @@ impl Worker {
                 "Container {name} from {image} exited immediately (code {code}). The image probably has no long-running process – \
                  enter a command (e.g. sleep infinity) or check “Interactive in terminal”. See the container log for output."
             ))
-        }
-    }
-
-    pub(super) fn compose(&self, dir: String, project: Option<String>, args: Vec<String>) -> Result<String, String> {
-        let cfg = self.cfg();
-        let distro = cfg.distro.clone();
-        let mut a: Vec<String> = cfg.engine.cli(cfg.port, cfg.tls);
-        a.push("compose".into());
-        if let Some(p) = &project {
-            a.extend(["-p".into(), p.clone()]);
-        }
-        a.extend(args.iter().cloned());
-        let title = format!("{} compose {}", cfg.engine.name().to_lowercase(), args.join(" "));
-        let r = wsl::run_owned(&distro, None, Some(&dir), &a);
-        match r {
-            Ok(out) => {
-                self.send(Msg::Output(title, out));
-                Ok(t!("Compose: hotovo", "Compose: done").into())
-            }
-            Err(e) => {
-                self.send(Msg::Output(title, e.clone()));
-                Err(t!("Compose selhal – viz výstup", "Compose failed – see output").into())
-            }
         }
     }
 
