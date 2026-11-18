@@ -215,6 +215,8 @@ fn live_events_stream() {
     eprintln!("{seen:?}");
     assert!(seen.iter().any(|e| e.0 == "create" && e.2), "{seen:?}");
     assert!(seen.iter().any(|e| e.0 == "remove" && e.2), "{seen:?}");
+}
+
 /// Sestavení image z Dockerfile stejnou cestou jako aplikace (`worker::build::run_build`):
 /// dočasná složka v %TEMP% (windowsová cesta -> wslpath), engine a distribuce z konfigurace
 /// (WLS_DISTRO ji přepíše), API na portu WLS_PORT (výchozí 2375). Image `wls-test-build:latest`
