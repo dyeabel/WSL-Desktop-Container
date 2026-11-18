@@ -217,13 +217,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // --- výběr (lišta se ukáže jen když je něco vybráno) ---
     let cur = app.files.path.clone();
     let f = app.files.filter.to_lowercase();
-    let entries: Vec<Entry> = app
+    let mut entries: Vec<Entry> = app
         .files
         .entries
         .iter()
         .filter(|e| f.is_empty() || e.name.to_lowercase().contains(&f))
         .cloned()
         .collect();
+    sort_items(ui.ctx(), "files", &mut entries, |e, col| match col {
+        2 => SortKey::num(e.size as f64),
+        3 => SortKey::num(e.mtime as f64),
+        4 => SortKey::text(&e.owner),
+        5 => SortKey::text(&e.mode),
+        _ => SortKey::text(&e.name),
+    });
+    // složky vždy nahoře (stabilně – pořadí uvnitř zůstane)
+    entries.sort_by_key(|e| !e.is_dir());
     let nsel = app.files.selected.len();
     if nsel > 0 {
         ui.add_space(4.0);
@@ -282,7 +291,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         (t!("PRÁVA", "MODE"), W::PxOpt(48.0)),
         (t!("AKCE", "ACTIONS"), icons_w(2)),
     ];
-    table(ui, "files", &cols, |mut body| {
+    table_sort(ui, "files", &cols, Sort { key: "files", cols: &[1, 2, 3, 4, 5] }, |mut body| {
         if cur != "/" {
             body.row(30.0, |mut r| {
                 r.col(|_| {});

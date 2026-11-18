@@ -39,8 +39,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(8.0);
 
     let f = app.filter.to_lowercase();
-    let nets: Vec<_> = app.snap.networks.iter().filter(|n| f.is_empty() || n.name.to_lowercase().contains(&f)).cloned().collect();
+    let mut nets: Vec<_> = app.snap.networks.iter().filter(|n| f.is_empty() || n.name.to_lowercase().contains(&f)).cloned().collect();
     let containers = app.snap.containers.clone();
+    sort_items(ui.ctx(), "nets", &mut nets, |n, col| match col {
+        1 => SortKey::text(&n.id),
+        2 => SortKey::text(&n.driver),
+        4 => SortKey::num(containers.iter().filter(|c| c.networks().contains(&n.name)).count() as f64),
+        _ => SortKey::text(&n.name),
+    });
     let cols = [
         (t!("NÁZEV", "NAME"), W::Fr(2.0)),
         ("ID", W::PxOpt(120.0)),
@@ -49,7 +55,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         (t!("KONTEJNERY", "CONTAINERS"), W::Fr(2.0)),
         (t!("AKCE", "ACTIONS"), W::Px(80.0)),
     ];
-    table(ui, "nets", &cols, |mut body| {
+    table_sort(ui, "nets", &cols, Sort { key: "nets", cols: &[0, 1, 2, 4] }, |mut body| {
         for n in &nets {
             let used: Vec<String> = containers.iter().filter(|c| c.networks().contains(&n.name)).map(|c| c.name()).collect();
             body.row(34.0, |mut r| {

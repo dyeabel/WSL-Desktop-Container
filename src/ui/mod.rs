@@ -156,9 +156,121 @@ impl TableRow<'_> {
 
 /// Tabulka v kartě přes celou šířku okna.
 pub fn table(ui: &mut egui::Ui, id: &str, cols: &[(&str, W)], body: impl FnOnce(TableBody<'_>)) {
+    table_sort(ui, id, cols, Sort::NONE, body);
+}
+
+/// Tabulka v kartě s řaditelnými sloupci (klik na hlavičku: vzestupně / sestupně).
+pub fn table_sort(ui: &mut egui::Ui, id: &str, cols: &[(&str, W)], sort: Sort<'_>, body: impl FnOnce(TableBody<'_>)) {
     card(ui, |ui| {
         ui.set_width(ui.available_width());
-        table_in(ui, id, cols, body);
+        table_in_sort(ui, id, cols, sort, body);
+    });
+}
+
+// ---------------------------------------------------------------- řazení
+
+/// Které sloupce tabulky jdou řadit a pod jakým klíčem se stav pamatuje
+/// (víc tabulek může sdílet jeden klíč – např. skupiny kontejnerů).
+#[derive(Clone, Copy)]
+pub struct Sort<'a> {
+    pub key: &'a str,
+    pub cols: &'a [usize],
+}
+
+impl Sort<'static> {
+    pub const NONE: Sort<'static> = Sort { key: "", cols: &[] };
+}
+
+/// Hodnota pro řazení.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SortKey {
+    Text(String),
+    Num(f64),
+}
+
+impl SortKey {
+    pub fn text(s: impl AsRef<str>) -> Self {
+        SortKey::Text(s.as_ref().to_lowercase())
+    }
+    pub fn num(n: impl Into<f64>) -> Self {
+        SortKey::Num(n.into())
+    }
+    fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+        match (self, o) {
+            (SortKey::Num(a), SortKey::Num(b)) => a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
+            (SortKey::Text(a), SortKey::Text(b)) => natural_cmp(a, b),
+            (SortKey::Num(_), SortKey::Text(_)) => std::cmp::Ordering::Less,
+            (SortKey::Text(_), SortKey::Num(_)) => std::cmp::Ordering::Greater,
+        }
+    }
+}
+
+/// Porovnání „přirozeně“: čísla v textu podle hodnoty (web2 < web10).
+pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (x.peek().copied(), y.peek().copied()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, _) => return std::cmp::Ordering::Less,
+            (_, None) => return std::cmp::Ordering::Greater,
+            (Some(c), Some(d)) if c.is_ascii_digit() && d.is_ascii_digit() => {
+                let mut n1 = String::new();
+                while let Some(c) = x.peek().copied().filter(char::is_ascii_digit) {
+                    n1.push(c);
+                    x.next();
+                }
+                let mut n2 = String::new();
+                while let Some(c) = y.peek().copied().filter(char::is_ascii_digit) {
+                    n2.push(c);
+                    y.next();
+                }
+                let (t1, t2) = (n1.trim_start_matches('0'), n2.trim_start_matches('0'));
+                let o = t1.len().cmp(&t2.len()).then_with(|| t1.cmp(t2));
+                if o != std::cmp::Ordering::Equal {
+                    return o;
+                }
+            }
+            (Some(c), Some(d)) => {
+                if c != d {
+                    return c.cmp(&d);
+                }
+                x.next();
+                y.next();
+            }
+        }
+    }
+}
+
+fn sort_id(key: &str) -> egui::Id {
+    egui::Id::new(("wls-sort", key))
+}
+
+/// Aktuální řazení tabulky: (index sloupce, vzestupně).
+pub fn sort_state(ctx: &egui::Context, key: &str) -> Option<(usize, bool)> {
+    ctx.data_mut(|d| d.get_persisted::<(usize, bool)>(sort_id(key)))
+}
+
+/// Seřadí položky podle zvoleného sloupce (stabilně; bez volby se pořadí nemění).
+/// `key(položka, sloupec)` vrací hodnotu, podle které se řadí.
+pub fn sort_items<T>(ctx: &egui::Context, key: &str, items: &mut [T], k: impl Fn(&T, usize) -> SortKey) {
+    if let Some((col, asc)) = sort_state(ctx, key) {
+        items.sort_by(|a, b| {
+            let o = k(a, col).cmp(&k(b, col));
+            if asc { o } else { o.reverse() }
+        });
+    }
+}
+
+/// Klik na hlavičku: jiný sloupec -> vzestupně, stejný -> obrátit, třetí klik -> zrušit.
+fn toggle_sort(ctx: &egui::Context, key: &str, col: usize) {
+    let next = match sort_state(ctx, key) {
+        Some((c, true)) if c == col => Some((col, false)),
+        Some((c, false)) if c == col => None,
+        _ => Some((col, true)),
+    };
+    ctx.data_mut(|d| match next {
+        Some(v) => d.insert_persisted(sort_id(key), v),
+        None => d.remove::<(usize, bool)>(sort_id(key)),
     });
 }
 
@@ -201,35 +313,62 @@ fn layout_widths(cols: &[(&str, W)], width: f32, hide_opt: bool) -> (Vec<f32>, f
 /// a nemění se podle obsahu; dlouhý text se ořízne. V úzkém okně se nejdřív
 /// skryjí volitelné sloupce, teprve pak se tabulka dá posouvat vodorovně.
 pub fn table_in(ui: &mut egui::Ui, id: &str, cols: &[(&str, W)], body: impl FnOnce(TableBody<'_>)) {
+    table_in_sort(ui, id, cols, Sort::NONE, body);
+}
+
+pub fn table_in_sort(ui: &mut egui::Ui, id: &str, cols: &[(&str, W)], sort: Sort<'_>, body: impl FnOnce(TableBody<'_>)) {
     let avail = ui.available_width();
     let (full, full_min) = layout_widths(cols, avail, false);
     if avail >= full_min {
-        build_table(ui, cols, full, body);
+        build_table(ui, cols, full, sort, body);
         return;
     }
     let (reduced, reduced_min) = layout_widths(cols, avail, true);
     if avail >= reduced_min {
-        build_table(ui, cols, reduced, body);
+        build_table(ui, cols, reduced, sort, body);
     } else {
         egui::ScrollArea::horizontal().id_salt(format!("{id}-hscroll")).show(ui, |ui| {
-            build_table(ui, cols, reduced, body);
+            build_table(ui, cols, reduced, sort, body);
         });
     }
 }
 
-fn build_table(ui: &mut egui::Ui, cols: &[(&str, W)], widths: Vec<f32>, body: impl FnOnce(TableBody<'_>)) {
+fn build_table(ui: &mut egui::Ui, cols: &[(&str, W)], widths: Vec<f32>, sort: Sort<'_>, body: impl FnOnce(TableBody<'_>)) {
     ui.spacing_mut().item_spacing.y = 0.0;
-    let mut b = TableBody { ui, widths, gap: GAP, n: 1 };
-    // hlavička
-    b.row(30.0, |mut h| {
-        for (t, _) in cols {
-            h.col(|ui| {
-                ui.label(RichText::new(*t).small().strong().color(theme::muted()));
-            });
-        }
-    });
-    b.n = 0;
-    body(b);
+    let state = if sort.key.is_empty() { None } else { sort_state(ui.ctx(), sort.key) };
+    let mut clicked = None;
+    // hlavička (bez výplně), pod ní tenká čára a mezera před prvním řádkem
+    let total = total_width(&widths, GAP);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(total, 28.0), egui::Sense::hover());
+    let mut h = TableRow { ui, widths: &widths, gap: GAP, rect, x: rect.left() + CELL_PAD, idx: 0 };
+    for (i, (t, _)) in cols.iter().enumerate() {
+        let sortable = sort.cols.contains(&i) && !t.is_empty();
+        h.col(|ui| {
+            let arrow = match state {
+                Some((c, true)) if c == i => " \u{E13C}",
+                Some((c, false)) if c == i => " \u{E136}",
+                _ => "",
+            };
+            let active = !arrow.is_empty();
+            let text = RichText::new(format!("{t}{arrow}")).small().strong().color(if active { theme::accent() } else { theme::muted() });
+            if sortable {
+                let r = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
+                if r.clicked() {
+                    clicked = Some(i);
+                }
+                r.on_hover_text(t!("Seřadit (klikni znovu pro opačné pořadí)", "Sort (click again to reverse)"));
+            } else {
+                ui.label(text);
+            }
+        });
+    }
+    let y = rect.bottom() + 1.0;
+    ui.painter().hline(rect.left()..=rect.right(), y, egui::Stroke::new(1.0_f32, theme::card_stroke()));
+    ui.add_space(6.0);
+    if let Some(i) = clicked {
+        toggle_sort(ui.ctx(), sort.key, i);
+    }
+    body(TableBody { ui, widths, gap: GAP, n: 0 });
 }
 
 /// Barevný štítek („pilulka“).
@@ -449,5 +588,36 @@ mod tests {
         assert_eq!(super::fmt_bytes(512), "512 B");
         assert_eq!(super::fmt_bytes(1536), "1.5 KB");
         assert_eq!(super::fmt_bytes(3 * 1024 * 1024 * 1024), "3.0 GB");
+    }
+}
+
+#[cfg(test)]
+mod sort_tests {
+    use super::*;
+
+    #[test]
+    fn natural_order() {
+        let mut v = vec!["web10", "web2", "Web1", "api"];
+        v.sort_by(|a, b| natural_cmp(&a.to_lowercase(), &b.to_lowercase()));
+        assert_eq!(v, ["api", "Web1", "web2", "web10"]);
+        assert!(SortKey::num(2).cmp(&SortKey::num(10)).is_lt());
+    }
+
+    #[test]
+    fn click_cycles_asc_desc_off() {
+        let ctx = egui::Context::default();
+        let mut items = vec![("b", 2), ("a", 3), ("c", 1)];
+        toggle_sort(&ctx, "t", 1);
+        assert_eq!(sort_state(&ctx, "t"), Some((1, true)));
+        sort_items(&ctx, "t", &mut items, |x, _| SortKey::num(x.1));
+        assert_eq!(items[0].0, "c");
+        toggle_sort(&ctx, "t", 1);
+        sort_items(&ctx, "t", &mut items, |x, _| SortKey::num(x.1));
+        assert_eq!(items[0].0, "a");
+        toggle_sort(&ctx, "t", 1);
+        assert_eq!(sort_state(&ctx, "t"), None);
+        toggle_sort(&ctx, "t", 1);
+        toggle_sort(&ctx, "t", 0);
+        assert_eq!(sort_state(&ctx, "t"), Some((0, true)));
     }
 }

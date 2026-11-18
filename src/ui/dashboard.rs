@@ -163,6 +163,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     let mut rows = app.stats.clone();
     rows.sort_by(|a, b| b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal));
+    sort_items(ui.ctx(), "stats", &mut rows, |r, col| match col {
+        1 => SortKey::num(r.cpu),
+        2 => SortKey::num(r.mem as f64),
+        3 => SortKey::num((r.net_rx + r.net_tx) as f64),
+        4 => SortKey::num((r.blk_read + r.blk_write) as f64),
+        _ => SortKey::text(&r.name),
+    });
     let total_cpu: f64 = rows.iter().map(|r| r.cpu).sum();
     let ncpu = app.snap.info.as_ref().map(|i| i.ncpu.max(1)).unwrap_or(1) as f64;
     card(ui, |ui| {
@@ -181,7 +188,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         (t!("SÍŤ (rx / tx)", "NETWORK (rx / tx)"), W::FrOpt(1.4)),
         (t!("DISK (čtení / zápis)", "DISK (read / write)"), W::FrOpt(1.4)),
     ];
-    table(ui, "stats", &cols, |mut body| {
+    table_sort(ui, "stats", &cols, Sort { key: "stats", cols: &[0, 1, 2, 3, 4] }, |mut body| {
         for r in &rows {
             body.row(42.0, |mut row| {
                 row.col(|ui| {

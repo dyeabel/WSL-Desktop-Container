@@ -351,8 +351,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(8.0);
 
     let f = app.filter.to_lowercase();
-    let images = app.snap.images.clone();
+    let mut images = app.snap.images.clone();
     let containers = app.snap.containers.clone();
+    sort_items(ui.ctx(), "images", &mut images, |i, col| match col {
+        1 => SortKey::text(&i.id),
+        2 => SortKey::num(i.size as f64),
+        3 => SortKey::num(i.created as f64),
+        4 => SortKey::num(containers.iter().filter(|c| c.image_id == i.id).count() as f64),
+        _ => SortKey::text(i.tags().join(",")),
+    });
     let cols = [
         (t!("REPOZITÁŘ:TAG", "REPOSITORY:TAG"), W::Fr(3.0)),
         ("ID", W::PxOpt(120.0)),
@@ -361,7 +368,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         (t!("POUŽÍVÁ", "USED BY"), W::FrOpt(1.5)),
         (t!("AKCE", "ACTIONS"), icons_w(3)),
     ];
-    table(ui, "images", &cols, |mut body| {
+    table_sort(ui, "images", &cols, Sort { key: "images", cols: &[0, 1, 2, 3, 4] }, |mut body| {
         for img in images.iter().filter(|i| f.is_empty() || i.tags().join(" ").to_lowercase().contains(&f)) {
             let tags = img.tags();
             body.row(34.0, |mut r| {

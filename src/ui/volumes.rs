@@ -98,8 +98,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(8.0);
 
     let f = app.filter.to_lowercase();
-    let volumes = app.snap.volumes.clone();
+    let mut volumes = app.snap.volumes.clone();
     let containers = app.snap.containers.clone();
+    let sizes = app.vol.sizes.clone();
+    sort_items(ui.ctx(), "volumes", &mut volumes, |v, col| match col {
+        1 => SortKey::text(&v.driver),
+        2 => SortKey::num(sizes.get(&v.name).map(|s| *s as f64).unwrap_or(-1.0)),
+        3 => SortKey::num(
+            containers.iter().filter(|c| c.mounts.as_ref().is_some_and(|m| m.iter().any(|m| m.name.as_deref() == Some(v.name.as_str())))).count() as f64,
+        ),
+        4 => SortKey::text(&v.mountpoint),
+        _ => SortKey::text(&v.name),
+    });
     let cols = [
         (t!("NÁZEV", "NAME"), W::Fr(2.5)),
         ("DRIVER", W::PxOpt(80.0)),
@@ -111,7 +121,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let mut browse = None;
     let mut run_with: Option<String> = None;
     let mut backup: Option<(String, Vec<String>)> = None;
-    table(ui, "volumes", &cols, |mut body| {
+    table_sort(ui, "volumes", &cols, Sort { key: "volumes", cols: &[0, 1, 2, 3, 4] }, |mut body| {
         for v in volumes.iter().filter(|v| f.is_empty() || v.name.to_lowercase().contains(&f)) {
             let users: Vec<&crate::docker::Container> = containers
                 .iter()

@@ -72,7 +72,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if groups.is_empty() {
         ui.label(muted(t!("Žádné kontejnery.", "No containers.")));
     }
-    for (g, list) in groups {
+    for (g, mut list) in groups {
+        sort_items(ui.ctx(), "containers", &mut list, |c, col| match col {
+            1 => SortKey::text(c.name()),
+            2 => SortKey::text(&c.image),
+            3 => SortKey::num(c.ports.as_ref().and_then(|p| p.iter().filter_map(|p| p.public_port).min()).unwrap_or(0) as f64),
+            4 => SortKey::text(c.networks().join(",")),
+            _ => SortKey::text(format!("{}{}", if c.running() { 0 } else if c.paused() { 1 } else { 2 }, c.status)),
+        });
         let title = g.trim_start_matches('~');
         ui.add_space(6.0);
         ui.horizontal(|ui| {
@@ -88,7 +95,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             (t!("STAV", "STATE"), W::Fr(1.6)),
             (t!("AKCE", "ACTIONS"), icons_w(7)),
         ];
-        table(ui, &format!("grid-{g}"), &cols, |mut body| {
+        table_sort(ui, &format!("grid-{g}"), &cols, Sort { key: "containers", cols: &[1, 2, 3, 4, 5] }, |mut body| {
             for c in &list {
                 body.row(46.0, |mut r| row(app, &mut r, c));
             }
