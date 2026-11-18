@@ -39,14 +39,103 @@ impl Worker {
         }
     }
 
+    /// Zkopíruje klientský certifikát, klíč a CA z distribuce do %APPDATA%\WLS_Desktop\tls.
+    fn fetch_client_certs(&self, distro: &str) -> Result<(), String> {
+        let dir = crate::docker::tls_dir().ok_or("APPDATA")?;
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        for f in ["ca.pem", "cert.pem", "key.pem"] {
+            let src = format!("{}/{f}", crate::engine::TLS_DIR);
+            let pem = wsl::run(distro, Some("root"), None, &["cat", &src]).map_err(|e| format!("{src}: {e}"))?;
+            if !pem.contains("-----BEGIN") {
+                return Err(tf!("{src} není platný PEM soubor", "{src} is not a valid PEM file"));
+            }
+            std::fs::write(dir.join(f), pem).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Zapne / vypne zabezpečení API (TLS s klientským certifikátem, port 2376 / bez ověření, 2375).
+    pub(super) fn set_tls(&self, on: bool) -> Result<String, String> {
+        let mut cfg = self.cfg();
+        let old = cfg.clone();
+        cfg.tls = on;
+        cfg.port = match (on, cfg.port) {
+            (true, 2375) => 2376,
+            (false, 2376) => 2375,
+            (_, p) => p,
+        };
+        self.suppress_tracking();
+        let r = self.setup_api(&cfg);
+        match &r {
+            Ok(_) => {
+                if let Ok(mut g) = self.cfg.write() {
+                    g.tls = cfg.tls;
+                    g.port = cfg.port;
+                    let _ = g.save();
+                }
+                self.shared.was_connected.store(false, Ordering::SeqCst);
+                self.send(Msg::ConfigChanged);
+                // DOCKER_HOST nastavený aplikací převést na nový režim
+                if crate::shim_install::status().docker_host.is_some() {
+                    let _ = crate::shim_install::set_docker_host(Some((cfg.port, cfg.tls)));
+                }
+            }
+            Err(_) => {
+                // vrátit původní režim (a jeho TLS klienta)
+                let _ = crate::docker::configure_tls(old.tls);
+            }
+        }
+        let (title, out) = match &r {
+            Ok((o, _)) => (t!("Zabezpečení API", "API security"), o.clone()),
+            Err(e) => (t!("Zabezpečení API", "API security"), e.clone()),
+        };
+        self.send(Msg::Output(title.into(), out));
+        r.map(|_| {
+            if on {
+                tf!(
+                    "API je zabezpečené: tcp://127.0.0.1:{} jen s klientským certifikátem",
+                    "The API is secured: tcp://127.0.0.1:{} with a client certificate only",
+                    cfg.port
+                )
+            } else {
+                tf!("API běží bez ověření na tcp://127.0.0.1:{}", "The API runs without authentication on tcp://127.0.0.1:{}", cfg.port)
+            }
+        })
+        .map_err(|_| t!("Nastavení API selhalo – viz výstup", "API setup failed – see output").into())
+    }
+
     /// Spustí skript, který zpřístupní API enginu na TCP, a počká na odezvu.
     /// Vrací (výstup skriptu, API odpovídá).
     pub(super) fn setup_api(&self, cfg: &Config) -> Result<(String, bool), String> {
         let port = cfg.port.to_string();
-        let out = wsl::run(&cfg.distro, Some("root"), None, &["env", &format!("PORT={port}"), "sh", "-c", cfg.engine.setup_script()]);
+        // výchozí uživatel distribuce – v režimu TLS dostane přístup k unix socketu enginu
+        let user = wsl::run(&cfg.distro, None, None, &["id", "-un"]).map(|u| u.trim().to_string()).unwrap_or_default();
+        let out = wsl::run(
+            &cfg.distro,
+            Some("root"),
+            None,
+            &[
+                "env",
+                &format!("PORT={port}"),
+                &format!("TLS={}", if cfg.tls { 1 } else { 0 }),
+                &format!("U={user}"),
+                "sh",
+                "-c",
+                &cfg.engine.setup_script(),
+            ],
+        );
         self.check_engine();
-        let out = out?;
-        if self.wait_ping(25) {
+        let mut out = out?;
+        if cfg.tls {
+            self.fetch_client_certs(&cfg.distro)?;
+            out.push_str(&tf!(
+                "\nKlientský certifikát uložen do {}",
+                "\nClient certificate saved to {}",
+                crate::docker::tls_dir().map(|d| d.display().to_string()).unwrap_or_default()
+            ));
+        }
+        crate::docker::configure_tls(cfg.tls)?;
+        if self.wait_ping_on(cfg.port, 25) {
             Ok((out, true))
         } else {
             Err(tf!(

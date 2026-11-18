@@ -23,7 +23,8 @@ pub enum Action {
     Check,
     Install,
     Uninstall,
-    SetDockerHost(u16),
+    /// port a TLS (DOCKER_TLS_VERIFY + DOCKER_CERT_PATH)
+    SetDockerHost(u16, bool),
     ClearDockerHost,
 }
 
@@ -32,24 +33,34 @@ pub fn run(action: Action) -> Option<Result<String, String>> {
         Action::Check => None,
         Action::Install => Some(install()),
         Action::Uninstall => Some(uninstall()),
-        Action::SetDockerHost(port) => Some(set_docker_host(Some(port))),
+        Action::SetDockerHost(port, tls) => Some(set_docker_host(Some((port, tls)))),
         Action::ClearDockerHost => Some(set_docker_host(None)),
     }
 }
 
-/// Nastaví (Some) nebo odebere (None) uživatelskou proměnnou DOCKER_HOST.
-pub fn set_docker_host(port: Option<u16>) -> Result<String, String> {
-    match port {
-        Some(p) => {
+/// Nastaví (Some) nebo odebere (None) uživatelskou proměnnou DOCKER_HOST; s TLS také
+/// DOCKER_TLS_VERIFY=1 a DOCKER_CERT_PATH (složka s ca.pem, cert.pem, key.pem).
+pub fn set_docker_host(target: Option<(u16, bool)>) -> Result<String, String> {
+    match target {
+        Some((p, tls)) => {
             let v = format!("tcp://127.0.0.1:{p}");
-            powershell(&format!("[Environment]::SetEnvironmentVariable('DOCKER_HOST', {}, 'User')", ps_quote(&v)))?;
+            let (verify, certs) = match (tls, crate::docker::tls_dir()) {
+                (true, Some(d)) => (ps_quote("1"), ps_quote(&d.display().to_string())),
+                _ => ("$null".to_string(), "$null".to_string()),
+            };
+            powershell(&format!(
+                "[Environment]::SetEnvironmentVariable('DOCKER_HOST', {}, 'User');                  [Environment]::SetEnvironmentVariable('DOCKER_TLS_VERIFY', {verify}, 'User');                  [Environment]::SetEnvironmentVariable('DOCKER_CERT_PATH', {certs}, 'User')",
+                ps_quote(&v)
+            ))?;
             Ok(tf!(
                 "DOCKER_HOST={v} nastaveno – nástroje je uvidí po restartu (nový terminál / VS Code)",
                 "DOCKER_HOST={v} set – tools will see it after a restart (new terminal / VS Code)"
             ))
         }
         None => {
-            powershell("[Environment]::SetEnvironmentVariable('DOCKER_HOST', $null, 'User')")?;
+            powershell(
+                "[Environment]::SetEnvironmentVariable('DOCKER_HOST', $null, 'User');                  [Environment]::SetEnvironmentVariable('DOCKER_TLS_VERIFY', $null, 'User');                  [Environment]::SetEnvironmentVariable('DOCKER_CERT_PATH', $null, 'User')",
+            )?;
             Ok(t!("DOCKER_HOST odebráno", "DOCKER_HOST removed").into())
         }
     }

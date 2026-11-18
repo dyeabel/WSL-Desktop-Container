@@ -72,7 +72,7 @@ fn live_podman_api() {
     let distro = distro();
     let _ = wsl::run(&distro, None, None, &["podman", "--url", &format!("tcp://127.0.0.1:{port}"), "rm", "-f", "wls-pod-test"]);
     let spec = RunSpec { image: "alpine:3.20".into(), name: "wls-pod-test".into(), command: "sleep 120".into(), restart: "no".into(), ..Default::default() };
-    wsl::run_owned(&distro, None, None, &spec.args_for(Engine::Podman, port)).expect("podman run");
+    wsl::run_owned(&distro, None, None, &spec.args_for(Engine::Podman, port, false)).expect("podman run");
     let c = d.snapshot().containers.into_iter().find(|c| c.name() == "wls-pod-test").expect("kontejner v API");
     assert!(c.running(), "{}", c.status);
     assert!(d.stats(&c.id, "wls-pod-test").is_some(), "stats");
@@ -159,7 +159,7 @@ fn live_docker_host_roundtrip() {
         eprintln!("DOCKER_HOST už je nastavené – test přeskočen, aby se nepřepsalo");
         return;
     }
-    set_docker_host(Some(2375)).expect("set");
+    set_docker_host(Some((2375, false))).expect("set");
     assert_eq!(status().docker_host.as_deref(), Some("tcp://127.0.0.1:2375"));
     set_docker_host(None).expect("clear");
     assert_eq!(status().docker_host, None);
@@ -240,7 +240,7 @@ fn live_build_image() {
         ..Default::default()
     };
     let mut lines = Vec::new();
-    let res = crate::worker::build::run_build(&distro, cfg.engine, port, &spec, |l| {
+    let res = crate::worker::build::run_build(&distro, cfg.engine, port, false, &spec, |l| {
         eprintln!("| {l}");
         lines.push(l.to_string());
     });
@@ -258,4 +258,59 @@ fn live_build_image() {
     assert!(removed.is_ok(), "{removed:?}");
     assert!(d.get::<serde_json::Value>("/images/wls-test-build:latest/json").is_err(), "image zůstal");
     assert!(!dir.exists());
+}
+
+/// TLS proxy end-to-end bez zásahu do běžícího enginu: dočasná Podman služba na unix socketu,
+/// `tls_proxy` (stejný skript jako aplikace) s jinou složkou a službou na portu 2377,
+/// pak klient s certifikátem (musí projít), bez certifikátu a přes HTTP (musí selhat).
+/// Potřebuje podman a doinstaluje socat (pokud chybí).
+#[test]
+#[ignore]
+fn live_tls_proxy() {
+    let distro = distro();
+    let root = |args: &[&str]| wsl::run(&distro, Some("root"), None, args);
+    let cleanup = || {
+        let _ = root(&["sh", "-c", "systemctl disable --now wls-test-tls-proxy wls-test-podman >/dev/null 2>&1; \
+            rm -f /etc/systemd/system/wls-test-tls-proxy.service; systemctl daemon-reload; rm -rf /tmp/wls-test-tls /tmp/wls-test-podman.sock"]);
+    };
+    cleanup();
+    root(&["sh", "-c", "systemd-run --unit wls-test-podman podman system service --time=0 unix:///tmp/wls-test-podman.sock && \
+        for i in $(seq 50); do [ -S /tmp/wls-test-podman.sock ] && break; sleep 0.2; done"]).expect("podman socket");
+    let script = format!(
+        "{}\ntls_proxy /tmp/wls-test-podman.sock wls-test-podman.service && sleep 1 && systemctl is-active wls-test-tls-proxy",
+        crate::engine::Engine::Podman.setup_script().split("\nset -e\n").next().unwrap()
+    );
+    let out = root(&["env", "PORT=2377", "WLS_TLS_DIR=/tmp/wls-test-tls", "WLS_TLS_UNIT=wls-test-tls-proxy", "sh", "-c", &script]);
+    eprintln!("{out:?}");
+    // certifikáty do dočasné složky ve Windows
+    let dir = std::env::temp_dir().join("wls-test-tls");
+    let _ = std::fs::create_dir_all(&dir);
+    for f in ["ca.pem", "cert.pem", "key.pem"] {
+        let pem = root(&["cat", &format!("/tmp/wls-test-tls/{f}")]).expect(f);
+        std::fs::write(dir.join(f), pem).unwrap();
+    }
+    let cfg = crate::docker::tls_config(&dir);
+    let ok = cfg.as_ref().map(|c| Docker::with_tls(2377, Some(std::sync::Arc::new(c.clone()))).snapshot());
+    // bez klientského certifikátu: stejná CA, ale žádný cert
+    let no_cert = {
+        use rustls_pki_types::pem::PemObject;
+        let mut roots = rustls::RootCertStore::empty();
+        for c in rustls_pki_types::CertificateDer::pem_file_iter(dir.join("ca.pem")).unwrap() {
+            roots.add(c.unwrap()).unwrap();
+        }
+        let c = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        Docker::with_tls(2377, Some(std::sync::Arc::new(c))).ping()
+    };
+    let plain = Docker::with_tls(2377, None).ping();
+    let _ = std::fs::remove_dir_all(&dir);
+    cleanup();
+    let snap = ok.expect("tls_config");
+    assert!(out.is_ok(), "{out:?}");
+    assert!(snap.connected && snap.error.is_none(), "{:?}", snap.error);
+    assert!(!no_cert, "spojení bez klientského certifikátu prošlo");
+    assert!(!plain, "HTTP bez TLS prošlo");
 }

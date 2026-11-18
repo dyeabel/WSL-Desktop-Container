@@ -131,6 +131,12 @@ impl App {
         if let Ok(l) = std::env::var("WLS_LANG") {
             crate::i18n::set_language(&l);
         }
+        if cfg.tls {
+            // bez certifikátů se nepřipojí – chyba se ukáže jako nedostupné API
+            if let Err(e) = crate::docker::configure_tls(true) {
+                eprintln!("TLS: {e}");
+            }
+        }
         let cfg_draft = cfg.clone();
         let cfg = Arc::new(RwLock::new(cfg));
         let (tx, rx, shared) = worker::spawn(cc.egui_ctx.clone(), cfg.clone());

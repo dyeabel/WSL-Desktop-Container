@@ -63,7 +63,7 @@ fn main() -> ExitCode {
 
     let args = pathmap::translate_args(&args);
     // Docker -> `docker …`, Podman -> `podman --url tcp://127.0.0.1:<port> …`
-    let cli = cfg.engine.cli(cfg.port);
+    let cli = cfg.engine.cli(cfg.port, cfg.tls);
 
     let mut cmd = Command::new("wsl.exe");
     cmd.args(["-d", &distro]);

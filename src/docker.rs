@@ -398,20 +398,85 @@ impl Event {
     }
 }
 
+// ---------------------------------------------------------------- TLS
+
+/// TLS konfigurace klienta (CA enginu + klientský certifikát); None = obyčejné HTTP.
+static TLS: std::sync::RwLock<Option<std::sync::Arc<rustls::ClientConfig>>> = std::sync::RwLock::new(None);
+
+/// Složka s klientskými certifikáty (Docker konvence: ca.pem, cert.pem, key.pem) –
+/// stejná se dá použít jako DOCKER_CERT_PATH.
+pub fn tls_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("APPDATA").map(|p| std::path::PathBuf::from(p).join("WLS_Desktop").join("tls"))
+}
+
+/// Sestaví TLS klienta z PEM souborů ve složce (ověřuje server proti CA, posílá klientský certifikát).
+pub fn tls_config(dir: &std::path::Path) -> Result<rustls::ClientConfig, String> {
+    use rustls_pki_types::pem::PemObject;
+    use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+    let f = |n: &str| dir.join(n);
+    let mut roots = rustls::RootCertStore::empty();
+    for c in CertificateDer::pem_file_iter(f("ca.pem")).map_err(|e| format!("ca.pem: {e}"))? {
+        roots.add(c.map_err(|e| format!("ca.pem: {e}"))?).map_err(|e| format!("ca.pem: {e}"))?;
+    }
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(f("cert.pem"))
+        .map_err(|e| format!("cert.pem: {e}"))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("cert.pem: {e}"))?;
+    let key = PrivateKeyDer::from_pem_file(f("key.pem")).map_err(|e| format!("key.pem: {e}"))?;
+    rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| e.to_string())?
+        .with_root_certificates(roots)
+        .with_client_auth_cert(certs, key)
+        .map_err(|e| e.to_string())
+}
+
+/// Zapne / vypne TLS pro všechna další spojení s enginem.
+pub fn configure_tls(on: bool) -> Result<(), String> {
+    let cfg = if on {
+        let dir = tls_dir().ok_or("APPDATA")?;
+        Some(std::sync::Arc::new(tls_config(&dir)?))
+    } else {
+        None
+    };
+    if let Ok(mut g) = TLS.write() {
+        *g = cfg;
+    }
+    Ok(())
+}
+
+fn tls() -> Option<std::sync::Arc<rustls::ClientConfig>> {
+    TLS.read().ok().and_then(|g| g.clone())
+}
+
+fn agent_builder(tls: &Option<std::sync::Arc<rustls::ClientConfig>>) -> ureq::AgentBuilder {
+    let b = ureq::AgentBuilder::new();
+    match tls {
+        Some(c) => b.tls_config(c.clone()),
+        None => b,
+    }
+}
+
 #[derive(Clone)]
 pub struct Docker {
     agent: ureq::Agent,
     base: String,
     port: u16,
+    tls: Option<std::sync::Arc<rustls::ClientConfig>>,
 }
 
 impl Docker {
     pub fn new(port: u16) -> Self {
-        let agent = ureq::AgentBuilder::new()
+        Self::with_tls(port, tls())
+    }
+
+    pub fn with_tls(port: u16, tls: Option<std::sync::Arc<rustls::ClientConfig>>) -> Self {
+        let agent = agent_builder(&tls)
             .timeout_connect(Duration::from_millis(800))
             .timeout_read(Duration::from_secs(600))
             .build();
-        Self { agent, base: format!("http://127.0.0.1:{port}"), port }
+        let scheme = if tls.is_some() { "https" } else { "http" };
+        Self { agent, base: format!("{scheme}://127.0.0.1:{port}"), port, tls }
     }
 
     fn url(&self, p: &str) -> String {
@@ -599,7 +664,7 @@ impl Docker {
     /// Streamuje logy, dokud `on_chunk` vrací true.
     pub fn stream_logs(&self, id: &str, tail: u32, mut on_chunk: impl FnMut(&str) -> bool) -> Result<(), String> {
         let tty = self.is_tty(id);
-        let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(2)).build();
+        let agent = agent_builder(&self.tls).timeout_connect(Duration::from_secs(2)).build();
         let resp = agent
             .get(&self.url(&format!(
                 "/containers/{id}/logs?stdout=1&stderr=1&follow=1&tail={tail}"
@@ -637,7 +702,7 @@ impl Docker {
     /// aby se nezasekl na spojení, které zaniklo bez ukončení (např. vypnuté WSL).
     pub fn stream_events(&self, on_connected: impl FnOnce(), mut on_event: impl FnMut(Event) -> bool) -> Result<(), String> {
         use std::io::BufRead;
-        let agent = ureq::AgentBuilder::new()
+        let agent = agent_builder(&self.tls)
             .timeout_connect(Duration::from_secs(2))
             .timeout_read(Duration::from_secs(120))
             .build();

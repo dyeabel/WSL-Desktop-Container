@@ -97,6 +97,8 @@ pub enum Cmd {
     /// odinstalovat engine (a odebrat nastavení API); purge = smazat i data
     UninstallEngine { engine: Engine, purge: bool },
     Sleep,
+    /// zapnout / vypnout zabezpečení API (TLS s klientským certifikátem)
+    SetTls(bool),
     SetKeepAlive(bool),
     PauseAll,
     UnpauseAll,
@@ -295,7 +297,11 @@ impl Worker {
     }
 
     fn wait_ping(&self, secs: u64) -> bool {
-        let d = self.docker();
+        self.wait_ping_on(self.cfg().port, secs)
+    }
+
+    fn wait_ping_on(&self, port: u16, secs: u64) -> bool {
+        let d = Docker::new(port);
         let t = Instant::now();
         while t.elapsed() < Duration::from_secs(secs) {
             if d.ping() {
@@ -418,6 +424,7 @@ impl Worker {
                 res
             }
             Cmd::Sleep => self.sleep_distro(),
+            Cmd::SetTls(on) => self.set_tls(on),
             Cmd::SetKeepAlive(on) => self.set_keep_alive(on),
             Cmd::PauseAll => self.set_paused_all(true),
             Cmd::UnpauseAll => self.set_paused_all(false),

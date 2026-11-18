@@ -11,7 +11,7 @@ impl Worker {
         let distro = cfg.distro.clone();
         let d = self.docker();
         let image = crate::engine::short_image(spec.image.trim());
-        let args = spec.args_for(cfg.engine, cfg.port);
+        let args = spec.args_for(cfg.engine, cfg.port, cfg.tls);
         if spec.interactive {
             // interaktivně ve Windows Terminalu – kontejner se po ukončení smaže (--rm)
             let mut w: Vec<String> = vec!["-d".into(), distro.clone(), "-e".into()];
@@ -47,7 +47,7 @@ impl Worker {
     pub(super) fn compose(&self, dir: String, project: Option<String>, args: Vec<String>) -> Result<String, String> {
         let cfg = self.cfg();
         let distro = cfg.distro.clone();
-        let mut a: Vec<String> = cfg.engine.cli(cfg.port);
+        let mut a: Vec<String> = cfg.engine.cli(cfg.port, cfg.tls);
         a.push("compose".into());
         if let Some(p) = &project {
             a.extend(["-p".into(), p.clone()]);
@@ -86,7 +86,7 @@ impl Worker {
         let cfg = self.cfg();
         let distro = cfg.distro.clone();
         let shell = "command -v bash >/dev/null && exec bash || exec sh".to_string();
-        let cli = cfg.engine.cli(cfg.port);
+        let cli = cfg.engine.cli(cfg.port, cfg.tls);
         let with_cli = |rest: Vec<String>| {
             let mut v: Vec<String> = vec!["-d".into(), distro.clone(), "-e".into()];
             v.extend(cli.iter().cloned());

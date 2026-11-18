@@ -8,7 +8,7 @@ use crate::wsl;
 impl Worker {
     pub(super) fn build_image(&self, spec: BuildSpec) -> Result<String, String> {
         let cfg = self.cfg();
-        let res = run_build(&cfg.distro, cfg.engine, cfg.port, &spec, |line| self.send(Msg::BuildOutput(line.to_string())));
+        let res = run_build(&cfg.distro, cfg.engine, cfg.port, cfg.tls, &spec, |line| self.send(Msg::BuildOutput(line.to_string())));
         self.send(Msg::BuildDone(res.clone()));
         res
     }
@@ -17,7 +17,7 @@ impl Worker {
 /// Sestaví image: převede cesty na linuxové, ověří kontext a Dockerfile a spustí
 /// `<cli> build … .` v adresáři kontextu. Každý řádek výstupu předá `on_line`.
 /// Vrací text pro oznámení (úspěch) nebo chybu.
-pub fn run_build(distro: &str, engine: Engine, port: u16, spec: &BuildSpec, mut on_line: impl FnMut(&str)) -> Result<String, String> {
+pub fn run_build(distro: &str, engine: Engine, port: u16, tls: bool, spec: &BuildSpec, mut on_line: impl FnMut(&str)) -> Result<String, String> {
     if spec.context.trim().is_empty() {
         return Err(t!("Není zadaná složka kontextu", "No build context folder given").into());
     }
@@ -37,7 +37,7 @@ pub fn run_build(distro: &str, engine: Engine, port: u16, spec: &BuildSpec, mut 
         on_line(&e);
         return Err(e);
     }
-    let args = spec.args_for(engine, port);
+    let args = spec.args_for(engine, port, tls);
     on_line(&format!("$ cd {ctx}"));
     on_line(&format!("$ {}", args.join(" ")));
     let code = wsl::run_stream(distro, None, Some(&ctx), &args, &mut on_line)?;

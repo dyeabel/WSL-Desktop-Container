@@ -41,6 +41,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let dstate = app.current_distro().map(|d| d.state.clone()).unwrap_or_else(|| t!("nenalezena", "not found").into());
     let running = app.snap.connected;
     let port = app.cfg.read().map(|c| c.port).unwrap_or(2375);
+    let tls = app.cfg.read().map(|c| c.tls).unwrap_or(false);
     card(ui, |ui| {
         ui.set_width(ui.available_width());
 
@@ -234,7 +235,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         }
                         ui.add_enabled_ui(!checking && s.docker_host.as_deref() != Some(want.as_str()), |ui| {
                             if ui.button(tf!("\u{E3D4} Nastavit na {want}", "\u{E3D4} Set to {want}")).clicked() {
-                                app.shim_action(ui.ctx(), crate::shim_install::Action::SetDockerHost(port));
+                                app.shim_action(ui.ctx(), crate::shim_install::Action::SetDockerHost(port, tls));
                             }
                         });
                         ui.add_enabled_ui(!checking && s.docker_host.is_some(), |ui| {
@@ -245,6 +246,55 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
                 ui.label(muted(t!("Pro VS Code Dev Containers, Testcontainers, Docker SDK a další nástroje, které nevolají příkaz docker, ale mluví přímo s API. Projeví se v nově spuštěných programech.", "For VS Code Dev Containers, Testcontainers, Docker SDK and other tools that talk to the API directly instead of calling the docker command. Takes effect in newly started programs.")).small());
+
+                // zabezpečení API (TLS s klientským certifikátem)
+                ui.add_space(8.0);
+                ui.label(RichText::new(t!("Zabezpečení API", "API security")).strong());
+                toolbar(ui, |ui| {
+                    if tls {
+                        badge(ui, &tf!("\u{E40C} TLS s klientským certifikátem · port {port}", "\u{E40C} TLS with client certificate · port {port}"), theme::GREEN);
+                        if ui.button(t!("\u{E306} Vypnout TLS", "\u{E306} Turn TLS off")).clicked() {
+                            app.ask(
+                                t!("Vypnout zabezpečení API?", "Turn API security off?"),
+                                t!(
+                                    "API bude znovu na tcp://127.0.0.1:2375 bez ověření – může ho ovládat každý proces, který se dostane na localhost (i jiné WSL distribuce a kontejnery).",
+                                    "The API will be on tcp://127.0.0.1:2375 again without authentication – any process that can reach localhost (including other WSL distributions and containers) can control it."
+                                ),
+                                Cmd::SetTls(false),
+                            );
+                        }
+                    } else {
+                        badge(ui, &tf!("\u{E412} bez ověření · port {port}", "\u{E412} no authentication · port {port}"), theme::YELLOW);
+                        if ui.button(t!("\u{E2FA} Zapnout TLS", "\u{E2FA} Turn TLS on")).clicked() {
+                            app.ask(
+                                t!("Zabezpečit API pomocí TLS?", "Secure the API with TLS?"),
+                                t!(
+                                    "Engine bude poslouchat jen na unix socketu v distribuci a na 127.0.0.1:2376 bude TLS proxy (socat), která pustí jen klienta s certifikátem. \
+                                     Vytvoří se CA a certifikáty, klientský se uloží do %APPDATA%\\WLS_Desktop\\tls. Příkaz docker ve Windows i CLI ve WSL půjdou přes socket. \
+                                     Engine se restartuje.",
+                                    "The engine will listen only on a unix socket in the distribution and a TLS proxy (socat) on 127.0.0.1:2376 will accept only clients with a certificate. \
+                                     A CA and certificates are created; the client one is saved to %APPDATA%\\WLS_Desktop\\tls. The docker command in Windows and the CLI in WSL will use the socket. \
+                                     The engine will restart."
+                                ),
+                                Cmd::SetTls(true),
+                            );
+                        }
+                    }
+                });
+                ui.label(
+                    muted(if tls {
+                        t!(
+                            "Nástroje s DOCKER_HOST potřebují DOCKER_TLS_VERIFY=1 a DOCKER_CERT_PATH – tlačítko výše je nastaví.",
+                            "Tools using DOCKER_HOST need DOCKER_TLS_VERIFY=1 and DOCKER_CERT_PATH – the button above sets them."
+                        )
+                    } else {
+                        t!(
+                            "Bez TLS může API ovládat každý proces, který se dostane na 127.0.0.1 – i jiné WSL distribuce a kontejnery se síťovým režimem host.",
+                            "Without TLS any process that can reach 127.0.0.1 can control the API – including other WSL distributions and containers with host networking."
+                        )
+                    })
+                    .small(),
+                );
             });
     });
 

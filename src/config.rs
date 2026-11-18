@@ -29,6 +29,8 @@ pub struct Config {
     pub language: String,
     /// Oznámení ve Windows při pádu kontejneru, selhání healthchecku, opakovaných restartech
     pub notifications: bool,
+    /// API enginu jen přes TLS s klientským certifikátem (port 2376, certifikáty v %APPDATA%\WLS_Desktop\tls)
+    pub tls: bool,
 }
 
 impl Default for Config {
@@ -46,6 +48,7 @@ impl Default for Config {
             restore_containers: false,
             language: "cs".into(),
             notifications: true,
+            tls: false,
         }
     }
 }

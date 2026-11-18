@@ -17,6 +17,10 @@ pub enum Engine {
 /// systemd jednotka Podman API vytvořená aplikací
 pub const PODMAN_UNIT: &str = "wls-podman-api";
 pub const PODMAN_UNIT_PATH: &str = "/etc/systemd/system/wls-podman-api.service";
+/// unix socket Podman API v režimu TLS (skupina `wls-api`)
+pub const PODMAN_TLS_SOCK: &str = "/run/wls-podman/podman.sock";
+/// certifikáty v distribuci (CA, server, klient)
+pub const TLS_DIR: &str = "/etc/wls-desktop/tls";
 pub const DOCKER_OVERRIDE_PATH: &str = "/etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf";
 
 impl Engine {
@@ -55,19 +59,27 @@ impl Engine {
 
     /// Příkaz CLI ve WSL. Podman jde přes `--url` na stejné API jako aplikace,
     /// takže CLI i aplikace vidí tytéž kontejnery (rootful úložiště).
-    pub fn cli(self, port: u16) -> Vec<String> {
-        match self {
-            Engine::Docker => vec!["docker".into()],
-            Engine::Podman => vec!["podman".into(), "--url".into(), format!("tcp://127.0.0.1:{port}")],
+    /// V režimu TLS mluví CLI s enginem přes unix socket (TCP port je jen za TLS proxy
+    /// a vyžaduje klientský certifikát); přístup k socketu má skupina uživatele.
+    pub fn cli(self, port: u16, tls: bool) -> Vec<String> {
+        match (self, tls) {
+            (Engine::Docker, _) => vec!["docker".into()],
+            (Engine::Podman, false) => vec!["podman".into(), "--url".into(), format!("tcp://127.0.0.1:{port}")],
+            (Engine::Podman, true) => vec!["podman".into(), "--url".into(), format!("unix://{PODMAN_TLS_SOCK}")],
         }
     }
 
-    /// Skript (běží jako root, proměnná PORT), který zpřístupní API na 127.0.0.1:$PORT.
-    pub fn setup_script(self) -> &'static str {
-        match self {
-            Engine::Docker => DOCKER_SETUP,
-            Engine::Podman => PODMAN_SETUP,
-        }
+    /// Skript (běží jako root), který zpřístupní API na 127.0.0.1:$PORT.
+    /// Proměnné: PORT, TLS=1 (API jen přes TLS proxy s klientským certifikátem),
+    /// U = výchozí uživatel distribuce (dostane přístup k unix socketu enginu).
+    pub fn setup_script(self) -> String {
+        format!(
+            "{PKG}\n{TLS_FUNCS}\n{}",
+            match self {
+                Engine::Docker => DOCKER_SETUP,
+                Engine::Podman => PODMAN_SETUP,
+            }
+        )
     }
 
     /// Instalace přes apt / dnf / zypper / pacman.
@@ -103,6 +115,8 @@ impl Engine {
 const DOCKER_UNINSTALL: &str = r#"echo "Zastavuji Docker…"
 systemctl disable --now docker.socket docker containerd >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf
+systemctl disable --now wls-tls-proxy >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/wls-tls-proxy.service
 rmdir /etc/systemd/system/docker.service.d 2>/dev/null || true
 systemctl daemon-reload 2>/dev/null || true
 PKGS=$(pkg_installed docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
@@ -117,6 +131,8 @@ echo "Docker odinstalován"
 const PODMAN_UNINSTALL: &str = r#"echo "Zastavuji Podman API…"
 systemctl disable --now wls-podman-api podman-restart >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/wls-podman-api.service
+systemctl disable --now wls-tls-proxy >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/wls-tls-proxy.service
 systemctl daemon-reload 2>/dev/null || true
 if [ "$PURGE" = "1" ]; then podman system reset -f >/dev/null 2>&1 || true; fi
 PKGS=$(pkg_installed podman podman-docker)
@@ -137,12 +153,24 @@ systemctl disable --now wls-podman-api >/dev/null 2>&1 || true
 EXTRA=""
 if systemctl cat containerd.service >/dev/null 2>&1; then EXTRA="--containerd=/run/containerd/containerd.sock"; fi
 mkdir -p /etc/systemd/system/docker.service.d
-printf '[Service]\nExecStart=\nExecStart=%s -H fd:// -H tcp://127.0.0.1:%s %s\n' "$D" "$PORT" "$EXTRA" > /etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf
+if [ "$TLS" = "1" ]; then
+  # API jen na unix socketu, TCP obslouží TLS proxy
+  printf '[Service]\nExecStart=\nExecStart=%s -H fd:// %s\n' "$D" "$EXTRA" > /etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf
+  if [ -n "$U" ] && id "$U" >/dev/null 2>&1; then groupadd -f docker; usermod -aG docker "$U"; fi
+else
+  printf '[Service]\nExecStart=\nExecStart=%s -H fd:// -H tcp://127.0.0.1:%s %s\n' "$D" "$PORT" "$EXTRA" > /etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf
+fi
 if [ -f /etc/docker/daemon.json ] && grep -q '"hosts"' /etc/docker/daemon.json; then echo "VAROVANI: /etc/docker/daemon.json obsahuje 'hosts' - koliduje s -H, odstran ho." >&2; fi
 systemctl daemon-reload
 systemctl enable docker >/dev/null 2>&1 || true
 systemctl restart docker
-echo "Docker API nastaveno na tcp://127.0.0.1:$PORT"
+if [ "$TLS" = "1" ]; then
+  tls_proxy /var/run/docker.sock docker.service
+  echo "Docker API nastaveno na tcp://127.0.0.1:$PORT (TLS, vyzaduje klientsky certifikat)"
+else
+  no_tls_proxy
+  echo "Docker API nastaveno na tcp://127.0.0.1:$PORT"
+fi
 "#
 );
 
@@ -153,13 +181,28 @@ P=$(command -v podman || true)
 if [ -z "$P" ]; then echo "podman nenalezen - pouzij Nainstalovat engine (nebo: apt install podman)." >&2; exit 2; fi
 # Docker by blokoval port
 systemctl disable --now docker.socket docker >/dev/null 2>&1 || true
+if [ "$TLS" = "1" ]; then
+  # API jen na unix socketu (skupina wls-api), TCP obslouží TLS proxy
+  groupadd -f wls-api
+  if [ -n "$U" ] && id "$U" >/dev/null 2>&1; then usermod -aG wls-api "$U"; fi
+  SOCK=/run/wls-podman/podman.sock
+  LISTEN="unix://$SOCK"
+  PRE="ExecStartPre=/bin/sh -c 'mkdir -p /run/wls-podman && chgrp wls-api /run/wls-podman && chmod 750 /run/wls-podman && rm -f $SOCK'"
+  POST="ExecStartPost=/bin/sh -c 'for i in \$\$(seq 100); do [ -S $SOCK ] && break; sleep 0.1; done; chgrp wls-api $SOCK; chmod 660 $SOCK'"
+else
+  LISTEN="tcp://127.0.0.1:$PORT"
+  PRE=""
+  POST=""
+fi
 cat > /etc/systemd/system/wls-podman-api.service <<EOF
 [Unit]
-Description=Podman API pro WLS Desktop (tcp://127.0.0.1:$PORT)
+Description=Podman API pro WLS Desktop ($LISTEN)
 After=network-online.target
 
 [Service]
-ExecStart=$P system service --time=0 tcp://127.0.0.1:$PORT
+$PRE
+ExecStart=$P system service --time=0 $LISTEN
+$POST
 Restart=on-failure
 
 [Install]
@@ -170,9 +213,71 @@ systemctl enable podman-restart.service >/dev/null 2>&1 || true
 systemctl daemon-reload
 systemctl enable wls-podman-api >/dev/null 2>&1 || true
 systemctl restart wls-podman-api
-echo "Podman API nastaveno na tcp://127.0.0.1:$PORT"
+if [ "$TLS" = "1" ]; then
+  tls_proxy /run/wls-podman/podman.sock wls-podman-api.service
+  echo "Podman API nastaveno na tcp://127.0.0.1:$PORT (TLS, vyzaduje klientsky certifikat)"
+else
+  no_tls_proxy
+  echo "Podman API nastaveno na tcp://127.0.0.1:$PORT"
+fi
 "#
 );
+
+/// TLS proxy před unix socketem enginu: `tls_proxy <socket> <jednotka enginu>` vytvoří
+/// (jen pokud chybí, nebo REGEN=1) CA, serverový a klientský certifikát v TLS_DIR a službu
+/// `wls-tls-proxy` (socat), která na 127.0.0.1:$PORT přijme jen spojení s klientským
+/// certifikátem od té CA. Proxy je svázaná s jednotkou enginu (startuje a zastavuje se s ní).
+const TLS_FUNCS: &str = r#"tls_proxy() {
+  command -v socat >/dev/null || pkg_install socat
+  command -v openssl >/dev/null || pkg_install openssl
+  # WLS_TLS_DIR / WLS_TLS_UNIT jen pro testy (jiná složka a služba)
+  T=${WLS_TLS_DIR:-/etc/wls-desktop/tls}
+  PU=${WLS_TLS_UNIT:-wls-tls-proxy}
+  mkdir -p $T
+  chmod 700 $T
+  if [ ! -s $T/ca.pem ] || [ ! -s $T/server.pem ] || [ ! -s $T/cert.pem ] || [ "$REGEN" = "1" ]; then
+    ( cd $T
+      rm -f ./*.pem ./*.srl ./*.csr ./*.ext
+      umask 077
+      EC="-newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes"
+      openssl req -x509 $EC -keyout ca-key.pem -out ca.pem -days 3650 -subj "/CN=WLS Desktop CA" \
+        -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+      openssl req $EC -keyout server-key.pem -out server.csr -subj "/CN=localhost" 2>/dev/null
+      printf 'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1,DNS:localhost\n' > server.ext
+      openssl x509 -req -in server.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out server.pem -days 825 -extfile server.ext 2>/dev/null
+      openssl req $EC -keyout key.pem -out client.csr -subj "/CN=wls-desktop-client" 2>/dev/null
+      printf 'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n' > client.ext
+      openssl x509 -req -in client.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out cert.pem -days 825 -extfile client.ext 2>/dev/null
+      rm -f ./*.csr ./*.ext ./*.srl )
+    echo "Certifikaty vytvoreny v $T"
+  fi
+  S=$(command -v socat)
+  cat > /etc/systemd/system/$PU.service <<EOF
+[Unit]
+Description=TLS proxy pro API enginu (WLS Desktop, tcp://127.0.0.1:$PORT)
+BindsTo=$2
+After=$2
+
+[Service]
+ExecStart=$S OPENSSL-LISTEN:$PORT,bind=127.0.0.1,reuseaddr,fork,cert=$T/server.pem,key=$T/server-key.pem,cafile=$T/ca.pem,verify=1 UNIX-CONNECT:$1
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=$2
+EOF
+  systemctl daemon-reload
+  systemctl enable $PU >/dev/null 2>&1 || true
+  systemctl restart $PU
+}
+no_tls_proxy() {
+  if [ -f /etc/systemd/system/wls-tls-proxy.service ]; then
+    systemctl disable --now wls-tls-proxy >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/wls-tls-proxy.service
+    systemctl daemon-reload
+  fi
+}
+"#;
 
 /// Společné shell funkce pro apt / dnf / zypper / pacman:
 /// `pkg_install balíček…`, `pkg_remove balíček…` a `pkg_installed balíček…`
@@ -299,8 +404,9 @@ mod tests {
 
     #[test]
     fn cli() {
-        assert_eq!(Engine::Docker.cli(2375), vec!["docker"]);
-        assert_eq!(Engine::Podman.cli(2375), vec!["podman", "--url", "tcp://127.0.0.1:2375"]);
+        assert_eq!(Engine::Docker.cli(2375, false), vec!["docker"]);
+        assert_eq!(Engine::Podman.cli(2375, false), vec!["podman", "--url", "tcp://127.0.0.1:2375"]);
+        assert_eq!(Engine::Podman.cli(2376, true), vec!["podman", "--url", "unix:///run/wls-podman/podman.sock"]);
     }
 }
 
