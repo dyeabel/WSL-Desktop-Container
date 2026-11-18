@@ -9,17 +9,22 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
 - Container detail: inspect, CPU / memory history, logs, actions, *Recreate with changes*.
 - Securing the API: mutual TLS proxy (opt-in) – see README *API security* and
   [SECURITY.md](SECURITY.md).
-- Start with Windows; `worker.rs` split into modules; build from a Dockerfile.
+- Start with Windows; `worker.rs` split into modules; build from a Dockerfile (with cancel).
+- Volume backup / restore / clone and sizes; compose templates, editor, validation, scaling.
+- Remove (with confirmation) / export / import distributions, disk compacting.
+- `docker` shim fast path via the API; tray submenu with containers.
+- Recreate through the API keeping all settings; most findings from the security review fixed.
+- Typed API errors, shared HTTP agent with keep-alive, worker thread pool.
 
 ## Recommended next steps
 
-1. ★ **Fixes from the security review** – see [SECURITY.md](SECURITY.md).
-2. ★ **Volume backup & restore** – export a volume to a `.tar` on Windows and import it back,
-   show the size of each volume.
-3. ★ **TLS by default** for new installations, certificate rotation (*Regenerate certificates*),
-   and a named-pipe relay as an alternative for tools that cannot use client certificates.
-4. ★ **Recreate**: carry over entrypoint, labels, resource limits and all networks.
-5. ★ **Cancel a running build**, build output with BuildKit progress.
+1. ★ **TLS by default** for new installations and a named-pipe relay (`npipe://`, user-only
+   ACL) as an alternative for tools that cannot use client certificates (findings F-01 / F-02).
+2. ★ **Remaining security findings** – compose labels trust (F-05), env via `--env-file`
+   instead of argv (F-11), Docker install without `curl | sh` (F-13) – see [SECURITY.md](SECURITY.md).
+3. ★ **Recreate**: keep all networks (with aliases and static IPs) and anonymous volumes.
+4. ★ Typed errors also for WSL commands (`wsl.rs`), not only the API client.
+5. ★ Shim fast path for more commands (`inspect`, `logs` without `-f`, image / volume filters).
 
 ## Containers, images, compose
 
@@ -29,16 +34,12 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
 - File browser inside a container (`docker cp` up/download).
 - Images: tag & push, registry login, layer history,
   "newer version available" check for running images.
-- Compose: built-in YAML editor with validation, new stack from a template (Postgres, Redis,
-  WordPress, …), scaling services, editing the `.env` file.
 - Networks: connect / disconnect a container.
 - Templates / favourites for frequently run containers.
 
 ## WSL and distributions
 
-- Remove a distribution (`wsl --unregister`) with a confirmation, export / import
-  (`wsl --export` / `--import`) as a backup, move a distribution to another drive.
-- Compact the virtual disk (`.vhdx`) to give space back to Windows.
+- Move a distribution to another drive.
 - More `.wslconfig` options: `autoMemoryReclaim`, `sparseVhd`, `dnsTunneling`, `firewall`.
 - Overview of all distributions and their engines; quick switch from the tray.
 - Add distribution: optional password-protected `sudo` instead of passwordless, custom install
@@ -54,21 +55,18 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
 ## `docker` shim
 
 - Share `docker login` credentials between Windows and WSL.
-- Faster simple commands (`ps`, `images`) by calling the API directly instead of starting
-  `wsl.exe`.
 - Translation of more path-bearing flags; support for Docker contexts.
 
 ## App
 
-- Tray submenu with running containers (start / stop / logs).
 - Keyboard shortcuts (Ctrl+F filter, F5 refresh, Ctrl+1…8 pages), light theme, high contrast.
 - Czech plural forms (1 / 2–4 / 5+), more languages.
 - Self-update / release pipeline: GitHub Actions build, signed installer (MSI or winget).
 
 ## Code quality
 
-- Typed errors instead of `String`.
-- Async HTTP / event handling instead of a thread per action.
+- Typed errors for WSL commands; a full async runtime is not planned – the app uses an event
+  stream thread, a worker pool and a shared keep-alive HTTP agent instead.
 - CI: `cargo clippy`, `cargo test`, release builds on tag.
 - Automated UI tests (egui_kittest) for key dialogs.
 

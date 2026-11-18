@@ -13,11 +13,11 @@ Docker Desktop and without the Docker CLI for Windows.
 | **Overview** (Přehled) | engine status, container / image / volume counts, CPU and RAM available to WSL, disk usage with a *Clean up* menu (prune), live CPU, memory, network and disk stats per running container (with the image it runs from) |
 | **Containers** (Kontejnery) | grouped by compose project; start, stop, restart, pause, remove; colored state badges (running, stopped, error with exit code, health); live logs (filter, copy); console in Windows Terminal; *Run container* dialog; **container detail** (see below) |
 | **Images** | **build from a Dockerfile** (see below), search Docker Hub (dialog with tag picker, size and update date), pull by exact name, remove, prune, run a container from an image, which containers use an image |
-| **Volumes** | create, remove, prune, which containers use a volume, browse its content (as root), *run a container with this volume* |
+| **Volumes** | create, remove, prune, **size**, which containers use a volume, browse its content (as root), *run a container with this volume*, **back up to `.tar.gz`, restore, clone** |
 | **Networks** (Sítě) | create (bridge, ipvlan, macvlan), remove, prune, subnets, attached containers |
-| **Compose** | stacks detected from container labels: up, stop, start, restart, pull, build, ps, logs, down; edit the compose file in Notepad; start a stack from any folder (Windows or Linux path) |
+| **Compose** | stacks detected from container labels: up, stop, start, restart, pull, build, ps, logs, down, **scale a service**; **new stack from a template**; **built-in editor for the compose file and `.env` with validation** (Notepad still available); start a stack from any folder (Windows or Linux path) |
 | **Files** (Soubory) | file browser for the distribution: navigation, bookmarks, *New* menu (folder, file), *Upload from Windows* menu (files, folder), rename and move, delete, chmod, built-in text editor (Ctrl+S), download to Windows, *Work as root* mode; bulk actions appear only when something is selected, row actions live in a per-row ⋯ menu |
-| **WSL engine** | start, stop and restart the engine, put the distribution to sleep, terminal; distribution list (start, terminate, default, *use for the engine*); *Install & setup* section: Docker / Podman switch, install, API setup, uninstall, `docker` command in PATH, `DOCKER_HOST`, **API security (TLS)**; editor for `/etc/docker/daemon.json` (Docker only) |
+| **WSL engine** | start, stop and restart the engine, put the distribution to sleep, terminal; distribution list (start, terminate, default, *use for the engine*, ⋯ **export, disk & compacting, remove with confirmation**), **import**; *Install & setup* section: Docker / Podman switch, install, API setup, uninstall, `docker` command in PATH, `DOCKER_HOST`, **API security (TLS)**; editor for `/etc/docker/daemon.json` (Docker only) |
 | **Settings** (Nastavení) | language (Czech / English), distribution (+ *Add distribution* wizard), API port, refresh interval, keep-alive, engine autostart, restoring containers that were running last time, **start with Windows**, **Windows notifications**, tray behaviour, `docker` command in PATH, global `.wslconfig` (memory, CPU, swap, `vmIdleTimeout`, `networkingMode`) |
 
 Less frequent and destructive actions (prune, pause all, …) live in the **⋯** menu next to
@@ -33,6 +33,38 @@ the filter field, which is pinned to the right on every page.
 - A few seconds after start the app checks the container state and reports immediately
   exited containers including the exit code.
 
+### Compose templates and editor
+
+*Compose → New stack…* creates a stack from a template – PostgreSQL, MariaDB, Redis, MongoDB,
+WordPress + MariaDB, nginx, Adminer, RabbitMQ, Mailpit, MinIO. The project name and folder
+(`~/stacks/<name>` by default, Windows paths work too) are prefilled; `compose.yaml` and `.env`
+(random passwords, written with mode 600) can be edited before *Create* or *Create and start*.
+The content is validated with `compose config -q` before anything is written.
+
+Each existing stack has *Edit compose file* / *Edit .env* (in-app editor, Ctrl+S, *Validate*
+runs `compose config -q` on the unsaved text) and a *Scale…* action per service.
+
+### Volume backup, restore and clone
+
+Volumes show their size (`/system/df`, with `du` as a fallback). *Back up…* writes
+`<volume>-<date>.tar.gz` to a Windows folder using a throwaway `alpine` container (optionally
+stopping the containers that use the volume meanwhile). *Restore from backup…* restores into an
+existing volume (optionally emptied first) or a new one; *Clone…* copies a volume.
+
+### Distributions: remove, export, import, disk
+
+The ⋯ menu of a distribution offers *Export…* (`.tar` or `.vhdx`), *Disk and compacting…* (size
+of `ext4.vhdx`, sparse mode, `wsl --manage … --compact`) and *Remove distribution…*: a dialog
+where the name must be typed, with *Export a backup first* checked by default. The distribution
+used by the app for the engine cannot be removed. *Import…* (next to *Add distribution…*) runs
+`wsl --import` from a `.tar` / `.vhdx`.
+
+### Tray: containers submenu
+
+The tray menu has a *Containers (n running)* submenu – running ones first, up to 25 – with
+start / stop, restart, pause / resume, logs, console and *Show in app* (opens the container
+detail) for each container.
+
 ### Container detail
 
 The ⓘ icon in a container row opens a resizable window with tabs:
@@ -44,18 +76,21 @@ The ⓘ icon in a container row opens a resizable window with tabs:
   last 5 minutes; 100 % CPU = one core).
 - **Logs** – live log with follow and a choice of the last 100 – 5000 lines.
 - **Recreate with changes** – a form prefilled from the container (name, image, ports, env,
-  volumes, network, restart policy, command). The old container is stopped and renamed to
-  `<name>-wls-old`, the new one is started; on success the old one is removed, on failure the new
-  one is removed and the old one renamed back and started again. Entrypoint, labels, resource
-  limits, capabilities, hostname, user and additional networks are not carried over (a warning
-  is shown).
+  volumes, network, restart policy, command). The new container is created through the API from the
+  original configuration (`Config` + `HostConfig`) with only the edited fields changed, so user,
+  capabilities, security options, read-only rootfs, limits, labels, entrypoint, healthcheck and
+  log options are kept. The old container is stopped and renamed to `<name>-wls-old`, the new one
+  is started; on success the old one is removed, on failure the new
+  one is removed and the old one renamed back and started again. Additional networks are not
+  carried over (a warning is shown).
 
 ### Build from a Dockerfile
 
 *Images → Build…* builds an image with the engine CLI inside WSL: context folder (Windows or
 Linux path, folder picker), Dockerfile (relative to the context or absolute), tags, build
 arguments, target stage, *no cache* and *pull*. The command preview is shown in the dialog and
-the output streams into a log window that can be hidden while the build runs.
+the output streams into a log window that can be hidden while the build runs. *Cancel build*
+stops the CLI and, with Podman, also the `RUN` step running on the server side.
 
 ### Live updates and notifications
 
@@ -144,14 +179,16 @@ containers with host networking, because all WSL 2 distributions share one netwo
   which the default user of the distribution is added to;
 - a CA, a server certificate (`127.0.0.1`, `localhost`) and a client certificate (EC P-256) are
   generated in `/etc/wls-desktop/tls`; the client certificate, key and CA are copied to
-  `%APPDATA%\WLS_Desktop\tls` (`ca.pem`, `cert.pem`, `key.pem` – usable as `DOCKER_CERT_PATH`);
+  `%APPDATA%\WLS_Desktop\tls` – the key encrypted with DPAPI (`key.pem.dpapi`); a plain
+  `key.pem` for `DOCKER_CERT_PATH` is written only when *DOCKER_HOST* is set for external tools;
 - the systemd service `wls-tls-proxy` (`socat`, installed if missing) listens on
   `127.0.0.1:2376` and accepts only clients presenting the client certificate; it starts and
   stops together with the engine;
 - the app connects over HTTPS with the client certificate (rustls); the CLI inside WSL and the
   `docker` shim use the unix socket.
 
-*Turn TLS off* switches back to the plain API on port 2375 and removes the proxy (the
+Certificates expiring within 30 days are renewed on the next API setup; *Regenerate
+certificates* creates a new CA and certificates at any time. *Turn TLS off* switches back to the plain API on port 2375 and removes the proxy (the
 certificates are kept and reused). See [docs/SECURITY.md](docs/SECURITY.md) for the security
 review.
 
@@ -183,7 +220,14 @@ To behave as close to the Docker CLI as possible:
   variable `DOCKER_HOST=tcp://127.0.0.1:<port>` (with TLS also `DOCKER_TLS_VERIFY=1` and
   `DOCKER_CERT_PATH`).
 
-Debugging: `WLS_SHIM_DEBUG=1` prints the executed command; `WLS_ENGINE=podman|docker`,
+**Fast path:** simple read-only commands – `ps` / `container ls` (with `-a -q -l -s -n
+--no-trunc`, `--filter status|name|label|ancestor`, `--format table|json|{{.Field}}`), `images`,
+`volume ls`, `network ls`, `version --format`, `info --format` – are answered directly from the
+engine API (also over TLS) in ~50 ms instead of ~250 ms via `wsl.exe`. Output mimics the Docker
+CLI. Anything else (unknown flag, template function, API error) silently falls back to
+`wsl.exe`. `WLS_SHIM_FAST=0` disables the fast path.
+
+Debugging: `WLS_SHIM_DEBUG=1` prints the executed command (and whether the fast path was used); `WLS_ENGINE=podman|docker`,
 `WLS_PORT` and `WLS_DISTRO` override the settings.
 
 Remaining differences from the Docker CLI for Windows: `docker login`, `config.json` and
@@ -202,6 +246,9 @@ console window when it is not available.
   automatically. Without TLS the API has no authentication (see *API security*).
 - **Live updates:** a background thread reads the engine event stream (`/events`) and triggers a
   debounced refresh; the same events drive the Windows notifications.
+- **Worker:** short actions (API calls, listings) run in a small thread pool, long ones
+  (installation, build, compose, backups) in their own thread; all API calls share one HTTP agent
+  with keep-alive. API errors are typed (`ApiError`: HTTP status, unreachable engine, decode).
 - **WSL operations** (starting / stopping the distribution, `systemctl`, compose, file
   operations) run via `wsl.exe -d <distro> [-u root] -e …`.
 - **Switching distributions:** pick another distribution in Settings (or *Use for the engine*
@@ -252,6 +299,8 @@ For debugging and screenshots: `WLS_START_PAGE` selects the start page (`contain
 sample confirmation dialog, `WLS_DEBUG_HUB=<image>` opens the Docker Hub dialog,
 `WLS_DEBUG_EXPAND=1` expands the engine setup section, `WLS_DEBUG_BUILD=1` opens the build
 dialog, `WLS_DEBUG_DETAIL=<container>[:overview|stats|logs|recreate]` opens the container detail,
+`WLS_DEBUG_COMPOSE_NEW=<template>` the new-stack dialog, `WLS_DEBUG_RESTORE=1` the volume restore
+dialog, `WLS_DEBUG_REMOVE_DISTRO=<name>` / `WLS_DEBUG_IMPORT=1` the distribution dialogs,
 `WLS_LANG=en|cs` overrides the language without saving it.
 
 ## UI conventions
@@ -288,11 +337,19 @@ src/
     distro.rs      adding a distribution
     containers.rs  run, compose, pause all, terminal
     detail.rs      container detail: inspect, stats feed, recreate
+    recreate_body.rs  create body from the original inspect (recreate)
+    compose.rs     compose commands, new stack, editor, validate, scale
+    volumes.rs     volume sizes, backup, restore, clone
+    distro_manage.rs  remove / export / import distributions, disk
     build.rs       building images from a Dockerfile
     fs_ops.rs      file operations
     spec.rs        RunSpec, BuildSpec, AddDistroSpec
   docker.rs        Docker Engine API client (ureq, optional mutual TLS), events, Docker Hub
   inspect.rs       parsing container inspect data
+  error.rs         typed API errors (ApiError)
+  apitls.rs        TLS client config (shared with the shim)
+  dpapi.rs         DPAPI encryption of the client key
+  compose_templates.rs  built-in compose templates
   notify.rs        Windows toast notifications (AUMID registration)
   autostart.rs     start with Windows (HKCU Run key)
   engine.rs        Docker / Podman: setup, install and uninstall scripts, CLI
@@ -301,7 +358,7 @@ src/
   wslconfig.rs     editing %USERPROFILE%\.wslconfig
   pathmap.rs       Windows -> WSL path translation (shim)
   shim_install.rs  installing the shim into PATH, DOCKER_HOST
-  shim/            docker.exe shim (docker.rs, envfwd.rs)
+  shim/            docker.exe shim (docker.rs, envfwd.rs, fast.rs – API fast path)
   tray.rs          tray icon, menu, hiding the window
   i18n.rs          Czech / English texts (t!, tf!)
   theme.rs         colors, style

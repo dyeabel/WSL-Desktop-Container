@@ -489,5 +489,12 @@ WSL idles the engine out. This is denial of service only.
 | F-09 | If the TLS certificates cannot be loaded, the client keeps HTTPS with an empty CA store (every connection fails) instead of falling back to plain HTTP. |
 | F-12 | A password containing a line break is rejected (not passed to `chpasswd`). |
 | F-15 (partly) | Log frames larger than 16 MiB abort the stream; `short_id` slices by characters. Event lines are still unbounded. |
+| F-05 (partly) | *Open in Explorer* runs only for an existing directory (`test -d`), never a file. Compose working dirs from labels are still trusted. |
+| F-06 | The client key is stored DPAPI-encrypted (`key.pem.dpapi`, user scope) and decrypted in memory; a plain `key.pem` is written only when the user sets DOCKER_HOST with TLS for external tools (with a warning) and removed when DOCKER_HOST is cleared. |
+| F-07 | Recreate creates the container through the API from the original `Config` + `HostConfig`, changing only the edited fields – user, capabilities, security options, read-only rootfs, privileged, devices, limits, tmpfs, healthcheck, labels, entrypoint and log options are kept. |
+| F-08 | Certificates expiring within 30 days are regenerated on API setup; *Regenerate certificates* action; `ca-key.pem` is mode 0400; socat runs with `max-children=32`. |
+| F-10 | Root-mode editor saves via a temp file + `mv -fT` (replaces a symlink instead of writing through it) and refuses symlinks; root `chmod` refuses symlinks; uploads use `cp -rP --remove-destination`. |
+| F-11 (partly) | Wider secret-name heuristic (AUTH, CREDENTIAL, PRIVATE, DSN, DATABASE_URL, …); secret build-arg values are masked in the echoed build command. Env values are still passed on the command line. |
+| F-14 | Single instance via a named mutex (`Local\WLS-Desktop-single-instance`) instead of only the window title. |
 
-Still open: F-01 / F-02 (TLS is opt-in, not the default), F-05 – F-08, F-10, F-11, F-13, F-14, F-16 – F-19.
+Still open: F-01 / F-02 (TLS is opt-in, not the default), F-05 (compose labels), F-11 (argv), F-13, F-15 (event lines), F-16 – F-19.
