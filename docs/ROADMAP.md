@@ -35,6 +35,14 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
 4. ★ Logs: follow containers that start later in a merged stack view automatically.
 5. ★ Run the Docker end-to-end test (`live_docker_e2e`) in CI on a self-hosted Windows runner
    with WSL.
+6. ★ **Memory overview** on the Overview page – where the RAM taken by WSL actually goes:
+   - **VmmemWSL** (what Windows sees) vs. the WSL memory limit from `.wslconfig`;
+   - inside Linux: used by processes, **file cache**, free (`/proc/meminfo`) – the difference
+     between VmmemWSL and Linux "used" is memory WSL has not returned to Windows yet;
+   - **per container** (cgroup memory incl. cache) and per compose stack, plus the engine itself
+     (dockerd / Podman service) and the rest of the distribution;
+   - a history chart (last hour) and the effect of *Free WSL memory* (before / after), so it is
+     visible whether the automatic freeing helps.
 
 ## Containers, images, compose
 
