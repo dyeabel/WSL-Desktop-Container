@@ -3,6 +3,7 @@
 
 pub(crate) mod build;
 pub(crate) mod compose;
+mod container_fs;
 mod containers;
 mod detail;
 mod distro;
@@ -22,6 +23,7 @@ pub use volumes::{du_sizes, volume_op_for_test, volume_sizes_for_test, HELPER_IM
 pub use build::cancel_build;
 pub use spec::{is_windows_path, AddDistroSpec, BuildSpec, RunSpec};
 pub use compose::{NewStackSpec, StackMsg, StackOp};
+pub use container_fs::{CfMsg, CfOp};
 pub use detail::{start_stats, StatSample, StatsFeed, STATS_WINDOW};
 pub use distro_manage::{default_import_folder, DistroDisk, DistroOp};
 #[cfg(test)]
@@ -139,6 +141,8 @@ pub enum Cmd {
     Inspect(String),
     /// znovu vytvořit kontejner (id) s novými parametry
     Recreate { id: String, spec: RunSpec },
+    /// soubory v kontejneru (view = číslo prohlížeče, kterému patří odpověď)
+    ContainerFs { view: u64, id: String, op: CfOp },
 }
 
 impl Cmd {
@@ -161,7 +165,8 @@ impl Cmd {
                 | Cmd::Notepad(_)
                 | Cmd::Explorer(_)
                 | Cmd::ListOnline
-        ) || matches!(
+        ) || matches!(self, Cmd::ContainerFs { op, .. } if op.is_quick())
+            || matches!(
             self,
             Cmd::Fs { op: FsOp::List(_) | FsOp::Read(_) | FsOp::Mkdir(_) | FsOp::Touch(_) | FsOp::Rename(..) | FsOp::Chmod(..), .. }
         )
@@ -200,6 +205,8 @@ pub enum Msg {
     Stack(StackMsg),
     /// virtuální disk distribuce (název, cesta / velikost / sparse, nebo chyba)
     DistroDisk(String, Result<DistroDisk, String>),
+    /// odpověď prohlížeči souborů kontejneru (číslo pohledu)
+    ContainerFs(u64, CfMsg),
 }
 
 /// Souhrnný stav pro tray (zapisuje worker, čte vlákno UI/traye).
@@ -434,7 +441,7 @@ impl Worker {
     fn exec(&self, cmd: Cmd) {
         self.shared.busy.fetch_add(1, Ordering::SeqCst);
         self.ctx.request_repaint();
-        let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline | Cmd::Inspect(_) | Cmd::VolumeSizes)
+        let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::ContainerFs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline | Cmd::Inspect(_) | Cmd::VolumeSizes)
             || matches!(cmd, Cmd::Stack(StackOp::Read { .. } | StackOp::Validate { .. }));
         let res = self.exec_inner(cmd);
         self.shared.busy.fetch_sub(1, Ordering::SeqCst);
@@ -577,6 +584,7 @@ impl Worker {
             }
             Cmd::Inspect(id) => self.inspect_detail(id),
             Cmd::Recreate { id, spec } => self.recreate(id, spec),
+            Cmd::ContainerFs { view, id, op } => self.container_fs(view, id, op),
         }
     }
 }

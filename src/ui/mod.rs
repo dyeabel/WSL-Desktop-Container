@@ -1,6 +1,7 @@
 pub mod build;
 pub mod compose;
 pub mod compose_new;
+pub mod container_files;
 pub mod containers;
 pub mod dashboard;
 pub mod detail;

@@ -7,6 +7,7 @@ mod apitls;
 mod autostart;
 mod compose_templates;
 mod config;
+mod container_fs;
 mod docker;
 mod dpapi;
 mod engine;
