@@ -342,6 +342,8 @@ impl Worker {
         let connected = snap.connected;
         let (n_run, n_total) = snap.info.as_ref().map(|i| (i.containers_running, i.containers)).unwrap_or((0, 0));
         self.track_running(&snap);
+        // relaye [::1] -> 127.0.0.1 pro publikované porty (odpojený engine = žádné)
+        crate::portrelay::sync_app(&snap, self.cfg().ipv6_localhost_relay);
         if let Ok(mut t) = self.shared.tray_containers.lock() {
             *t = snap.containers.iter().map(crate::tray::menu_model::Item::from_container).collect();
         }

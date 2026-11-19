@@ -172,6 +172,59 @@ fn npipe_section(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
+/// `localhost` pro publikované porty i přes IPv6 (relay `[::1]` -> `127.0.0.1` v aplikaci).
+fn ipv6_relay_section(app: &mut App, ui: &mut egui::Ui) {
+    use crate::portrelay::Mode;
+    section(ui, t!("Publikované porty na localhost", "Published ports on localhost"));
+    card(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let mut on = app.cfg.read().map(|c| c.ipv6_localhost_relay).unwrap_or(true);
+        if ui.checkbox(&mut on, t!("Publikované porty i na localhost IPv6 (::1)", "Published ports also on localhost IPv6 (::1)")).changed() {
+            let res = match app.cfg.write() {
+                Ok(mut g) => {
+                    g.ipv6_localhost_relay = on;
+                    g.save()
+                }
+                Err(e) => Err(e.to_string()),
+            };
+            if let Err(e) = res {
+                app.toast(false, tf!("Nastavení nelze uložit: {e}", "Cannot save settings: {e}"));
+            }
+            app.cfg_draft.ipv6_localhost_relay = on;
+            // relaye srovná obnovení stavu
+            app.send(Cmd::Refresh);
+        }
+        let st = crate::portrelay::app().status();
+        let list = |v: &[u16]| v.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
+        match st.mode {
+            Mode::Mirrored => {
+                ui.label(RichText::new(t!("\u{E184} WSL je v režimu mirrored – localhost (::1) funguje bez relaye", "\u{E184} WSL is in mirrored mode – localhost (::1) works without a relay")).color(theme::green()).small());
+            }
+            Mode::Active if !st.relayed.is_empty() => {
+                ui.label(RichText::new(tf!("\u{E184} Přeposílám [::1] → 127.0.0.1 na portech: {}", "\u{E184} Relaying [::1] → 127.0.0.1 on ports: {}", list(&st.relayed))).color(theme::green()).small());
+            }
+            Mode::Active if st.conflicts.is_empty() => {
+                ui.label(muted(t!("Žádné publikované porty běžících kontejnerů.", "No published ports of running containers.")).small());
+            }
+            _ => {}
+        }
+        if st.mode == Mode::Active {
+            for (p, e) in &st.conflicts {
+                ui.label(RichText::new(tf!("\u{E4E0} [::1]:{p} je obsazený jiným programem ({e}) – použij 127.0.0.1:{p}", "\u{E4E0} [::1]:{p} is taken by another program ({e}) – use 127.0.0.1:{p}")).color(theme::yellow()).small());
+            }
+        }
+        ui.label(
+            muted(t!(
+                "WSL v režimu NAT předává publikované porty jen na 127.0.0.1. Windows ale localhost zkouší nejdřív přes IPv6 (::1), kde spojení visí až do vypršení limitu. \
+                 Aplikace proto (dokud běží) poslouchá na [::1] na stejných portech a přeposílá na 127.0.0.1 – jen lokálně, bez přístupu z jiných počítačů. Jen TCP.",
+                "In NAT mode WSL forwards published ports only on 127.0.0.1. Windows tries localhost over IPv6 (::1) first, where the connection hangs until a timeout. \
+                 While running, the app therefore listens on [::1] on the same ports and relays to 127.0.0.1 – local only, no access from other computers. TCP only."
+            ))
+            .small(),
+        );
+    });
+}
+
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     header(ui, t!("Nastavení", "Settings"), "");
 
@@ -417,6 +470,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
 
     npipe_section(app, ui);
+    ipv6_relay_section(app, ui);
 
     section(ui, t!("WSL – globální nastavení (%USERPROFILE%\\.wslconfig)", "WSL – global settings (%USERPROFILE%\\.wslconfig)"));
     card(ui, |ui| {

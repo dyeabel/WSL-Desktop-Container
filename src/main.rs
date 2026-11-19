@@ -20,6 +20,7 @@ mod inspect;
 mod logbuf;
 #[allow(dead_code)] // používá docker shim, tady jen kvůli testům
 mod pathmap;
+mod portrelay;
 mod shim_install;
 mod tray;
 mod theme;
@@ -67,9 +68,11 @@ fn main() -> eframe::Result<()> {
             .with_icon(theme::app_icon()),
         ..Default::default()
     };
-    eframe::run_native(
+    let r = eframe::run_native(
         "WLS Desktop",
         options,
         Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
-    )
+    );
+    portrelay::app().stop_all();
+    r
 }

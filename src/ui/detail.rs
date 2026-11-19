@@ -395,7 +395,20 @@ fn overview(ui: &mut egui::Ui, d: &Detail, reveal: &mut bool) {
     }
     for p in &d.ports {
         let t = if p.host_port.is_empty() { tf!("{} (nepublikováno)", "{} (not published)", p.text()) } else { p.text() };
-        ui.add(egui::Label::new(RichText::new(t).monospace()).selectable(true));
+        // localhost přes ::1 (relay / mirrored) – jen publikované TCP porty na 127.0.0.1
+        let hint = p
+            .host_port
+            .parse::<u16>()
+            .ok()
+            .filter(|_| p.container.ends_with("/tcp") && crate::portrelay::relayable_ip(&p.host_ip))
+            .and_then(|hp| containers::localhost_hint(&[hp]));
+        ui.horizontal(|ui| {
+            ui.add(egui::Label::new(RichText::new(t).monospace()).selectable(true));
+            if let Some((tip, warn)) = hint {
+                let (glyph, color) = if warn { ("\u{E4E0}", theme::yellow()) } else { ("\u{E184}", theme::muted()) };
+                ui.label(RichText::new(glyph).small().color(color)).on_hover_text(tip);
+            }
+        });
     }
 
     section(ui, t!("Připojení (mounty)", "Mounts"));
