@@ -23,6 +23,10 @@ const OVERVIEW_EVERY: Duration = Duration::from_secs(2);
 const ONE_EVERY: Duration = Duration::from_secs(2);
 /// Interval sběru portů všech běžících kontejnerů (seznam kontejnerů).
 const ALL_EVERY: Duration = Duration::from_secs(5);
+/// Nejkratší interval kontroly portů ostatních distribucí WSL (drahé – wsl.exe na distribuci).
+const DISTRO_EVERY: Duration = Duration::from_secs(10);
+/// Nejvýš tolik ukončených spojení v historii detailu kontejneru.
+pub const CLOSED_CAP: usize = 300;
 /// Bez tepu z UI déle než tohle se sběr pozastaví.
 const STALE_MS: u64 = 4000;
 
@@ -41,10 +45,15 @@ impl Beat {
         self.start.elapsed().as_millis() as u64
     }
     fn touch(&self) {
-        self.last.store(self.now_ms(), Ordering::Relaxed);
+        // 0 = „ještě nikdy“ (viz `active`)
+        self.last.store(self.now_ms().max(1), Ordering::Relaxed);
     }
     fn stale(&self) -> bool {
         self.now_ms().saturating_sub(self.last.load(Ordering::Relaxed)) > STALE_MS
+    }
+    /// Pohled se kreslí teď (na rozdíl od `stale` je nový tep bez doteku neaktivní).
+    fn active(&self) -> bool {
+        self.last.load(Ordering::Relaxed) > 0 && !self.stale()
     }
 }
 
@@ -94,8 +103,23 @@ pub struct NetData {
     /// naslouchající porty ve Windows
     pub win_listen: Vec<WinListen>,
     pub win_error: Option<String>,
+    /// naslouchající porty ostatních běžících distribucí (jen při otevřené záložce Porty)
+    pub distros: DistroScan,
     pub error: Option<String>,
     pub updated: Option<Instant>,
+}
+
+/// Výsledek kontroly portů ostatních běžících distribucí WSL.
+#[derive(Debug, Clone, Default)]
+pub struct DistroScan {
+    /// síťový prostor distribuce enginu (`net:[…]`)
+    pub engine_netns: String,
+    /// zkontrolované běžící distribuce WSL 2 (kromě distribuce enginu)
+    pub others: Vec<netinfo::DistroListen>,
+    /// nezkontrolované: zastavené (nespouští se) a WSL 1
+    pub skipped: Vec<String>,
+    pub error: Option<String>,
+    pub at: Option<Instant>,
 }
 
 /// Běžící sběr síťového přehledu; zastaví se při zahození.
@@ -103,6 +127,8 @@ pub struct NetFeed {
     pub data: Arc<Mutex<NetData>>,
     pub started: Instant,
     beat: Beat,
+    /// tep záložky Porty – jen pak se kontrolují ostatní distribuce
+    ports: Beat,
     traffic: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 }
@@ -112,6 +138,11 @@ impl NetFeed {
     pub fn touch(&self, traffic: bool) {
         self.beat.touch();
         self.traffic.store(traffic, Ordering::Relaxed);
+    }
+
+    /// Záložka Porty je vidět: kontrolovat i porty ostatních distribucí (nejvýš po ~10 s).
+    pub fn touch_ports(&self) {
+        self.ports.touch();
     }
 }
 
@@ -131,14 +162,32 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
     let traffic = Arc::new(AtomicBool::new(true));
     let beat = Beat::new();
     beat.touch();
+    let ports = Beat::new();
     let started = Instant::now();
-    let (buf, st, tr, b) = (data.clone(), stop.clone(), traffic.clone(), beat.clone());
+    let (buf, st, tr, b, pb) = (data.clone(), stop.clone(), traffic.clone(), beat.clone(), ports.clone());
     thread::spawn(move || {
         let mut vm = RateTracker::default();
         let mut ctr = RateTracker::default();
         let mut names: HashMap<u32, String> = HashMap::new();
         let mut paused = false;
+        let scanning = Arc::new(AtomicBool::new(false));
+        let mut last_scan: Option<Instant> = None;
         while !st.load(Ordering::SeqCst) {
+            // ostatní distribuce: vlastní vlákno, ať pomalé wsl.exe nebrzdí přehled
+            if pb.active() && !scanning.load(Ordering::SeqCst) && last_scan.is_none_or(|t| t.elapsed() >= DISTRO_EVERY) {
+                last_scan = Some(Instant::now());
+                scanning.store(true, Ordering::SeqCst);
+                let engine = cfg.read().map(|c| c.distro.clone()).unwrap_or_default();
+                let (fl, cx, out) = (scanning.clone(), ctx.clone(), buf.clone());
+                thread::spawn(move || {
+                    let r = scan_distros(&engine);
+                    if let Ok(mut g) = out.lock() {
+                        g.distros = r;
+                    }
+                    fl.store(false, Ordering::SeqCst);
+                    cx.request_repaint();
+                });
+            }
             let t0 = Instant::now();
             if b.stale() {
                 // pohled není vidět – rychlosti po návratu počítat od nového vzorku
@@ -180,6 +229,8 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
                 next.containers = g.containers.clone();
             }
             if let Ok(mut g) = buf.lock() {
+                // výsledek kontroly distribucí zapisuje vlastní vlákno přímo sem
+                next.distros = std::mem::take(&mut g.distros);
                 next.history = std::mem::take(&mut g.history);
                 if let Some((rx, tx)) = next.vm_rate {
                     next.history.push_back(NetSample { t, rx, tx });
@@ -194,7 +245,53 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
             wait(t0, OVERVIEW_EVERY, &st);
         }
     });
-    NetFeed { data, started, beat, traffic, stop }
+    NetFeed { data, started, beat, ports, traffic, stop }
+}
+
+/// Zkontroluje naslouchající TCP porty ve všech běžících distribucích WSL 2 kromě `engine`
+/// (paralelně). Zastavené distribuce se přeskočí – `wsl -d` by je spustil.
+/// Spouští se jako root: distribuce sdílejí síťový prostor VM a vlastníka socketu
+/// (proces) `ss -p` ukáže jen s právy roota; nic se nemění.
+pub fn scan_distros(engine: &str) -> DistroScan {
+    let mut out = DistroScan { at: Some(Instant::now()), ..Default::default() };
+    let list = match wsl::list() {
+        Ok(l) => l,
+        Err(e) => {
+            out.error = Some(e);
+            return out;
+        }
+    };
+    let mut handles = Vec::new();
+    let mut engine_ns = None;
+    for d in list {
+        if d.name.eq_ignore_ascii_case(engine) {
+            if d.running() {
+                let name = d.name.clone();
+                engine_ns = Some(thread::spawn(move || wsl::run(&name, Some("root"), None, &["readlink", "/proc/self/ns/net"]).map(|s| s.trim().to_string()).unwrap_or_default()));
+            }
+            continue;
+        }
+        if !d.running() || d.version.trim() != "2" {
+            out.skipped.push(d.name);
+            continue;
+        }
+        handles.push(thread::spawn(move || {
+            let run = |user| wsl::run(&d.name, user, None, &["sh", "-c", netinfo::DISTRO_SCRIPT]);
+            // distribuce bez uživatele root (neobvyklé): aspoň jako výchozí uživatel
+            let r = run(Some("root")).or_else(|_| run(None));
+            match r {
+                Ok(text) => {
+                    let (netns, listen) = netinfo::parse_distro_listen(&text);
+                    netinfo::DistroListen { distro: d.name, netns, listen, error: None }
+                }
+                Err(e) => netinfo::DistroListen { distro: d.name, error: Some(String::from(e)), ..Default::default() },
+            }
+        }));
+    }
+    out.others = handles.into_iter().filter_map(|h| h.join().ok()).collect();
+    out.others.sort_by(|a, b| a.distro.cmp(&b.distro));
+    out.engine_netns = engine_ns.and_then(|h| h.join().ok()).unwrap_or_default();
+    out
 }
 
 /// Statistiky sítě běžících kontejnerů (paralelně) -> rychlosti z rozdílu vzorků.
@@ -238,6 +335,23 @@ pub struct NsData {
     pub pid: HashMap<String, u32>,
     pub error: Option<String>,
     pub updated: Option<Instant>,
+    /// jen detail jednoho kontejneru: sledovaná navázaná spojení s rychlostmi
+    pub live: Vec<netinfo::Conn>,
+    /// ukončená spojení za posledních 15 min (nejstarší první)
+    pub closed: Vec<netinfo::Conn>,
+    /// provoz kontejneru: (t, přijato B/s, odesláno B/s)
+    pub traffic: Vec<(f64, f64, f64)>,
+    /// čas posledního vzorku (s od spuštění sběru; stejná osa jako `live`, `closed`, `traffic`)
+    pub now: f64,
+}
+
+/// Co sbírat v síťových prostorech kontejnerů.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NsMode {
+    /// naslouchající sockety a navázaná spojení (s čítači TCP)
+    Conns,
+    /// navíc čítače rozhraní (detail kontejneru)
+    Detail,
 }
 
 /// Běžící sběr portů dovnitř / ven; zastaví se při zahození.
@@ -267,20 +381,24 @@ fn container_pid(d: &Docker, id: &str) -> Result<u32, String> {
 
 /// Jedno kolo sběru: sockety pro dané kontejnery (ID -> PID) přes `nsenter` v distribuci.
 /// PID se předávají jako argumenty skriptu, nikdy jako jeho text.
-pub fn collect_ns(distro: &str, pids: &[(String, u32)], with_conns: bool) -> Result<HashMap<String, NsDump>, String> {
+pub fn collect_ns(distro: &str, pids: &[(String, u32)], mode: NsMode) -> Result<HashMap<String, NsDump>, String> {
     let valid: Vec<&(String, u32)> = pids.iter().filter(|(_, p)| *p > 0).collect();
     if valid.is_empty() {
         return Ok(HashMap::new());
     }
     let mut args: Vec<String> = vec!["sh".into(), "-c".into(), netinfo::NS_SCRIPT.into(), "sh".into()];
-    args.push(if with_conns { "all".into() } else { "listen".into() });
+    args.push(match mode {
+        NsMode::Conns => "all".into(),
+        NsMode::Detail => "detail".into(),
+    });
     args.extend(valid.iter().map(|(_, p)| p.to_string()));
     let out = wsl::run_owned(distro, Some("root"), None, &args).map_err(String::from)?;
     let mut dump = netinfo::parse_ns_dump(&out);
     Ok(valid.iter().filter_map(|(id, p)| dump.remove(p).map(|d| (id.clone(), d))).collect())
 }
 
-/// Spustí sběr portů: `id` = jeden kontejner (~2 s, s navázanými spojeními),
+/// Spustí sběr portů: `id` = jeden kontejner (~2 s, navázaná spojení s rychlostmi,
+/// historie ukončených spojení a provoz kontejneru za 15 min – dokud feed žije),
 /// None = všechny běžící kontejnery (~5 s, pro přehled v seznamu kontejnerů).
 pub fn start_ns_feed(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>, id: Option<String>) -> NsFeed {
     let data = Arc::new(Mutex::new(NsData::default()));
@@ -289,7 +407,10 @@ pub fn start_ns_feed(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>, id: O
     beat.touch();
     let (buf, st, b) = (data.clone(), stop.clone(), beat.clone());
     let every = if id.is_some() { ONE_EVERY } else { ALL_EVERY };
+    let mode = if id.is_some() { NsMode::Detail } else { NsMode::Conns };
     thread::spawn(move || {
+        let started = Instant::now();
+        let mut tracker = netinfo::ConnTracker::new(NET_WINDOW, CLOSED_CAP);
         while !st.load(Ordering::SeqCst) {
             let t0 = Instant::now();
             if b.stale() {
@@ -316,12 +437,32 @@ pub fn start_ns_feed(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>, id: O
                         }
                     }
                     next.pid = pids.iter().cloned().collect();
-                    match collect_ns(&distro, &pids, true) {
+                    match collect_ns(&distro, &pids, mode) {
                         Ok(m) => next.by_id = m,
                         Err(e) => next.error = Some(e),
                     }
                 }
                 Err(e) => next.error = Some(e),
+            }
+            if let Some(id) = &id {
+                let t = started.elapsed().as_secs_f64();
+                match next.by_id.get(id) {
+                    // chyba sběru nic neukončuje – počká se na další vzorek
+                    Some(dump) if dump.error.is_none() && next.error.is_none() => {
+                        let conns: Vec<(bool, Sock)> = dump.conns.iter().map(|s| (netinfo::is_inbound(s, &dump.listen), s.clone())).collect();
+                        tracker.update(t, &conns);
+                        if let Some((rx, tx)) = dump.dev {
+                            tracker.push_dev(t, rx, tx);
+                        }
+                    }
+                    // kontejner neběží: všechna spojení skončila
+                    None if next.error.is_none() && next.pid.get(id) == Some(&0) => tracker.update(t, &[]),
+                    _ => {}
+                }
+                next.live = tracker.live();
+                next.closed = tracker.closed.iter().cloned().collect();
+                next.traffic = tracker.traffic.iter().copied().collect();
+                next.now = t;
             }
             next.updated = Some(Instant::now());
             if let Ok(mut g) = buf.lock() {

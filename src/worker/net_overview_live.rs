@@ -7,12 +7,160 @@ use crate::netinfo::{compare_ports, published_of, WinState};
 const WEB: &str = "wls-test-net-web";
 const CLIENT: &str = "wls-test-net-client";
 
-struct Cleanup<F: Fn(&[&str]) -> Result<String, String>>(F);
+/// Úklid testovacích kontejnerů (`1` = jejich názvy) i při selhání testu.
+struct Cleanup<F: Fn(&[&str]) -> Result<String, String>>(F, [&'static str; 2]);
 
 impl<F: Fn(&[&str]) -> Result<String, String>> Drop for Cleanup<F> {
     fn drop(&mut self) {
-        let _ = (self.0)(&["rm", "-f", "-t", "1", WEB, CLIENT]);
+        let _ = (self.0)(&["rm", "-f", "-t", "1", self.1[0], self.1[1]]);
     }
+}
+
+/// CLI enginu v distribuci jako funkce (pro `Cleanup`).
+fn engine_cli(cfg: &Config) -> impl Fn(&[&str]) -> Result<String, String> + use<> {
+    let cli = cfg.engine.cli(cfg.port, cfg.tls);
+    let distro = cfg.distro.clone();
+    move |args: &[&str]| {
+        let mut v = cli.clone();
+        v.extend(args.iter().map(|s| s.to_string()));
+        wsl::run_owned(&distro, None, None, &v).map_err(String::from)
+    }
+}
+
+/// IPv4 adresa kontejneru z inspect.
+fn container_ip(v: &Value) -> String {
+    v.pointer("/NetworkSettings/Networks")
+        .and_then(|n| n.as_object())
+        .and_then(|n| n.values().find_map(|v| v.get("IPAddress").and_then(|i| i.as_str()).filter(|i| !i.is_empty())))
+        .expect("IP kontejneru")
+        .to_string()
+}
+
+const DL_WEB: &str = "wls-test-net-dl-web";
+const DL_CLIENT: &str = "wls-test-net-dl-client";
+
+/// Provoz po spojeních, historie ukončených spojení, graf provozu a konflikty portů
+/// s ostatními distribucemi: `cargo test live_net_conn -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn live_net_conn_traffic() {
+    let cfg = Config::load();
+    crate::docker::configure_tls(cfg.tls).expect("TLS klient");
+    let d = Docker::new(cfg.port);
+    assert!(d.ping(), "engine API na portu {} neodpovídá", cfg.port);
+    let guard = Cleanup(engine_cli(&cfg), [DL_WEB, DL_CLIENT]);
+    let engine = &guard.0;
+    let _ = engine(&["rm", "-f", DL_WEB, DL_CLIENT]);
+
+    // server: nginx s 64 MB souborem a omezením 512 KB/s na spojení (spojení vydrží ~2 min)
+    engine(&[
+        "run", "-d", "--name", DL_WEB, "docker.io/library/nginx:alpine", "sh", "-c",
+        "dd if=/dev/zero of=/usr/share/nginx/html/big bs=1M count=64 2>/dev/null; \
+         printf 'server { listen 80; listen [::]:80; root /usr/share/nginx/html; limit_rate 512k; }' > /etc/nginx/conf.d/default.conf; \
+         exec nginx -g 'daemon off;'",
+    ])
+    .expect("run web");
+    let web: Value = d.get(&format!("/containers/{DL_WEB}/json")).expect("inspect web");
+    let web_id = web["Id"].as_str().unwrap().to_string();
+    let web_ip = container_ip(&web);
+    // klient: wget ve smyčce do /dev/null (IP jako argument, ne v textu skriptu)
+    engine(&[
+        "run", "-d", "--name", DL_CLIENT, "docker.io/library/nginx:alpine", "sh", "-c",
+        "sleep 1; while true; do wget -q -O /dev/null \"http://$1/big\"; sleep 1; done", "sh", &web_ip,
+    ])
+    .expect("run client");
+    let client: Value = d.get(&format!("/containers/{DL_CLIENT}/json")).expect("inspect client");
+    let client_ip = container_ip(&client);
+    eprintln!("web {web_ip}, client {client_ip}");
+
+    // stejná cesta jako záložka Síť v detailu kontejneru
+    let shared = Arc::new(RwLock::new(cfg.clone()));
+    let ns = start_ns_feed(eframe::egui::Context::default(), shared, Some(web_id.clone()));
+    let find = |nd: &NsData| nd.live.iter().find(|c| c.sock.peer_ip == client_ip && c.sock.local_port == 80).cloned();
+    let mut samples: Vec<netinfo::Conn> = Vec::new();
+    for _ in 0..30 {
+        ns.touch();
+        thread::sleep(Duration::from_millis(500));
+        let nd = ns.data.lock().unwrap().clone();
+        if let Some(c) = find(&nd) {
+            if samples.last().is_none_or(|l| l.last_seen < c.last_seen) {
+                eprintln!(
+                    "t={:.1}s {} {} <- {} in {:?} B out {:?} B rate {:?} (since {:.1}s)",
+                    nd.now,
+                    if c.inbound { "in " } else { "out" },
+                    c.sock.local(),
+                    c.sock.peer(),
+                    c.sock.bytes_in,
+                    c.sock.bytes_out,
+                    c.rate.map(|(a, b)| (netinfo::fmt_rate(a), netinfo::fmt_rate(b))),
+                    c.first_seen
+                );
+                samples.push(c);
+            }
+        }
+        if samples.len() >= 3 {
+            break;
+        }
+    }
+    assert!(samples.len() >= 3, "spojení klienta se na serveru neobjevilo dost krát");
+    let (a, b) = (&samples[samples.len() - 2], &samples[samples.len() - 1]);
+    assert!(b.inbound, "spojení na port 80 je příchozí");
+    assert!(b.sock.bytes_out.unwrap() > a.sock.bytes_out.unwrap(), "odeslané bajty rostou");
+    let (_, out_rate) = b.rate.expect("rychlost");
+    assert!(out_rate > 0.0, "rychlost odesílání > 0");
+    let nd = ns.data.lock().unwrap().clone();
+    eprintln!("provoz kontejneru: {} vzorků, poslední {:?}", nd.traffic.len(), nd.traffic.last());
+    assert!(nd.traffic.iter().any(|s| s.2 > 0.0), "graf provozu: odesláno > 0");
+
+    // klient skončí -> spojení do historie
+    engine(&["rm", "-f", "-t", "0", DL_CLIENT]).expect("rm client");
+    let mut closed = None;
+    for _ in 0..20 {
+        ns.touch();
+        thread::sleep(Duration::from_millis(500));
+        let nd = ns.data.lock().unwrap().clone();
+        closed = nd.closed.iter().find(|c| c.sock.peer_ip == client_ip && c.sock.local_port == 80).cloned();
+        if closed.is_some() {
+            assert!(find(&nd).is_none(), "ukončené spojení už není mezi živými");
+            break;
+        }
+    }
+    let c = closed.expect("ukončené spojení v historii");
+    eprintln!(
+        "historie: {} <- {} od {:.1}s do {:.1}s, odesláno {:?} B, přijato {:?} B",
+        c.sock.local(),
+        c.sock.peer(),
+        c.first_seen,
+        c.last_seen,
+        c.sock.bytes_out,
+        c.sock.bytes_in
+    );
+    assert!(c.sock.bytes_out.unwrap() >= b.sock.bytes_out.unwrap());
+    drop(ns);
+
+    // ostatní distribuce WSL: skutečné běžící distribuce, nepoužitý port bez konfliktu
+    let t0 = Instant::now();
+    let scan = scan_distros(&cfg.distro);
+    eprintln!(
+        "distribuce: engine netns {:?}, zkontrolováno {:?}, přeskočeno {:?}, chyba {:?} ({} ms)",
+        scan.engine_netns,
+        scan.others.iter().map(|o| (o.distro.as_str(), o.netns.as_str(), o.listen.len(), o.error.as_deref())).collect::<Vec<_>>(),
+        scan.skipped,
+        scan.error,
+        t0.elapsed().as_millis()
+    );
+    assert!(scan.error.is_none());
+    assert!(scan.engine_netns.starts_with("net:["), "{:?}", scan.engine_netns);
+    assert!(!scan.others.iter().any(|o| o.distro.eq_ignore_ascii_case(&cfg.distro)), "distribuce enginu se nekontroluje");
+    let unused = netinfo::Published { private: 80, proto: "tcp".into(), host_ip: String::new(), host_port: 18977 };
+    assert!(netinfo::distro_conflicts(&unused, &scan.engine_netns, &scan.others).is_empty());
+    // a totéž pro skutečně obsazený port enginu: distribuce enginu se nepočítá
+    let api = netinfo::Published { private: cfg.port, proto: "tcp".into(), host_ip: String::new(), host_port: cfg.port };
+    eprintln!("konflikt API portu {}: {:?}", cfg.port, netinfo::distro_conflicts(&api, &scan.engine_netns, &scan.others));
+
+    drop(guard);
+    let left: Vec<Container> = d.get("/containers/json?all=true").unwrap();
+    assert!(!left.iter().any(|x| x.name().starts_with("wls-test-net-dl")), "úklid");
 }
 
 #[test]
@@ -22,13 +170,7 @@ fn live_net_ports_in_out() {
     crate::docker::configure_tls(cfg.tls).expect("TLS klient");
     let d = Docker::new(cfg.port);
     assert!(d.ping(), "engine API na portu {} neodpovídá", cfg.port);
-    let cli = cfg.engine.cli(cfg.port, cfg.tls);
-    let distro = cfg.distro.clone();
-    let guard = Cleanup(move |args: &[&str]| {
-        let mut v = cli.clone();
-        v.extend(args.iter().map(|s| s.to_string()));
-        wsl::run_owned(&distro, None, None, &v).map_err(String::from)
-    });
+    let guard = Cleanup(engine_cli(&cfg), [WEB, CLIENT]);
     let engine = &guard.0;
     let _ = engine(&["rm", "-f", WEB, CLIENT]);
 
@@ -40,12 +182,7 @@ fn live_net_ports_in_out() {
     .expect("run web");
     let web: Value = d.get(&format!("/containers/{WEB}/json")).expect("inspect web");
     let web_id = web["Id"].as_str().unwrap().to_string();
-    let ip = web
-        .pointer("/NetworkSettings/Networks")
-        .and_then(|n| n.as_object())
-        .and_then(|n| n.values().find_map(|v| v.get("IPAddress").and_then(|i| i.as_str()).filter(|i| !i.is_empty())))
-        .expect("IP webu")
-        .to_string();
+    let ip = container_ip(&web);
     eprintln!("web {} IP {ip}", crate::docker::short_id(&web_id));
 
     // 2) klient s trvale otevřeným spojením na web:9999 (IP jako argument, ne v textu skriptu)
@@ -62,7 +199,7 @@ fn live_net_ports_in_out() {
     let pc = container_pid(&d, &client_id).expect("pid client");
     eprintln!("PID web {pw}, client {pc}");
     assert!(pw > 0 && pc > 0);
-    let dump = collect_ns(&cfg.distro, &[(web_id.clone(), pw), (client_id.clone(), pc)], true).expect("nsenter ss");
+    let dump = collect_ns(&cfg.distro, &[(web_id.clone(), pw), (client_id.clone(), pc)], NsMode::Conns).expect("nsenter ss");
     let w = &dump[&web_id];
     let c = &dump[&client_id];
     assert!(w.error.is_none() && c.error.is_none(), "{:?} {:?}", w.error, c.error);
@@ -107,7 +244,9 @@ fn live_net_ports_in_out() {
     let mut state = WinState::NotForwarded;
     for _ in 0..10 {
         let win = windows_listeners(&mut names).expect("Windows porty");
-        state = netinfo::windows_state(&pub18190, &win, std::process::id());
+        // běžící aplikace přeposílá IPv6 localhost vlastní relay – v aplikaci je to `own_pid`
+        let own = win.iter().find(|x| x.process.eq_ignore_ascii_case("wls-desktop.exe")).map_or(std::process::id(), |x| x.pid);
+        state = netinfo::windows_state(&pub18190, &win, own);
         if state != WinState::NotForwarded {
             for x in win.iter().filter(|x| x.port == 18190 || x.port == cfg.port) {
                 eprintln!("windows listen {} {} pid {} {}", x.proto, netinfo::join_addr(&x.ip, Some(x.port)), x.pid, x.process);
