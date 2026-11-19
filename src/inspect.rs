@@ -132,6 +132,8 @@ pub struct Detail {
     pub image_env: Vec<String>,
     pub image_cmd: Vec<String>,
     pub image_entrypoint: Vec<String>,
+    /// limity prostředků z HostConfig (paměť, CPU, PIDs)
+    pub limits: crate::limits::Limits,
     /// celé JSON (pro kopírování)
     pub raw: String,
 }
@@ -227,6 +229,7 @@ pub fn parse(v: &Value) -> Detail {
         working_dir: s(v, "/Config/WorkingDir"),
         user: s(v, "/Config/User"),
         tty: v.pointer("/Config/Tty").and_then(|x| x.as_bool()).unwrap_or(false),
+        limits: v.get("HostConfig").map(crate::limits::Limits::from_host_config).unwrap_or_default(),
         raw: serde_json::to_string_pretty(v).unwrap_or_default(),
         ..Default::default()
     };

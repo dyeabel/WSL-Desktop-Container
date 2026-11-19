@@ -12,6 +12,7 @@ mod distro_manage;
 mod engine_ops;
 mod events;
 mod fs_ops;
+mod limits;
 mod memory;
 pub(crate) mod net_overview;
 mod notify;
@@ -154,6 +155,8 @@ pub enum Cmd {
     Inspect(String),
     /// znovu vytvořit kontejner (id) s novými parametry
     Recreate { id: String, spec: RunSpec, net: crate::inspect::NetEdit },
+    /// živá změna limitů kontejneru (id, název pro zprávu) -> pak Msg::Inspect
+    UpdateLimits { id: String, name: String, update: crate::limits::LimitUpdate },
     /// soubory v kontejneru (view = číslo prohlížeče, kterému patří odpověď)
     ContainerFs { view: u64, id: String, op: CfOp },
 }
@@ -172,6 +175,7 @@ impl Cmd {
                 | Cmd::HubSearch(_)
                 | Cmd::HubTags(_)
                 | Cmd::Inspect(_)
+                | Cmd::UpdateLimits { .. }
                 | Cmd::VolumeSizes
                 | Cmd::LoadDaemonJson
                 | Cmd::Terminal(_)
@@ -278,6 +282,8 @@ pub struct Shared {
     mem_running: AtomicBool,
     /// upozornění na prahy paměti a disku (zapisuje worker, aktivní čte UI pro pruh)
     pub alerts: Mutex<alerts::Alerts>,
+    /// limity běžících kontejnerů pro tabulku výkonu (čas načtení, limity)
+    limits: Mutex<std::collections::HashMap<String, (Instant, crate::limits::Limits)>>,
 }
 
 #[derive(Clone)]
@@ -417,6 +423,7 @@ impl Worker {
                     prev.clear();
                     prev.extend(rows.iter().map(|r| (r.id.clone(), (now, r.cpu_total))));
                 }
+                w.fill_limits(&d, &mut rows);
                 let df = d.df();
                 if distro_running {
                     w.memory_sample(Some(&rows));
@@ -616,6 +623,7 @@ impl Worker {
             }
             Cmd::Inspect(id) => self.inspect_detail(id),
             Cmd::Recreate { id, spec, net } => self.recreate(id, spec, net),
+            Cmd::UpdateLimits { id, name, update } => self.update_limits(id, name, update),
             Cmd::ContainerFs { view, id, op } => self.container_fs(view, id, op),
         }
     }

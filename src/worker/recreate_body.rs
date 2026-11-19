@@ -199,6 +199,19 @@ pub fn create_body(orig: &Value, spec: &RunSpec, image: &str, net: &NetEdit) -> 
     if h.get("MemorySwappiness").and_then(|v| v.as_i64()).is_some_and(|n| n <= 0) {
         h.remove("MemorySwappiness");
     }
+    // limity odebrané za běhu Podman hlásí jako -1 (NanoCpus i jinak záporné) – Docker by
+    // záporné NanoCpus / Memory při vytvoření odmítl; vynechat = bez limitu
+    for k in ["Memory", "MemoryReservation", "NanoCpus", "CpuQuota"] {
+        if h.get(k).and_then(|v| v.as_i64()).is_some_and(|n| n < 0) {
+            h.remove(k);
+        }
+    }
+    // Podman hlásí limit CPU zároveň jako NanoCpus i CpuQuota/CpuPeriod, create ale obojí odmítne
+    // („NanoCpus conflicts with CpuPeriod and CpuQuota“) – kvóta je přesná, NanoCpus vynechat
+    let pos = |k: &str| h.get(k).and_then(|v| v.as_i64()).is_some_and(|n| n > 0);
+    if pos("NanoCpus") && pos("CpuQuota") {
+        h.remove("NanoCpus");
+    }
     let mut body = json!({ "Config": config, "HostConfig": host });
     if let Some(n) = networking {
         body["NetworkingConfig"] = n;
@@ -272,6 +285,36 @@ mod tests {
         // prázdný příkaz -> výchozí z image
         let s2 = RunSpec { command: String::new(), ..spec };
         assert!(flatten(create_body(&orig, &s2, "x", &NetEdit::default()).unwrap())["Cmd"].is_null());
+    }
+
+    /// Limity nastavené přes `docker update` (Podman 5.4 je hlásí v HostConfig) přežijí znovuvytvoření.
+    #[test]
+    fn keeps_resource_limits() {
+        let orig = json!({
+            "Id": "abc",
+            "Config": {"Image": "alpine", "Cmd": ["sleep", "600"]},
+            "HostConfig": {"Memory": 268435456, "MemoryReservation": 134217728, "MemorySwap": 536870912,
+                           "NanoCpus": 500000000, "CpuQuota": 50000, "CpuPeriod": 100000, "CpuShares": 512,
+                           "CpusetCpus": "0-1", "PidsLimit": 100, "MemorySwappiness": 0, "NetworkMode": "bridge"}
+        });
+        let spec = RunSpec { image: "alpine".into(), ..Default::default() };
+        let b = flatten(create_body(&orig, &spec, "docker.io/library/alpine:latest", &NetEdit::default()).unwrap());
+        let h = &b["HostConfig"];
+        let lim = crate::limits::Limits::from_host_config(h);
+        // CPU zůstane jako kvóta (NanoCpus + CpuQuota by create odmítl)
+        assert!(h.get("NanoCpus").is_none());
+        assert_eq!((h["CpuQuota"].clone(), h["CpuPeriod"].clone()), (json!(50000), json!(100000)));
+        assert_eq!((lim.memory(), lim.reservation(), lim.swap(), lim.cpus(), lim.pids()), (Some(256 << 20), Some(128 << 20), Some(512 << 20), Some(0.5), Some(100)));
+        assert_eq!(h["CpuShares"], 512);
+        assert_eq!(h["CpusetCpus"], "0-1");
+        // MemorySwappiness 0 z Podmanu by crun na cgroup v2 odmítl
+        assert!(h.get("MemorySwappiness").is_none());
+        // limity odebrané za běhu (Podman: -1, záporné NanoCpus) = bez limitu
+        let mut removed = orig.clone();
+        removed["HostConfig"] = json!({"Memory": -1, "MemorySwap": -1, "NanoCpus": -10000, "CpuQuota": -1, "CpuPeriod": 100000, "PidsLimit": -1});
+        let h = flatten(create_body(&removed, &spec, "alpine", &NetEdit::default()).unwrap())["HostConfig"].clone();
+        assert!(h.get("Memory").is_none() && h.get("NanoCpus").is_none() && h.get("CpuQuota").is_none());
+        assert_eq!((h["MemorySwap"].clone(), h["PidsLimit"].clone()), (json!(-1), json!(-1)));
     }
 
     const ID: &str = "4f1c2a9b8c7d6e5f4f1c2a9b8c7d6e5f4f1c2a9b8c7d6e5f4f1c2a9b8c7d6e5f";
