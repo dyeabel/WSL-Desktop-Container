@@ -214,13 +214,13 @@ fn containers_perf(app: &mut App, ui: &mut egui::Ui) {
                     two_line(ui, RichText::new(&r.name).strong(), muted(&sub).small());
                 });
                 row.col(|ui| {
-                    ui.vertical(|ui| {
+                    stack_v(ui, |ui| {
                         ui.label(format!("{:.2} %", r.cpu));
                         ui.add(egui::ProgressBar::new((r.cpu / (ncpu * 100.0)) as f32).desired_width(ui.available_width() - 12.0).desired_height(4.0).fill(theme::accent()));
                     });
                 });
                 row.col(|ui| {
-                    ui.vertical(|ui| {
+                    stack_v(ui, |ui| {
                         ui.label(format!("{} / {}", fmt_bytes(r.mem), fmt_bytes(r.mem_limit)));
                         let f = if r.mem_limit > 0 { r.mem as f32 / r.mem_limit as f32 } else { 0.0 };
                         ui.add(egui::ProgressBar::new(f).desired_width(ui.available_width() - 12.0).desired_height(4.0).fill(theme::accent()));

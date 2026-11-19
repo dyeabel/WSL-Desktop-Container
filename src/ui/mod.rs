@@ -391,11 +391,32 @@ pub fn badge(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
 
 /// Dvouřádková buňka: hlavní text + šedý popisek.
 pub fn two_line(ui: &mut egui::Ui, main: RichText, sub: RichText) {
-    ui.vertical(|ui| {
+    stack_v(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
         ui.label(main);
         ui.label(sub);
     });
+}
+
+/// Svislý blok (víc řádků) svisle na střed buňky / řádku.
+/// `ui.vertical` uvnitř vodorovného rozložení egui umístí nahoru (výšku obsahu ještě nezná),
+/// takže dvouřádkové buňky neseděly s jednořádkovými. Výška obsahu se pamatuje z minulého
+/// snímku a blok se odsadí o polovinu zbývajícího místa.
+pub fn stack_v<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let id = ui.next_auto_id().with("stack_v");
+    let avail = ui.available_height();
+    let prev: Option<f32> = ui.ctx().data(|d| d.get_temp(id));
+    let top = prev.map(|h| ((avail - h) / 2.0).max(0.0)).unwrap_or(0.0);
+    let r = ui.vertical(|ui| {
+        ui.add_space(top);
+        ui.scope(add)
+    });
+    let h = r.inner.response.rect.height();
+    if prev.is_none_or(|p| (p - h).abs() > 0.5) {
+        ui.ctx().data_mut(|d| d.insert_temp(id, h));
+        ui.ctx().request_repaint();
+    }
+    r.inner.inner
 }
 
 /// Modální dialog s okraji a nadpisem. Vrací (výsledek obsahu, zavřít – Esc / klik mimo).
