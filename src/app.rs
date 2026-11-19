@@ -290,6 +290,10 @@ impl App {
                 ui::detail::open(self, ctx, id, name);
             }
         }
+        // kliknutí na oznámení o prahu paměti / disku
+        if let Some(t) = crate::worker::alerts::take_nav() {
+            ui::alerts::navigate(self, t);
+        }
         let (close_to_tray, min_to_tray, start_hidden) = self
             .cfg
             .read()

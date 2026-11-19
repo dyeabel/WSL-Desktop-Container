@@ -408,6 +408,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ui.label(muted(t!("Aplikaci úplně ukončíš přes pravý klik na ikonu v oznamovací oblasti \u{E06C} Ukončit. Levý klik okno zobrazí nebo schová.", "To quit the app completely, right-click the tray icon \u{E06C} Quit. Left-click shows or hides the window.")).small());
     });
 
+    super::alerts::settings_section(app, ui);
+
     section(ui, t!("Příkaz docker ve Windows", "The docker command in Windows"));
     card(ui, |ui| {
         ui.set_width(ui.available_width());

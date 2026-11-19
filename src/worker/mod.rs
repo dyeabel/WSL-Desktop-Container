@@ -1,6 +1,7 @@
 //! Práce na pozadí: periodické obnovování stavu a provádění akcí,
 //! aby UI vlákno nikdy neblokovalo.
 
+pub(crate) mod alerts;
 pub(crate) mod build;
 pub(crate) mod compose;
 mod container_fs;
@@ -275,6 +276,8 @@ pub struct Shared {
     pub memory: Mutex<crate::memory::MemState>,
     mem_probe: Mutex<crate::memory::VmmemProbe>,
     mem_running: AtomicBool,
+    /// upozornění na prahy paměti a disku (zapisuje worker, aktivní čte UI pro pruh)
+    pub alerts: Mutex<alerts::Alerts>,
 }
 
 #[derive(Clone)]
@@ -386,6 +389,7 @@ impl Worker {
         self.auto_free_memory();
         let want_stats = self.shared.want_stats.load(Ordering::Relaxed);
         self.memory_tick(distro_running, connected && want_stats);
+        self.alerts_tick(distro_running, connected);
         if connected && want_stats && !self.shared.stats_running.swap(true, Ordering::SeqCst) {
             let w = self.clone();
             thread::spawn(move || {

@@ -35,6 +35,7 @@ impl Worker {
         let Ok(out) = wsl::run(&distro, None, None, &["sh", "-c", script]) else { return };
         let Some((mi, engine)) = memory::parse_sample(&out) else { return };
         let vmmem = self.shared.mem_probe.lock().ok().and_then(|mut p| p.get());
+        self.alerts_memory(super::alerts::mem_input(&mi, vmmem));
         let t = memory::now_secs();
         let now = rows.map(|rows| {
             let ram = memory::total_ram();

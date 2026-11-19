@@ -82,6 +82,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(4.0);
     }
 
+    // aktivní upozornění na paměť a disk (i bez enginu)
+    super::alerts::banner(app, ui);
+
     if !need_engine(app, ui) {
         // paměť WSL se měří i bez enginu
         super::memory::show(app, ui);
@@ -108,53 +111,68 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         ui.add_space(14.0);
                     }
                 } else {
-                    ui.menu_button(t!("\u{EC54} Uklidit \u{E136}", "\u{EC54} Clean up \u{E136}"), |ui| {
-                        ui.set_min_width(260.0);
-                        for (i, label) in [
-                            t!("Odstranit zastavené kontejnery…", "Remove stopped containers…"),
-                            t!("Odstranit visící image", "Remove dangling images"),
-                            t!("Odstranit nepoužívané image…", "Remove unused images…"),
-                            t!("Odstranit nepoužívané volume…", "Remove unused volumes…"),
-                            t!("Odstranit nepoužívané sítě", "Remove unused networks"),
-                            t!("Uvolnit paměť WSL (cache)", "Free WSL memory (cache)"),
-                        ]
-                        .iter()
-                        .enumerate()
-                        {
-                            if ui.button(*label).clicked() {
-                                pick = Some(i as u8);
-                                ui.close_menu();
-                            }
-                        }
-                    });
+                    pick = cleanup_menu(ui);
                 },
             );
         });
-        match pick {
-            Some(0) => app.ask(
-                t!("Odstranit zastavené kontejnery?", "Remove stopped containers?"),
-                t!("Všechny zastavené kontejnery budou smazány.", "All stopped containers will be deleted."),
-                Cmd::PruneContainers,
-            ),
-            Some(1) => app.send(Cmd::PruneImages { all: false }),
-            Some(5) => super::memory::free(app),
-            Some(2) => app.ask(
-                t!("Odstranit nepoužívané image?", "Remove unused images?"),
-                t!("Smažou se všechny image, které nepoužívá žádný kontejner.", "All images not used by any container will be deleted."),
-                Cmd::PruneImages { all: true },
-            ),
-            Some(3) => app.ask(
-                t!("Odstranit nepoužívané volume?", "Remove unused volumes?"),
-                t!("Data v nepoužívaných volume budou nenávratně smazána!", "Data in unused volumes will be permanently deleted!"),
-                Cmd::PruneVolumes,
-            ),
-            Some(4) => app.send(Cmd::PruneNetworks),
-            _ => {}
-        }
+        cleanup_apply(app, pick);
     }
 
     super::memory::show(app, ui);
+    containers_perf(app, ui);
+}
 
+/// Tlačítko s nabídkou „Uklidit“ (přehled disku a pruh upozornění); vrací vybranou položku.
+pub fn cleanup_menu(ui: &mut egui::Ui) -> Option<u8> {
+    let mut pick = None;
+    ui.menu_button(t!("\u{EC54} Uklidit \u{E136}", "\u{EC54} Clean up \u{E136}"), |ui| {
+        ui.set_min_width(260.0);
+        for (i, label) in [
+            t!("Odstranit zastavené kontejnery…", "Remove stopped containers…"),
+            t!("Odstranit visící image", "Remove dangling images"),
+            t!("Odstranit nepoužívané image…", "Remove unused images…"),
+            t!("Odstranit nepoužívané volume…", "Remove unused volumes…"),
+            t!("Odstranit nepoužívané sítě", "Remove unused networks"),
+            t!("Uvolnit paměť WSL (cache)", "Free WSL memory (cache)"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            if ui.button(*label).clicked() {
+                pick = Some(i as u8);
+                ui.close_menu();
+            }
+        }
+    });
+    pick
+}
+
+/// Provede položku z `cleanup_menu` (mazání s potvrzením).
+pub fn cleanup_apply(app: &mut App, pick: Option<u8>) {
+    match pick {
+        Some(0) => app.ask(
+            t!("Odstranit zastavené kontejnery?", "Remove stopped containers?"),
+            t!("Všechny zastavené kontejnery budou smazány.", "All stopped containers will be deleted."),
+            Cmd::PruneContainers,
+        ),
+        Some(1) => app.send(Cmd::PruneImages { all: false }),
+        Some(5) => super::memory::free(app),
+        Some(2) => app.ask(
+            t!("Odstranit nepoužívané image?", "Remove unused images?"),
+            t!("Smažou se všechny image, které nepoužívá žádný kontejner.", "All images not used by any container will be deleted."),
+            Cmd::PruneImages { all: true },
+        ),
+        Some(3) => app.ask(
+            t!("Odstranit nepoužívané volume?", "Remove unused volumes?"),
+            t!("Data v nepoužívaných volume budou nenávratně smazána!", "Data in unused volumes will be permanently deleted!"),
+            Cmd::PruneVolumes,
+        ),
+        Some(4) => app.send(Cmd::PruneNetworks),
+        _ => {}
+    }
+}
+
+fn containers_perf(app: &mut App, ui: &mut egui::Ui) {
     section(ui, t!("Výkon běžících kontejnerů", "Running container performance"));
     if !app.snap.containers.iter().any(|c| c.running()) {
         ui.label(muted(t!("Žádný kontejner neběží.", "No container is running.")));

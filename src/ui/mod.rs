@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod build;
 pub mod chart;
 pub mod compose;

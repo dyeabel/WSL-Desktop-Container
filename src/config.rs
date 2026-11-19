@@ -41,6 +41,68 @@ pub struct Config {
     pub npipe: bool,
     /// Publikované porty kontejnerů i na `[::1]` (relay v aplikaci), aby `localhost` odpovídal hned
     pub ipv6_localhost_relay: bool,
+    /// Upozornění na prahové hodnoty paměti a disku
+    pub alerts: AlertsConfig,
+}
+
+/// Prahy upozornění (paměť WSL, místo na disku). Chybějící klíče doplní výchozí hodnoty.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AlertsConfig {
+    /// VmmemWSL nad `memory_pct` % limitu WSL aspoň `memory_minutes` minut
+    pub memory: bool,
+    pub memory_pct: f64,
+    pub memory_minutes: u32,
+    /// MemAvailable v Linuxu pod `pressure_pct` % MemTotal
+    pub pressure: bool,
+    pub pressure_pct: f64,
+    /// volné místo uvnitř distribuce (`df /`) pod `distro_free_pct` %
+    pub distro_disk: bool,
+    pub distro_free_pct: f64,
+    /// volné místo na disku Windows s VHDX pod `drive_free_pct` % nebo pod `drive_free_gb` GB
+    pub win_drive: bool,
+    pub drive_free_pct: f64,
+    pub drive_free_gb: f64,
+    /// volné místo pro data enginu (/var/lib/containers, /var/lib/docker) pod `engine_free_pct` %
+    pub engine_free: bool,
+    pub engine_free_pct: f64,
+    /// image + kontejnery + volume + build cache nad `engine_size_gb` GB (výchozí vypnuto)
+    pub engine_size: bool,
+    pub engine_size_gb: f64,
+    /// zobrazovat i jako oznámení ve Windows (jinak jen pruh na Přehledu)
+    pub toast: bool,
+    /// stejné upozornění nejvýš jednou za tolik minut
+    pub repeat_minutes: u32,
+}
+
+impl Default for AlertsConfig {
+    fn default() -> Self {
+        Self {
+            memory: true,
+            memory_pct: 85.0,
+            memory_minutes: 2,
+            pressure: true,
+            pressure_pct: 10.0,
+            distro_disk: true,
+            distro_free_pct: 10.0,
+            win_drive: true,
+            drive_free_pct: 10.0,
+            drive_free_gb: 5.0,
+            engine_free: true,
+            engine_free_pct: 10.0,
+            engine_size: false,
+            engine_size_gb: 50.0,
+            toast: true,
+            repeat_minutes: 60,
+        }
+    }
+}
+
+impl AlertsConfig {
+    /// Je zapnuté aspoň jedno upozornění na disk?
+    pub fn any_disk(&self) -> bool {
+        self.distro_disk || self.win_drive || self.engine_free || self.engine_size
+    }
 }
 
 impl Default for Config {
@@ -64,6 +126,7 @@ impl Default for Config {
             security_hint_dismissed: false,
             npipe: false,
             ipv6_localhost_relay: true,
+            alerts: AlertsConfig::default(),
         }
     }
 }

@@ -14,6 +14,8 @@ pub struct MemUi {
     pub freeing: bool,
     /// poslední výsledek uvolnění (i automatického)
     pub last: Option<Result<FreeEvent, String>>,
+    /// posunout přehled na tuto sekci (kliknutí na upozornění)
+    pub scroll_to: bool,
 }
 
 /// Výsledek uvolnění od workeru.
@@ -82,6 +84,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         .response;
     ui.add_space(4.0);
     if std::env::var_os("WLS_DEBUG_MEMORY").is_some() && now.is_some() && !DEBUG_DONE.swap(true, Ordering::Relaxed) {
+        head.scroll_to_me(Some(egui::Align::TOP));
+    }
+    if std::mem::take(&mut app.mem.scroll_to) {
         head.scroll_to_me(Some(egui::Align::TOP));
     }
 
