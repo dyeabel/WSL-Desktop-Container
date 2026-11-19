@@ -129,6 +129,11 @@ pub fn active() -> bool {
     hwnd() != 0 && TRAY.with(|t| t.borrow().is_some())
 }
 
+/// Je okno vidět (ne schované v oznamovací oblasti ani minimalizované)? Bez známého okna true.
+pub fn window_visible() -> bool {
+    hwnd() == 0 || win::visible(hwnd())
+}
+
 pub fn show_window() {
     if hwnd() != 0 {
         win::show(hwnd());

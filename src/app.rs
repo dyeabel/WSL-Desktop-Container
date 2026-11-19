@@ -805,11 +805,25 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// Schované okno: surové pohyby myši zahodit, ať nebudí další snímky (egui by jinak
+    /// po každém pohybu chtělo okamžitě překreslit).
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if !crate::tray::window_visible() {
+            raw_input.events.retain(|e| !matches!(e, egui::Event::MouseMoved(_) | egui::Event::PointerMoved(_)));
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain();
         self.follow_system_theme(ctx);
         self.handle_tray(ctx);
         self.shared.want_stats.store(self.page == Page::Dashboard, Ordering::Relaxed);
+        // Schované okno (oznamovací oblast, minimalizace): data se sbírají dál, jen se nic
+        // nekreslí. eframe totiž budí snímek při každém pohybu myši (okno si drží fokus) –
+        // takový snímek pak skoro nic nestojí. Zobrazení okna vyžádá překreslení samo.
+        if !crate::tray::window_visible() {
+            return;
+        }
         self.sidebar(ctx);
         self.status_bar(ctx);
         egui::CentralPanel::default()
