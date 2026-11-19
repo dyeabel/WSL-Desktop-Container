@@ -13,6 +13,8 @@ pub struct Config {
     pub port: u16,
     /// Interval automatického obnovení v sekundách
     pub refresh_secs: u64,
+    /// Interval obnovení a sběru dat, když je okno schované (oznamovací oblast, minimalizace)
+    pub background_refresh_secs: u64,
     /// Držet distribuci naživu skrytým procesem `wsl.exe -e sleep infinity`
     pub keep_alive: bool,
     /// Po spuštění aplikace automaticky nastartovat Docker
@@ -151,6 +153,7 @@ impl Default for Config {
             engine: crate::engine::Engine::Docker,
             port: 2375,
             refresh_secs: 3,
+            background_refresh_secs: 15,
             keep_alive: true,
             autostart_engine: false,
             close_to_tray: true,

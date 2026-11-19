@@ -335,7 +335,9 @@ impl Worker {
         loop {
             // s živým proudem událostí stačí občasná kontrola (stav WSL, záloha za ztracené události);
             // statistiky na přehledu se ale dál obnovují v nastaveném intervalu
-            let mut secs = self.cfg().refresh_secs.clamp(1, 600);
+            // okno schované -> vlastní (delší) interval; zobrazení okna pošle Cmd::Refresh hned
+            let cfg = self.cfg();
+            let mut secs = if crate::tray::window_visible() { cfg.refresh_secs } else { cfg.background_refresh_secs }.clamp(1, 600);
             if self.shared.events_live.load(Ordering::SeqCst) && !self.shared.want_stats.load(Ordering::Relaxed) {
                 secs = secs.max(30);
             }

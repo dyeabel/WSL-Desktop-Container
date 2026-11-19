@@ -306,7 +306,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui.add(egui::DragValue::new(&mut d.port).range(1024..=65535));
             ui.end_row();
             ui.label(t!("Obnovovat každých", "Refresh every"));
-            ui.add(egui::DragValue::new(&mut d.refresh_secs).range(1..=120).suffix(" s"));
+            ui.add(egui::DragValue::new(&mut d.refresh_secs).range(1..=120).suffix(" s"))
+                .on_hover_text(t!("Když je okno vidět: stav, statistiky kontejnerů a grafy na Přehledu.", "While the window is shown: status, container statistics and Overview charts."));
+            ui.end_row();
+            ui.label(t!("Na pozadí každých", "In the background every"));
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut d.background_refresh_secs).range(3..=600).suffix(" s"));
+                ui.label(muted(t!("okno schované v oznamovací oblasti nebo minimalizované", "window hidden in the tray or minimized")).small());
+            })
+            .response
+            .on_hover_text(t!(
+                "Sběr dat pokračuje i se schovaným oknem (historie, upozornění), jen řidčeji – šetří procesor. Po zobrazení okna se data hned obnoví.",
+                "Data collection continues with the window hidden (history, alerts), just less often – saves CPU. Showing the window refreshes the data right away."
+            ));
             ui.end_row();
             ui.label("");
             ui.checkbox(&mut d.keep_alive, t!("Udržovat distribuci naživu (doporučeno)", "Keep distribution alive (recommended)"));

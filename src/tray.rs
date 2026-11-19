@@ -68,16 +68,31 @@ fn tray_icon(color: [u8; 3]) -> Option<Icon> {
 
 #[cfg(windows)]
 mod win {
+    use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow, SW_HIDE, SW_RESTORE, SW_SHOW,
+        FindWindowW, GetWindowLongPtrW, GetWindowPlacement, IsIconic, IsWindowVisible, SetForegroundWindow, SetWindowLongPtrW,
+        SetWindowPlacement, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWMINNOACTIVE, WINDOWPLACEMENT,
+        WPF_SETMINPOSITION, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
     };
 
     fn h(hwnd: isize) -> windows_sys::Win32::Foundation::HWND {
         hwnd as _
     }
 
+    /// Okno jako nástrojové (bez tlačítka na hlavním panelu a v Alt+Tab), nebo zpět jako běžné.
+    /// Styl se mění u skrytého okna – jinak by hlavní panel změnu nezaznamenal.
+    unsafe fn set_tool(hwnd: isize, tool: bool) {
+        let ex = GetWindowLongPtrW(h(hwnd), GWL_EXSTYLE);
+        let ex = if tool { (ex | WS_EX_TOOLWINDOW as isize) & !(WS_EX_APPWINDOW as isize) } else { ex & !(WS_EX_TOOLWINDOW as isize) };
+        SetWindowLongPtrW(h(hwnd), GWL_EXSTYLE, ex);
+    }
+
     pub fn show(hwnd: isize) {
         unsafe {
+            if IsWindowVisible(h(hwnd)) == 0 || GetWindowLongPtrW(h(hwnd), GWL_EXSTYLE) & WS_EX_TOOLWINDOW as isize != 0 {
+                ShowWindow(h(hwnd), SW_HIDE);
+                set_tool(hwnd, false);
+            }
             if IsIconic(h(hwnd)) != 0 {
                 ShowWindow(h(hwnd), SW_RESTORE);
             }
@@ -86,9 +101,26 @@ mod win {
         }
     }
 
+    /// „Schovat do oznamovací oblasti“: okno se neskryje (SW_HIDE), ale minimalizuje se jako
+    /// nástrojové okno – zmizí z hlavního panelu i Alt+Tab. Skryté okno totiž od Windows nedostane
+    /// překreslení, které si eframe vyžádá, a jeho smyčka událostí pak běží naplno (celé jádro);
+    /// minimalizované okno eframe ošetřuje.
     pub fn hide(hwnd: isize) {
         unsafe {
             ShowWindow(h(hwnd), SW_HIDE);
+            set_tool(hwnd, true);
+            // minimalizovat mimo obrazovku – nástrojové okno by Windows jinak odložil jako
+            // lištu do levého dolního rohu
+            let mut wp: WINDOWPLACEMENT = std::mem::zeroed();
+            wp.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+            if GetWindowPlacement(h(hwnd), &mut wp) != 0 {
+                wp.flags |= WPF_SETMINPOSITION;
+                wp.ptMinPosition = POINT { x: -32000, y: -32000 };
+                wp.showCmd = SW_SHOWMINNOACTIVE as u32;
+                SetWindowPlacement(h(hwnd), &wp);
+            } else {
+                ShowWindow(h(hwnd), SW_SHOWMINNOACTIVE);
+            }
         }
     }
 

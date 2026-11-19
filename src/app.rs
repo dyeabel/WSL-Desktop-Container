@@ -130,6 +130,8 @@ pub struct App {
     pub autostart: Option<bool>,
     theme_checked: std::time::Instant,
     was_minimized: bool,
+    /// okno bylo v minulém snímku schované (po zobrazení se hned obnoví data)
+    was_hidden: bool,
 }
 
 impl App {
@@ -260,6 +262,7 @@ impl App {
             autostart: None,
             theme_checked: std::time::Instant::now(),
             was_minimized: false,
+            was_hidden: false,
         }
         .with_toasts(startup_toasts)
     }
@@ -822,7 +825,12 @@ impl eframe::App for App {
         // nekreslí. eframe totiž budí snímek při každém pohybu myši (okno si drží fokus) –
         // takový snímek pak skoro nic nestojí. Zobrazení okna vyžádá překreslení samo.
         if !crate::tray::window_visible() {
+            self.was_hidden = true;
             return;
+        }
+        // okno se právě zobrazilo – na pozadí se sbíralo řidčeji, obnovit hned
+        if std::mem::take(&mut self.was_hidden) {
+            self.send(Cmd::Refresh);
         }
         self.sidebar(ctx);
         self.status_bar(ctx);
