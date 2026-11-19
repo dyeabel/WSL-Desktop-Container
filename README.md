@@ -426,10 +426,14 @@ inside WSL; commands outside the fast path have the overhead of starting `wsl.ex
 
 With **Podman** the shim smooths over differences that break Docker scripts: `docker ps` and
 `docker compose ps` show the health state (`Up 5 seconds (healthy)`, from the libpod list API /
-the compose `Health` field); locally built images are listed without `localhost/` (`myapp:1.0`)
-and `compose ps` shows images without `docker.io/library/` (`nginx:alpine`); published ports show
-the host address (`0.0.0.0:8080->80/tcp`), which Podman's API leaves out; plain `docker version`
-is rendered like the Docker CLI with the compatible API version (1.41), not Podman's own version;
+the compose `Health` field – also in custom templates such as `--format '{{.Service}}={{.Status}}'`);
+image names are shown the way Docker shows them – without `localhost/` and `docker.io/library/`
+(`myapp:1.0`, `nginx:alpine`) in `images`, `compose ps` and `RepoTags` / `RepoDigests` of
+`image inspect`; `docker images <name>` and `--filter reference=` match these short names (Podman
+would also return the base image); published ports show the host address
+(`0.0.0.0:8080->80/tcp`), which Podman's API leaves out; `docker version` – plain or with
+`--format`, including `.Client.*` fields – reports the compatible API version (1.41), not
+Podman's own version;
 `docker events` reads the compatible API stream, so the default line, `--format json` and simple
 templates (`{{.Action}} {{.Actor.Attributes.name}}`) have Docker's schema, including
 `health_status: healthy` – more complex templates (`if`, `index`) go to `podman events` with Docker

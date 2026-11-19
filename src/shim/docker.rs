@@ -215,13 +215,13 @@ fn main() -> ExitCode {
         }
     }
 
-    if let Some((_, json)) = ps_plan {
+    if let Some((_, mode)) = &ps_plan {
         // stdout zachytit a vypsat upravený; stderr (chyby compose) jde rovnou
         cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::inherit());
         return match cmd.output() {
             Ok(o) => {
                 let text = String::from_utf8_lossy(&o.stdout);
-                let shown = if o.status.success() { podmanfix::render_compose_ps(&text, json) } else { None };
+                let shown = if o.status.success() { podmanfix::render_compose_ps(&text, mode) } else { None };
                 let mut so = std::io::stdout().lock();
                 let _ = so.write_all(shown.as_deref().unwrap_or(&text).as_bytes()).and_then(|_| so.flush());
                 ExitCode::from(o.status.code().unwrap_or(1).clamp(0, 255) as u8)

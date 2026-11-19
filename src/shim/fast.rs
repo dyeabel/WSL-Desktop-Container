@@ -564,6 +564,56 @@ pub fn familiar_name(name: &str) -> String {
     name.to_string()
 }
 
+/// Glob jako Go `path.Match` (jen `*` a `?`; `*` nepřekročí `/`).
+fn glob(pat: &[u8], s: &[u8]) -> bool {
+    match (pat.first(), s.first()) {
+        (None, None) => true,
+        (Some(b'*'), _) => glob(&pat[1..], s) || (!s.is_empty() && s[0] != b'/' && glob(pat, &s[1..])),
+        (Some(b'?'), Some(c)) if *c != b'/' => glob(&pat[1..], &s[1..]),
+        (Some(p), Some(c)) if p == c => glob(&pat[1..], &s[1..]),
+        _ => false,
+    }
+}
+
+/// Filtr `reference` (a `docker images <ref>`): vzor `název[:tag]` proti krátkému názvu řádku.
+pub fn ref_matches(pattern: &str, repo: &str, tag: &str) -> bool {
+    if repo == "<none>" {
+        return false;
+    }
+    let last = pattern.rfind('/').map(|i| i + 1).unwrap_or(0);
+    let (name, tag_pat) = match pattern[last..].find(':') {
+        Some(i) => (&pattern[..last + i], Some(&pattern[last + i + 1..])),
+        None => (pattern, None),
+    };
+    glob(familiar_name(name).as_bytes(), repo.as_bytes()) && tag_pat.is_none_or(|t| glob(t.as_bytes(), tag.as_bytes()))
+}
+
+/// `RepoTags` / `RepoDigests` v JSON obrazu na krátké názvy jako Docker
+/// (`docker.io/library/hello-world:latest` -> `hello-world:latest`, bez `localhost/`).
+pub fn familiar_repo_lists(raw: Vec<u8>) -> Vec<u8> {
+    let mut text = match String::from_utf8(raw) {
+        Ok(t) => t,
+        Err(e) => return e.into_bytes(),
+    };
+    for key in ["\"RepoTags\":", "\"RepoDigests\":"] {
+        let Some(k) = text.find(key) else { continue };
+        let start = k + key.len();
+        let Some(open) = text[start..].find('[').map(|i| start + i) else { continue };
+        if !text[start..open].trim().is_empty() {
+            continue;
+        }
+        let Some(close) = text[open..].find(']').map(|i| open + i) else { continue };
+        let Ok(list) = serde_json::from_str::<Vec<String>>(&text[open..=close]) else { continue };
+        let short: Vec<String> = list.iter().map(|r| familiar_name(r)).collect();
+        if short != list {
+            if let Ok(js) = serde_json::to_string(&short) {
+                text.replace_range(open..=close, &js);
+            }
+        }
+    }
+    text.into_bytes()
+}
+
 /// Rozdělí referenci na (název, tag, digest). None = neplatná reference (např. `<none>:<none>`).
 pub fn split_ref(r: &str) -> Option<(String, Option<String>, Option<String>)> {
     let (rest, digest) = match r.split_once('@') {
@@ -1048,7 +1098,9 @@ fn render_single(segs: &[Seg], lookup: impl Fn(&[String]) -> Option<String>) -> 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Cmd {
     Ps { all: bool, size: bool, limit: Option<i64>, filters: Vec<(String, String)>, trunc: bool, fmt: Fmt },
-    Images { all: bool, trunc: bool, filters: Vec<(String, String)>, fmt: Fmt },
+    /// refs = `docker images <ref>` a `--filter reference=` – filtruje se u nás podle krátkých
+    /// názvů (Podman by jinak porovnával plná jména a vracel i základní obrazy)
+    Images { all: bool, trunc: bool, filters: Vec<(String, String)>, refs: Vec<String>, fmt: Fmt },
     Volumes { filters: Vec<(String, String)>, fmt: Fmt },
     Networks { trunc: bool, filters: Vec<(String, String)>, fmt: Fmt },
     Version(Vec<Seg>),
@@ -1211,10 +1263,16 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
             Ok(Cmd::Ps { all: fl.has("all") || limit.is_some(), size, limit, filters, trunc: !fl.has("no-trunc"), fmt })
         }
         "images" => {
-            let fl = parse_flags(rest, &[(Some('a'), "all"), (Some('q'), "quiet"), (None, "no-trunc")], &[(None, "format"), (Some('f'), "filter")])?;
-            let filters = filters(&fl, &["dangling", "reference", "label"])?;
+            let fl = parse_flags_pos(rest, &[(Some('a'), "all"), (Some('q'), "quiet"), (None, "no-trunc")], &[(None, "format"), (Some('f'), "filter")])?;
+            let mut filters = filters(&fl, &["dangling", "reference", "label"])?;
+            if fl.pos.len() > 1 {
+                return Err("\"docker images\" requires at most 1 argument".into());
+            }
+            let mut refs: Vec<String> = fl.pos.clone();
+            refs.extend(filters.iter().filter(|f| f.0 == "reference").map(|f| f.1.clone()));
+            filters.retain(|f| f.0 != "reference");
             let fmt = resolve_format(fl.last("format"), fl.has("quiet"), IMAGE_TABLE, "{{.ID}}", IMAGE_HEADERS, true)?;
-            Ok(Cmd::Images { all: fl.has("all"), trunc: !fl.has("no-trunc"), filters, fmt })
+            Ok(Cmd::Images { all: fl.has("all"), trunc: !fl.has("no-trunc"), filters, refs, fmt })
         }
         "volumes" => {
             let fl = parse_flags(rest, &[(Some('q'), "quiet")], &[(None, "format"), (Some('f'), "filter")])?;
@@ -1395,8 +1453,11 @@ impl Cmd {
                 let x = Ctx { trunc: *trunc, now, tz };
                 Ok(emit(fmt, PS_HEADERS, &rows, |c, f| ps_field(c, f, &x)))
             }
-            Cmd::Images { trunc, fmt, .. } => {
-                let rows = image_rows(&arr(body)?);
+            Cmd::Images { trunc, fmt, refs, .. } => {
+                let mut rows = image_rows(&arr(body)?);
+                if !refs.is_empty() {
+                    rows.retain(|r| refs.iter().any(|p| ref_matches(p, &r.repo, &r.tag)));
+                }
                 let x = Ctx { trunc: *trunc, now, tz };
                 Ok(emit(fmt, IMAGE_HEADERS, &rows, |r, f| image_field(r, f, &x)))
             }
@@ -1517,6 +1578,11 @@ fn inspect_lookup(v: &Value, path: &[String]) -> Option<String> {
             None if i == 0 && k == "ID" => obj.get("Id")?,
             None => return None,
         };
+    }
+    // pole skalárů jako Go šablona: `[a b]` (např. `{{.RepoTags}}`)
+    if let Value::Array(items) = cur {
+        let parts: Option<Vec<String>> = items.iter().map(scalar).collect();
+        return parts.map(|p| format!("[{}]", p.join(" ")));
     }
     scalar(cur)
 }
@@ -1678,7 +1744,7 @@ pub fn execute(cmd: &Cmd, fetch: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>
                     }
                 }
                 // neexistující objekt: chybovou hlášku a návratový kód ať vypíše CLI
-                raws.push(found.ok_or_else(|| format!("no such object {name:?}"))?);
+                raws.push(familiar_repo_lists(found.ok_or_else(|| format!("no such object {name:?}"))?));
             }
             vec![(1, inspect_output(&raws, tmpl.as_deref())?.into_bytes())]
         }
@@ -1902,17 +1968,52 @@ pub fn podman_version_text(v: &Value, client_version: &str, context: &str) -> St
     o
 }
 
-/// `docker version` bez přepínačů z API (jen Podman). None = nechat na CLI.
-pub fn try_podman_version(args: &[String], port: u16, tls: bool, context: &str) -> Option<String> {
-    if args.len() != 1 || args[0] != "version" {
-        return None;
+/// Pole `.Client.*` pro Podman: klientem je shim, verze API je ta kompatibilní ze serveru.
+fn podman_client_lookup(v: &Value, f: &str, context: &str) -> Option<String> {
+    match f {
+        "Version" => Some(env!("CARGO_PKG_VERSION").into()),
+        "APIVersion" | "DefaultAPIVersion" => Some(s(v, "ApiVersion").to_string()),
+        "Os" => Some("windows".into()),
+        "Arch" => Some("amd64".into()),
+        "Context" => Some(context.into()),
+        _ => None,
     }
+}
+
+/// `docker version` z API (jen Podman): bez přepínačů ve tvaru Docker CLI, s `--format`
+/// i s poli `.Client.*` (jinak by šablonu dostal `podman version`, který hlásí API 5.x).
+/// None = nechat na CLI.
+pub fn try_podman_version(args: &[String], port: u16, tls: bool, context: &str) -> Option<String> {
+    let tmpl = match args {
+        [v] if v == "version" => None,
+        [v, f, t] if v == "version" && (f == "--format" || f == "-f") => Some(t.clone()),
+        [v, f] if v == "version" => Some(f.strip_prefix("--format=").or_else(|| f.strip_prefix("-f="))?.to_string()),
+        _ => return None,
+    };
+    let segs = match &tmpl {
+        Some(t) if t == "json" || t.starts_with("table") => return None,
+        Some(t) => Some(parse_template(&t.trim_matches(' ').replace(r"\t", "\t").replace(r"\n", "\n")).ok()?),
+        None => None,
+    };
     let tls = if tls { Some(Arc::new(crate::apitls::tls_config(&crate::apitls::tls_dir()?).ok()?)) } else { None };
     let v: Value = serde_json::from_slice(&http_get_raw(port, tls, "/version").ok()?).ok()?;
     if s(&v, "ApiVersion").is_empty() {
         return None;
     }
-    Some(podman_version_text(&v, env!("CARGO_PKG_VERSION"), context))
+    match segs {
+        None => Some(podman_version_text(&v, env!("CARGO_PKG_VERSION"), context)),
+        Some(segs) => podman_version_format(&v, &segs, context),
+    }
+}
+
+/// `docker version --format …` pro Podman; None = neznámé pole.
+pub fn podman_version_format(v: &Value, segs: &[Seg], context: &str) -> Option<String> {
+    let out = render_single(segs, |p| match p {
+        [c, f] if c == "Client" => podman_client_lookup(v, f, context),
+        _ => version_lookup(v, p),
+    })
+    .ok()?;
+    Some(out)
 }
 
 /// Celá rychlá cesta: rozbor, dotazy na API, výstup. `Err(důvod)` = použij wsl.exe.
@@ -2108,6 +2209,49 @@ nginx             latest    c05939e13a61   13 days ago          167MB
     }
 
     #[test]
+    fn images_reference_like_docker() {
+        assert!(ref_matches("repro-app", "repro-app", "1.0"));
+        assert!(!ref_matches("repro-app", "alpine", "3.20"));
+        assert!(ref_matches("repro-app:1.0", "repro-app", "1.0"));
+        assert!(!ref_matches("repro-app:2.0", "repro-app", "1.0"));
+        assert!(ref_matches("docker.io/library/alpine", "alpine", "3.20"));
+        assert!(ref_matches("localhost/repro-app", "repro-app", "1.0"));
+        assert!(ref_matches("ngi*", "nginx", "alpine"));
+        assert!(!ref_matches("*", "team/app", "1"));
+        assert!(!ref_matches("*", "<none>", "<none>"));
+        let imgs = json!([
+            {"Id":"sha256:aaaa","Created":2,"Size":1,"RepoTags":["localhost/repro-app:1.0"]},
+            {"Id":"sha256:bbbb","Created":1,"Size":1,"RepoTags":["docker.io/library/alpine:3.20"]}
+        ]);
+        for args in [&["images", "--format", "{{.Repository}}:{{.Tag}}", "repro-app"][..], &["images", "repro-app", "--format", "{{.Repository}}:{{.Tag}}"]] {
+            let cmd = parse(&a(args)).unwrap();
+            assert_eq!(cmd.api_path(), "/images/json");
+            assert_eq!(cmd.output(&imgs, NOW, utc).unwrap(), "repro-app:1.0\n");
+        }
+        assert!(parse(&a(&["images", "a", "b"])).is_err());
+    }
+
+    #[test]
+    fn inspect_repo_tags_familiar() {
+        let raw = br#"{"Id":"sha256:x","RepoTags":["docker.io/library/hello-world:latest","localhost/app:1"],"RepoDigests": ["docker.io/library/hello-world@sha256:abc"],"Config":{"Labels":{"x":"docker.io/library/keep"}}}"#.to_vec();
+        let out = String::from_utf8(familiar_repo_lists(raw)).unwrap();
+        assert!(out.contains(r#""RepoTags":["hello-world:latest","app:1"]"#), "{out}");
+        assert!(out.contains(r#""RepoDigests": ["hello-world@sha256:abc"]"#), "{out}");
+        assert!(out.contains("docker.io/library/keep"), "{out}");
+        let segs = parse_template("{{.RepoTags}}").unwrap();
+        assert_eq!(inspect_output(&[out.into_bytes()], Some(&segs)).unwrap(), "[hello-world:latest app:1]\n");
+    }
+
+    #[test]
+    fn podman_version_multi_field() {
+        let v = json!({"Version":"5.4.2","ApiVersion":"1.41"});
+        let segs = parse_template("client={{.Client.Version}} server={{.Server.Version}} api={{.Server.APIVersion}} capi={{.Client.APIVersion}}").unwrap();
+        let out = podman_version_format(&v, &segs, "default").unwrap();
+        assert_eq!(out, format!("client={} server=5.4.2 api=1.41 capi=1.41\n", env!("CARGO_PKG_VERSION")));
+        assert!(podman_version_format(&v, &parse_template("{{.Client.GitCommit}}").unwrap(), "default").is_none());
+    }
+
+    #[test]
     fn podman_ports_without_ip() {
         let p = json!([{"PrivatePort":80,"PublicPort":18080,"Type":"tcp"},{"PrivatePort":443,"Type":"tcp"}]);
         assert_eq!(displayable_ports(p.as_array().unwrap()), "443/tcp, 0.0.0.0:18080->80/tcp");
@@ -2202,7 +2346,7 @@ nginx             latest    c05939e13a61   13 days ago          167MB
             &["ps", "-n"],
             &["ps", "-n", "x"],
             &["ps", "--"],
-            &["images", "nginx"],
+            &["images", "a", "b"],
             &["images", "--digests"],
             &["images", "--format", "{{.Foo}}"],
             &["volume", "inspect", "x"],
@@ -2283,7 +2427,7 @@ nginx             latest    c05939e13a61   13 days ago          167MB
         );
         assert!(lines[1].contains(r#""Containers":"1","#) && lines[1].contains(r#""Digest":"\u003cnone\u003e""#) && lines[1].contains(r#""SharedSize":"0B","Size":"167MB","Tag":"latest","UniqueSize":"166.9MB","VirtualSize":"166.9MB"}"#), "{}", lines[1]);
         let cmd = parse(&a(&["images", "-a", "-f", "dangling=true", "--filter", "reference=ngi*"])).unwrap();
-        assert_eq!(cmd.api_path(), "/images/json?all=1&filters=%7B%22dangling%22%3A%7B%22true%22%3Atrue%7D%2C%22reference%22%3A%7B%22ngi%2A%22%3Atrue%7D%7D");
+        assert_eq!(cmd.api_path(), "/images/json?all=1&filters=%7B%22dangling%22%3A%7B%22true%22%3Atrue%7D%7D");
     }
 
     #[test]
@@ -2368,7 +2512,8 @@ nginx             latest    c05939e13a61   13 days ago          167MB
         assert!(out.starts_with("[\n    {\n        \"Id\": \"502bc544a072\",\n"), "{out}");
         assert!(out.ends_with("        \"SizeRw\": null\n    }\n]\n"), "{out}");
         let (out, _) = run(&["image", "inspect", "-f", "{{json .}}", "docker.io/library/redis:latest"], &mut fetch).unwrap();
-        assert_eq!(out, format!("{}\n", String::from_utf8(img.clone()).unwrap()));
+        // RepoTags krátce jako Docker
+        assert_eq!(out, format!("{}\n", String::from_utf8(img.clone()).unwrap().replace("docker.io/library/redis:latest", "redis:latest")));
         // neexistující objekt, kontejner jako obraz, nebo neskalární pole -> wsl.exe
         assert!(run(&["inspect", "db", "nope"], &mut fetch).is_err());
         assert!(run(&["image", "inspect", "db"], &mut fetch).is_err());

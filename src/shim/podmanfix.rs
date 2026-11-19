@@ -128,10 +128,21 @@ pub fn buildx_cli(args: &[String], cli: &[String]) -> Option<Vec<String>> {
 const COMPOSE_VALUE_FLAGS: &[&str] =
     &["-f", "--file", "-p", "--project-name", "--project-directory", "--env-file", "--profile", "--ansi", "--progress", "--parallel"];
 
-/// `docker compose ps` s výchozí tabulkou nebo `--format json`: compose bere `Status`
-/// z kompatibilního API Podmanu, kde chybí stav healthchecku (ten má jen v poli `Health`).
-/// Vrací (argumenty s `--format json`, výstup má být JSON); None = spustit beze změny.
-pub fn compose_ps(args: &[String]) -> Option<(Vec<String>, bool)> {
+/// Jak vypsat `compose ps` spuštěné s `--format json`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PsOut {
+    /// výchozí tabulka
+    Table,
+    /// `--format json`
+    Json,
+    /// vlastní šablona (`{{.Service}}={{.Status}}`)
+    Tmpl(Vec<crate::fast::Seg>),
+}
+
+/// `docker compose ps` s výchozí tabulkou, `--format json` nebo jednoduchou šablonou: compose bere
+/// `Status` z kompatibilního API Podmanu, kde chybí stav healthchecku (ten má jen v poli `Health`).
+/// Vrací (argumenty s `--format json`, jak vypsat); None = spustit beze změny.
+pub fn compose_ps(args: &[String]) -> Option<(Vec<String>, PsOut)> {
     let mut i = match args.first() {
         Some(a) if a == "compose" => 1,
         _ => return None,
@@ -150,7 +161,7 @@ pub fn compose_ps(args: &[String]) -> Option<(Vec<String>, bool)> {
         return None;
     }
     let mut out: Vec<String> = args[..=i].to_vec();
-    let mut json = false;
+    let mut mode = PsOut::Table;
     let mut it = args[i + 1..].iter();
     while let Some(a) = it.next() {
         let fmt = if a == "--format" {
@@ -159,15 +170,23 @@ pub fn compose_ps(args: &[String]) -> Option<(Vec<String>, bool)> {
             a.strip_prefix("--format=").map(String::from)
         };
         match fmt.as_deref() {
-            Some("json") => json = true,
-            Some("table") => {}
-            Some(_) => return None,
+            Some("json") => mode = PsOut::Json,
+            Some("table") => mode = PsOut::Table,
+            // `table …` s vlastními sloupci nechá na compose
+            Some(t) if t.starts_with("table") => return None,
+            Some(t) => {
+                let segs = crate::fast::parse_template(&t.replace(r"\t", "\t").replace(r"\n", "\n")).ok()?;
+                if segs.iter().any(|s| matches!(s, crate::fast::Seg::Field(p) if p.len() != 1)) {
+                    return None;
+                }
+                mode = PsOut::Tmpl(segs);
+            }
             None if matches!(a.as_str(), "-q" | "--quiet" | "--services") => return None,
             None => out.push(a.clone()),
         }
     }
     out.extend(["--format".to_string(), "json".to_string()]);
-    Some((out, json))
+    Some((out, mode))
 }
 
 /// Doplní do `Status` stav healthchecku z pole `Health` (jako Docker: `Up 5 seconds (healthy)`).
@@ -213,7 +232,7 @@ fn docker_like(c: &mut serde_json::Value) {
 
 /// Výstup `compose ps --format json` (pole, nebo objekt na řádek) -> tabulka jako Docker
 /// Compose, nebo JSON s doplněným stavem. None = výstup nerozumíme (vypíše se beze změny).
-pub fn render_compose_ps(stdout: &str, json: bool) -> Option<String> {
+pub fn render_compose_ps(stdout: &str, mode: &PsOut) -> Option<String> {
     let t = stdout.trim();
     let mut rows: Vec<serde_json::Value> = if t.is_empty() {
         vec![]
@@ -224,7 +243,25 @@ pub fn render_compose_ps(stdout: &str, json: bool) -> Option<String> {
     };
     rows.iter_mut().for_each(with_health);
     rows.iter_mut().for_each(docker_like);
-    if json {
+    if let PsOut::Tmpl(segs) = mode {
+        let mut s = String::new();
+        for r in &rows {
+            for seg in segs {
+                match seg {
+                    crate::fast::Seg::Lit(l) => s.push_str(l),
+                    crate::fast::Seg::Field(p) => match r.get(p[0].as_str()) {
+                        None | Some(serde_json::Value::Null) => {}
+                        Some(serde_json::Value::String(v)) => s.push_str(v),
+                        Some(v) => s.push_str(&v.to_string()),
+                    },
+                    crate::fast::Seg::JsonDot => s.push_str(&serde_json::to_string(r).ok()?),
+                }
+            }
+            s.push('\n');
+        }
+        return Some(s);
+    }
+    if *mode == PsOut::Json {
         let mut s = String::new();
         for r in &rows {
             s.push_str(&serde_json::to_string(r).ok()?);
@@ -275,36 +312,46 @@ mod tests {
     }
 
     #[test]
+    fn compose_ps_custom_template_has_health() {
+        let out = r#"{"Name":"r-cache-1","Service":"cache","Status":"Up 2 seconds","Health":"healthy","Publishers":[]}"#;
+        let (_, mode) = compose_ps(&a(&["compose", "-p", "r", "ps", "--format", r"{{.Service}}={{.Status}}	{{.Health}}"])).unwrap();
+        assert_eq!(render_compose_ps(out, &mode).unwrap(), "cache=Up 2 seconds (healthy)	healthy
+");
+    }
+
+    #[test]
     fn compose_ps_image_and_ports_like_docker() {
         let out = r#"{"Name":"p-web-1","Image":"docker.io/library/nginx:alpine","Command":"x","Service":"web","RunningFor":"1 second ago","Status":"Up 1 second","Health":"","Ports":"80/tcp","Publishers":[{"Protocol":"tcp","PublishedPort":18080,"TargetPort":80,"URL":""}]}
 {"Name":"p-app-1","Image":"localhost/compat-app:1.0","Command":"y","Service":"app","RunningFor":"1 second ago","Status":"Up 1 second","Health":"","Ports":"","Publishers":[]}"#;
-        let t = render_compose_ps(out, false).unwrap();
+        let t = render_compose_ps(out, &PsOut::Table).unwrap();
         assert!(t.contains("nginx:alpine ") && !t.contains("docker.io/"), "{t}");
         assert!(t.contains("0.0.0.0:18080->80/tcp"), "{t}");
         assert!(t.contains("compat-app:1.0") && !t.contains("localhost/"), "{t}");
-        let j = render_compose_ps(out, true).unwrap();
+        let j = render_compose_ps(out, &PsOut::Json).unwrap();
         assert!(j.contains(r#""Ports":"0.0.0.0:18080->80/tcp""#) && j.contains(r#""Image":"nginx:alpine""#), "{j}");
     }
 
     #[test]
     fn compose_ps_with_health() {
-        let (args, json) = compose_ps(&a(&["compose", "-f", "x.yml", "-p", "ps", "ps", "-a"])).unwrap();
-        assert_eq!((args, json), (a(&["compose", "-f", "x.yml", "-p", "ps", "ps", "-a", "--format", "json"]), false));
-        assert!(compose_ps(&a(&["compose", "ps", "--format", "json"])).unwrap().1);
+        let (args, mode) = compose_ps(&a(&["compose", "-f", "x.yml", "-p", "ps", "ps", "-a"])).unwrap();
+        assert_eq!((args, mode), (a(&["compose", "-f", "x.yml", "-p", "ps", "ps", "-a", "--format", "json"]), PsOut::Table));
+        assert_eq!(compose_ps(&a(&["compose", "ps", "--format", "json"])).unwrap().1, PsOut::Json);
         assert!(compose_ps(&a(&["compose", "ps", "-q"])).is_none());
-        assert!(compose_ps(&a(&["compose", "ps", "--format", "{{.Name}}"])).is_none());
+        assert!(matches!(compose_ps(&a(&["compose", "ps", "--format", "{{.Name}}"])).unwrap().1, PsOut::Tmpl(_)));
+        assert!(compose_ps(&a(&["compose", "ps", "--format", "table {{.Name}}"])).is_none());
+        assert!(compose_ps(&a(&["compose", "ps", "--format", "{{.State.Health}}"])).is_none());
         assert!(compose_ps(&a(&["compose", "up", "-d"])).is_none());
         assert!(compose_ps(&a(&["ps"])).is_none());
 
         let out = r#"{"Command":"\"sleep 600\"","Health":"healthy","Image":"alpine:latest","Name":"p-web-1","Ports":"","RunningFor":"8 seconds ago","Service":"web","State":"running","Status":"Up 7 seconds"}
 {"Command":"\"sleep 1\"","Health":"","Image":"alpine:latest","Name":"p-db-1","Ports":"0.0.0.0:5432->5432/tcp","RunningFor":"9 seconds ago","Service":"db","State":"running","Status":"Up 8 seconds"}"#;
-        let t = render_compose_ps(out, false).unwrap();
+        let t = render_compose_ps(out, &PsOut::Table).unwrap();
         let lines: Vec<&str> = t.lines().collect();
         assert!(lines[0].starts_with("NAME      IMAGE           COMMAND       SERVICE   CREATED         STATUS"), "{t}");
         assert!(lines[1].contains("Up 7 seconds (healthy)") && lines[2].contains("Up 8 seconds") && !lines[2].contains('('), "{t}");
-        assert!(render_compose_ps(out, true).unwrap().lines().next().unwrap().contains(r#""Status":"Up 7 seconds (healthy)""#));
-        assert_eq!(render_compose_ps("", false).unwrap().trim_end(), "NAME      IMAGE     COMMAND   SERVICE   CREATED   STATUS    PORTS");
-        assert!(render_compose_ps("nesmysl", false).is_none());
+        assert!(render_compose_ps(out, &PsOut::Json).unwrap().lines().next().unwrap().contains(r#""Status":"Up 7 seconds (healthy)""#));
+        assert_eq!(render_compose_ps("", &PsOut::Table).unwrap().trim_end(), "NAME      IMAGE     COMMAND   SERVICE   CREATED   STATUS    PORTS");
+        assert!(render_compose_ps("nesmysl", &PsOut::Table).is_none());
     }
 
     #[test]
