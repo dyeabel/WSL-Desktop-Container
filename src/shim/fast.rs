@@ -1944,12 +1944,16 @@ fn docker_built(t: &str) -> String {
 
 /// `docker version` (bez přepínačů) pro Podman ve tvaru Docker CLI: verze API z kompatibilního
 /// API (1.41), ne verze Podmanu, kterou vypisuje `podman version`.
-pub fn podman_version_text(v: &Value, client_version: &str, context: &str) -> String {
+pub fn podman_version_text(v: &Value, wls_version: &str, context: &str) -> String {
     let f = |k: &str| s(v, k).to_string();
     let api = f("ApiVersion");
     let mut o = String::new();
-    o.push_str("Client: WLS Desktop (docker shim)\n");
-    o.push_str(&format!(" Version:           {client_version}\n API version:       {api}\n OS/Arch:           windows/amd64\n Context:           {context}\n\n"));
+    // verze klienta jako u Dockeru (podle API), verze WLS Desktop jen tady v hlavičce
+    o.push_str(&format!("Client: WLS Desktop {wls_version} (docker shim)\n"));
+    o.push_str(&format!(
+        " Version:           {}\n API version:       {api}\n OS/Arch:           windows/amd64\n Context:           {context}\n\n",
+        docker_version_for_api(&api)
+    ));
     o.push_str("Server: Podman Engine\n Engine:\n");
     o.push_str(&format!("  Version:          {}\n", f("Version")));
     let min = f("MinAPIVersion");
@@ -1968,10 +1972,30 @@ pub fn podman_version_text(v: &Value, client_version: &str, context: &str) -> St
     o
 }
 
+/// Verze Docker CLI, která odpovídá verzi API (`1.41` -> `20.10.0`): skripty kontrolují
+/// `{{.Client.Version}}` proti verzím Dockeru („≥ 20.10“), verze WLS Desktop (0.x) by je zmátla.
+pub fn docker_version_for_api(api: &str) -> String {
+    const MAP: &[(&str, &str)] = &[
+        ("1.40", "19.03.0"),
+        ("1.41", "20.10.0"),
+        ("1.42", "23.0.0"),
+        ("1.43", "24.0.0"),
+        ("1.44", "25.0.0"),
+        ("1.45", "26.0.0"),
+        ("1.46", "27.0.0"),
+        ("1.47", "27.3.0"),
+        ("1.48", "28.0.0"),
+        ("1.49", "28.2.0"),
+        ("1.50", "28.3.0"),
+        ("1.51", "28.4.0"),
+    ];
+    MAP.iter().find(|m| m.0 == api).map(|m| m.1.to_string()).unwrap_or_else(|| "20.10.0".into())
+}
+
 /// Pole `.Client.*` pro Podman: klientem je shim, verze API je ta kompatibilní ze serveru.
 fn podman_client_lookup(v: &Value, f: &str, context: &str) -> Option<String> {
     match f {
-        "Version" => Some(env!("CARGO_PKG_VERSION").into()),
+        "Version" => Some(docker_version_for_api(s(v, "ApiVersion"))),
         "APIVersion" | "DefaultAPIVersion" => Some(s(v, "ApiVersion").to_string()),
         "Os" => Some("windows".into()),
         "Arch" => Some("amd64".into()),
@@ -2247,7 +2271,10 @@ nginx             latest    c05939e13a61   13 days ago          167MB
         let v = json!({"Version":"5.4.2","ApiVersion":"1.41"});
         let segs = parse_template("client={{.Client.Version}} server={{.Server.Version}} api={{.Server.APIVersion}} capi={{.Client.APIVersion}}").unwrap();
         let out = podman_version_format(&v, &segs, "default").unwrap();
-        assert_eq!(out, format!("client={} server=5.4.2 api=1.41 capi=1.41\n", env!("CARGO_PKG_VERSION")));
+        // klient jako Docker CLI podle API (skripty „≥ 20.10“), ne verze WLS Desktop
+        assert_eq!(out, "client=20.10.0 server=5.4.2 api=1.41 capi=1.41\n");
+        assert_eq!(docker_version_for_api("1.43"), "24.0.0");
+        assert_eq!(docker_version_for_api("9.99"), "20.10.0");
         assert!(podman_version_format(&v, &parse_template("{{.Client.GitCommit}}").unwrap(), "default").is_none());
     }
 
@@ -2265,6 +2292,7 @@ nginx             latest    c05939e13a61   13 days ago          167MB
             "BuildTime":"2025-12-21T17:42:01+01:00","Components":[{"Name":"Podman Engine","Version":"5.4.2"},{"Name":"Conmon","Version":"conmon version 2.1.12"},{"Name":"OCI Runtime (crun)","Version":"crun version 1.21\ncommit: x"}]});
         let t = podman_version_text(&v, "0.6.2", "default");
         assert!(t.contains(" API version:       1.41\n"), "{t}");
+        assert!(t.starts_with("Client: WLS Desktop 0.6.2 (docker shim)\n Version:           20.10.0\n"), "{t}");
         assert!(t.contains("  API version:      1.41 (minimum version 1.24)\n"), "{t}");
         assert!(t.contains("  Version:          5.4.2\n") && t.contains("Built:            Sun Dec 21 17:42:01 2025"), "{t}");
         assert!(t.contains(" OCI Runtime (crun):\n  Version:          crun version 1.21\n"), "{t}");

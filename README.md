@@ -433,7 +433,9 @@ image names are shown the way Docker shows them – without `localhost/` and `do
 would also return the base image); published ports show the host address
 (`0.0.0.0:8080->80/tcp`), which Podman's API leaves out; `docker version` – plain or with
 `--format`, including `.Client.*` fields – reports the compatible API version (1.41), not
-Podman's own version;
+Podman's own version, and the client version of the matching Docker release (`20.10.0` for
+API 1.41), so version checks in scripts pass; the WLS Desktop version appears only in the plain
+output header;
 `docker events` reads the compatible API stream, so the default line, `--format json` and simple
 templates (`{{.Action}} {{.Actor.Attributes.name}}`) have Docker's schema, including
 `health_status: healthy` – more complex templates (`if`, `index`) go to `podman events` with Docker
