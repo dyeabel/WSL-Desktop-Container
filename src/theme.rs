@@ -159,6 +159,23 @@ fn style(ctx: &egui::Context) {
         // ruka nad vším klikacím (tlačítka, ikony, odkazy)
         v.interact_cursor = Some(egui::CursorIcon::PointingHand);
         s.spacing.window_margin = egui::Margin::same(14);
+        // posuvník: tenký, plovoucí nad obsahem, bez podkladu, tlumený; po najetí se rozšíří
+        s.spacing.scroll = egui::style::ScrollStyle {
+            floating: true,
+            bar_width: 8.0,
+            floating_width: 4.0,
+            floating_allocated_width: 0.0,
+            handle_min_length: 24.0,
+            bar_inner_margin: 2.0,
+            bar_outer_margin: 0.0,
+            foreground_color: true,
+            dormant_background_opacity: 0.0,
+            active_background_opacity: 0.0,
+            interact_background_opacity: 0.0,
+            dormant_handle_opacity: 0.25,
+            active_handle_opacity: 0.4,
+            interact_handle_opacity: 0.65,
+        };
         s.spacing.item_spacing = egui::vec2(8.0, 7.0);
         // jednotná výška ovládacích prvků (tlačítka, pole, seznamy, menu) = CONTROL_H
         s.spacing.button_padding = egui::vec2(10.0, 6.0);

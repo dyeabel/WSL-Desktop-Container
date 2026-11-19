@@ -813,12 +813,14 @@ impl eframe::App for App {
         self.sidebar(ctx);
         self.status_bar(ctx);
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::bg()).inner_margin(egui::Margin { left: 28, right: 28, top: 20, bottom: 12 }))
+            // vpravo bez okraje: posuvník je u okraje okna, odsazení 28 px má až obsah
+            .frame(egui::Frame::new().fill(theme::bg()).inner_margin(egui::Margin { left: 28, right: 0, top: 20, bottom: 12 }))
             .show(ctx, |ui| {
                 let viewport_w = ui.available_width();
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    // obsah vždy přesně na šířku okna – jinak si scroll oblast „pamatuje“ širší obsah
-                    ui.set_max_width(viewport_w - 14.0);
+                    // obsah vždy přesně na šířku okna (bez pravého odsazení) – jinak si scroll
+                    // oblast „pamatuje“ širší obsah; plovoucí posuvník leží v odsazení
+                    ui.set_max_width(viewport_w - 28.0);
                     match self.page {
                     Page::Dashboard => ui::dashboard::show(self, ui),
                     Page::Containers => ui::containers::show(self, ui),
