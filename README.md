@@ -185,14 +185,35 @@ containers and compose stacks. Sampling runs while the Overview is open, otherwi
 The container detail has a **Network** tab: **in** – ports the container's processes really listen
 on (`ss` in the container's network namespace via `nsenter`, works for images without tools),
 compared with the published ones (*not published*, *nothing listens*, *loopback only*); **out** –
-established connections with remote address, protocol and process, refreshed every ~2 s. The
-container list shows a compact in / out count and a warning when a published port has no listener.
+established connections with remote address, protocol and process, refreshed every ~2 s, with
+**traffic per TCP connection** (bytes and rate from `ss -ti`), a chart of the container's total
+traffic and a list of **recently closed connections** (last 15 minutes). UDP has no per-connection
+counters (no conntrack). The container list shows a compact in / out count and a warning when a
+published port has no listener. The *Ports* tab also checks other running WSL distributions
+(read-only, at most every 10 s while the tab is open, never starting a stopped one) and marks a
+published port that another distribution listens on as a conflict.
 
 **`localhost` for published ports:** in NAT mode WSL forwards ports to Windows only on IPv4
 `127.0.0.1`, and `localhost` → `::1` hangs until a timeout. The app therefore relays every
 published TCP port also on `[::1]:<port>` → `127.0.0.1:<port>` (*Settings → Published ports also on
 localhost IPv6*, on by default; not needed and not started in `mirrored` mode; a port already taken
 on `[::1]` is reported as a conflict). The relay runs only while the app runs; UDP is not relayed.
+
+### Alerts
+
+Windows notifications (and a banner on the Overview with an action button) when a threshold is
+crossed – *Settings → Memory and disk alerts*, each with its own switch and threshold:
+
+- VmmemWSL above 85 % of the WSL memory limit for 2 minutes (offers *Free memory*);
+- Linux memory pressure – MemAvailable below 10 %;
+- free space inside the distribution (`df /`, with the VHDX size), on the Windows drive holding
+  the VHDX (below 10 % or 5 GB) and for the engine data (`/var/lib/containers` or
+  `/var/lib/docker`);
+- engine storage (images, containers, volumes, build cache) above a size – off by default.
+
+Memory is checked with every memory sample, disk at most every 5 minutes. Alerts have hysteresis
+(they re-arm only 5 points below the threshold) and repeat at most once per hour; clicking the
+notification opens the relevant page.
 
 ### WSL memory
 

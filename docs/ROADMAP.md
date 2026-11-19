@@ -32,6 +32,8 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
 - Network overview: VM / container / stack traffic, published ports with Windows state, distro
   listeners, network map; ports in / out per container (nsenter + ss).
 - `localhost` (IPv6 `::1`) relay for published ports.
+- Traffic per connection (ss -ti), connection history, port conflicts with other WSL
+  distributions; memory / disk threshold alerts with banner and Windows notifications.
 
 ## Recommended next steps
 
@@ -39,10 +41,10 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
    account (or SignPath for OSS) and submit the winget manifest to `microsoft/winget-pkgs`.
 2. ★ **Self-update**: check GitHub releases and offer the new portable ZIP.
 3. ★ **Embedded terminal** inside the app instead of Windows Terminal (exec / console).
-4. ★ **Traffic per connection** in the container Network tab (conntrack accounting) and a
-   history of connections; detect port conflicts with other WSL distributions.
-5. ★ **Alerts** for memory / disk thresholds (e.g. VmmemWSL above 80 % of the limit, VHDX almost
-   full) as Windows notifications.
+4. ★ **Resource history across restarts** – keep memory / traffic / disk history on disk
+   (a small ring file) so trends survive app restarts; weekly summary.
+5. ★ **Per-container limits from the UI** – set memory / CPU limits (`docker update`) from the
+   detail and show them in the memory overview.
 
 ## Containers, images, compose
 
