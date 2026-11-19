@@ -34,6 +34,11 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
 - `localhost` (IPv6 `::1`) relay for published ports.
 - Traffic per connection (ss -ti), connection history, port conflicts with other WSL
   distributions; memory / disk threshold alerts with banner and Windows notifications.
+- Resource history across restarts (`history/` ring files: 1-minute samples for 48 h,
+  15-minute min / avg / max for 35 days; gaps while the app was off), 1 h / 24 h / 7 d / 30 d
+  ranges, weekly summary.
+- Per-container memory / CPU / PIDs limits from the UI (live `update`, no restart), limits in the
+  performance table with a near-limit badge.
 
 ## Recommended next steps
 
@@ -41,10 +46,10 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
    account (or SignPath for OSS) and submit the winget manifest to `microsoft/winget-pkgs`.
 2. ★ **Self-update**: check GitHub releases and offer the new portable ZIP.
 3. ★ **Embedded terminal** inside the app instead of Windows Terminal (exec / console).
-4. ★ **Resource history across restarts** – keep memory / traffic / disk history on disk
-   (a small ring file) so trends survive app restarts; weekly summary.
-5. ★ **Per-container limits from the UI** – set memory / CPU limits (`docker update`) from the
-   detail and show them in the memory overview.
+4. ★ **Limits in the container list** – optional column / tooltip with the limit, and limits
+   in the *Run* / *Recreate* forms.
+5. ★ **History export** – CSV export of the stored history and container CPU sampled also
+   outside the Overview.
 
 ## Containers, images, compose
 

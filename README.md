@@ -10,7 +10,7 @@ Docker Desktop and without the Docker CLI for Windows.
 
 | Page | What it does |
 |---|---|
-| **Overview** (Přehled) | engine status, container / image / volume counts, CPU and RAM available to WSL; tiles side by side: **CPU** of containers with a 15-minute chart, **Disk** – engine storage (images, containers, volumes, build cache) against the distribution disk with a usage bar, VHDX and Windows drive and a *Clean up* menu (prune), **WSL memory** summary bar next to its one-hour chart; live CPU, memory, network and disk stats per running container (with its image and compose stack) |
+| **Overview** (Přehled) | engine status, container / image / volume counts, CPU and RAM available to WSL; tiles side by side: **CPU** of containers with a 15-minute chart, **Disk** – engine storage (images, containers, volumes, build cache) against the distribution disk with a usage bar, VHDX and Windows drive and a *Clean up* menu (prune), **WSL memory** summary bar next to its history chart (1 h / 24 h / 7 d / 30 d, kept across restarts) and a *Weekly summary*; live CPU, memory, network and disk stats per running container (with its image and compose stack, against the container's limit when it has one) |
 | **Containers** (Kontejnery) | grouped by compose project; start, stop, restart, pause, remove; colored state badges (running, stopped, error with exit code, health); live logs (see *Logs*); **files inside the container**; console in Windows Terminal; *Run container* dialog; **container detail** (see below) |
 | **Images** | **build from a Dockerfile** (see below), search Docker Hub (dialog with tag picker, size and update date), pull by exact name, remove, prune, run a container from an image, which containers use an image |
 | **Volumes** | create, remove, prune, **size**, which containers use a volume, browse its content (as root), *run a container with this volume*, **back up to `.tar.gz`, restore, clone** |
@@ -76,6 +76,10 @@ The ⓘ icon in a container row opens a resizable window with tabs:
 - **Stats** – CPU and memory history charts (sampled every ~2 s while the window is open,
   last 5 minutes; 100 % CPU = one core).
 - **Logs** – live log with follow and a choice of the last 100 – 5000 lines.
+- **Limits** – current memory, reservation, memory + swap, CPUs, CPU shares, cpuset and PIDs;
+  memory / reservation / swap / CPUs / PIDs can be changed live (`POST /containers/{id}/update`,
+  no restart) with presets. The values are read back after the change, so a limit the engine
+  silently ignored is reported. A memory limit below the current usage asks first (OOM risk).
 - **Recreate with changes** – a form prefilled from the container (name, image, ports, env,
   volumes, network, restart policy, command). The new container is created through the API from the
   original configuration (`Config` + `HostConfig`) with only the edited fields changed, so user,
@@ -165,9 +169,15 @@ shutting WSL down from the app does not overwrite the list. A restart policy suc
 *Overview → WSL memory* shows where the RAM taken by WSL goes: **VmmemWSL** (what Windows sees,
 read via `NtQuerySystemInformation`) against the WSL limit from `.wslconfig` and the Windows RAM,
 and a stacked bar of containers / engine (podman, conmon, dockerd, TLS proxy …) / rest of Linux /
-file cache / memory not returned to Windows yet / free (`/proc/meminfo`). Below are a one-hour
-history chart with markers for every *Free WSL memory* (before → after) and a sortable table of
-containers and compose stacks. Sampling runs while the Overview is open, otherwise once a minute.
+file cache / memory not returned to Windows yet / free (`/proc/meminfo`). Next to it is a history
+chart (1 h, 24 h, 7 d, 30 d) with markers for every *Free WSL memory* (before → after). Sampling
+runs while the Overview is open, otherwise once a minute.
+
+The history is kept on disk (`history/` in the data folder, about 0.5 MB at most): 1-minute
+samples of memory, container CPU, VM traffic, engine storage and distribution disk for 48 hours
+and 15-minute min / avg / max for 35 days; the time the app was not running shows as a grey gap.
+*Weekly summary* shows peaks and averages, memory freeing, disk growth, traffic and the busiest
+hour. *Settings* can turn the history off or delete it.
 
 ### Network overview and ports
 
@@ -545,6 +555,8 @@ src/
   icon_art.rs      icon drawing (shared with build.rs for the .ico in the EXE)
   logbuf.rs        log buffer, search, timestamps, merged stack streams
   memory.rs        memory breakdown (meminfo, VmmemWSL, engine RSS), history
+  history.rs       resource history on disk (ring files, aggregation, weekly summary)
+  limits.rs        container limits (parsing, update body, validation)
   netinfo.rs       network parsers (/proc/net/dev, ss, ip, netstat), port comparison
   portrelay.rs     IPv6 localhost relay for published ports
   container_fs.rs  files inside a container (exec listing, archive API, tar)
