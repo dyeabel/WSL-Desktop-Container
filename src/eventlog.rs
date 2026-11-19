@@ -160,10 +160,10 @@ impl Entry {
     pub fn summary(&self) -> String {
         match self.kind {
             Kind::Crash => match self.code {
-                Some(c) => match exit_meaning(c) {
-                    Some(m) => tf!("kód {c} – {m}", "code {c} – {m}"),
-                    None => tf!("kód {c}", "code {c}"),
-                },
+                Some(c) => {
+                    let m = exit_meaning(c);
+                    tf!("kód {c} – {m}", "code {c} – {m}")
+                }
                 None => String::new(),
             },
             Kind::Oom => t!("proces ukončen kvůli nedostatku paměti (OOM)", "process killed because it ran out of memory (OOM)").into(),
@@ -177,7 +177,72 @@ impl Entry {
 }
 
 /// Význam kódu ukončení procesu v kontejneru.
-pub fn exit_meaning(code: i64) -> Option<&'static str> {
+pub fn exit_meaning(code: i64) -> String {
+    if let Some(m) = known_meaning(code) {
+        return m.to_string();
+    }
+    match code {
+        0 => t!("úspěšné ukončení", "success").into(),
+        3..=124 => t!("chyba aplikace – význam kódu určuje aplikace", "application error – the application defines the meaning").into(),
+        129..=192 => match signal_name(code - 128) {
+            Some(s) => tf!("{s} – ukončen signálem {}", "{s} – terminated by signal {}", code - 128),
+            None => tf!("ukončen signálem {}", "terminated by signal {}", code - 128),
+        },
+        _ => t!("neobvyklý kód (mimo rozsah 0–255 nebo vyhrazený)", "unusual code (outside 0–255 or reserved)").into(),
+    }
+}
+
+/// Název signálu Linuxu (x86_64).
+fn signal_name(n: i64) -> Option<&'static str> {
+    const NAMES: [&str; 31] = [
+        "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGTRAP", "SIGABRT", "SIGBUS", "SIGFPE", "SIGKILL", "SIGUSR1", "SIGSEGV", "SIGUSR2",
+        "SIGPIPE", "SIGALRM", "SIGTERM", "SIGSTKFLT", "SIGCHLD", "SIGCONT", "SIGSTOP", "SIGTSTP", "SIGTTIN", "SIGTTOU", "SIGURG",
+        "SIGXCPU", "SIGXFSZ", "SIGVTALRM", "SIGPROF", "SIGWINCH", "SIGIO", "SIGPWR", "SIGSYS",
+    ];
+    usize::try_from(n - 1).ok().and_then(|i| NAMES.get(i)).copied()
+}
+
+/// Co kód obvykle znamená a kde hledat příčinu (detail události, oznámení).
+pub fn exit_hint(code: i64) -> &'static str {
+    match code {
+        1 => t!("Aplikace skončila chybou – příčina bývá na konci logu.", "The application exited with an error – the cause is usually at the end of the log."),
+        2 => t!("Chybné argumenty nebo chyba ve skriptu – zkontroluj command / entrypoint.", "Wrong arguments or a script error – check the command / entrypoint."),
+        125 => t!(
+            "Kontejner se vůbec nespustil – chybná volba (port, volume, síť) nebo chyba enginu.",
+            "The container did not start at all – a wrong option (port, volume, network) or an engine error."
+        ),
+        126 => t!(
+            "Soubor existuje, ale nejde spustit – chybí právo ke spuštění, jiná architektura, nebo skript s konci řádků CRLF.",
+            "The file exists but cannot be executed – missing execute permission, another architecture, or a script with CRLF line endings."
+        ),
+        127 => t!(
+            "Příkaz nebo interpret (sh, bash, python…) v image chybí – zkontroluj CMD / ENTRYPOINT a PATH.",
+            "The command or interpreter (sh, bash, python…) is missing in the image – check CMD / ENTRYPOINT and PATH."
+        ),
+        129 => t!("Proces dostal SIGHUP – zavřený terminál nebo požadavek na znovunačtení.", "The process got SIGHUP – a closed terminal or a reload request."),
+        130 => t!("Přerušeno zvenku (Ctrl+C / SIGINT) – obvykle nejde o chybu.", "Interrupted from outside (Ctrl+C / SIGINT) – usually not an error."),
+        134 => t!(
+            "Aplikace sama zavolala abort – často selhaná kontrola (assert) nebo chyba knihovny; viz log.",
+            "The application called abort itself – often a failed assertion or a library error; see the log."
+        ),
+        137 => t!(
+            "Násilné ukončení – nedostatek paměti (limit kontejneru nebo WSL), docker kill, nebo stop po vypršení timeoutu.",
+            "Forced termination – out of memory (container or WSL limit), docker kill, or stop after the timeout expired."
+        ),
+        139 => t!(
+            "Pád aplikace (neplatný přístup do paměti) – chyba v programu, nekompatibilní knihovna nebo architektura.",
+            "Application crash (invalid memory access) – a bug, an incompatible library or architecture."
+        ),
+        141 => t!("Zápis do zavřené roury nebo spojení – druhá strana skončila dřív.", "Write to a closed pipe or connection – the other side ended first."),
+        143 => t!("Řádné ukončení na žádost (docker stop, vypnutí systému) – obvykle nejde o chybu.", "A regular termination request (docker stop, system shutdown) – usually not an error."),
+        255 => t!("Aplikace vrátila -1 nebo kód mimo rozsah 0–255; viz log.", "The application returned -1 or a code outside 0–255; see the log."),
+        c if (3..=124).contains(&c) => t!("Kód si definuje aplikace – příčinu hledej v logu nebo v její dokumentaci.", "The application defines the code – look for the cause in the log or its documentation."),
+        c if (129..=192).contains(&c) => t!("Proces ukončil signál – obvykle zvenku (jiný proces, systém).", "A signal ended the process – usually from outside (another process, the system)."),
+        _ => t!("Neobvyklý kód – podívej se do logu.", "Unusual code – check the log."),
+    }
+}
+
+fn known_meaning(code: i64) -> Option<&'static str> {
     Some(match code {
         1 => t!("obecná chyba aplikace", "general application error"),
         2 => t!("chybné použití (argumenty, skript)", "misuse (arguments, script)"),
@@ -417,6 +482,26 @@ mod tests {
 
     fn rec(id: &str, kind: Kind, quiet: Option<Quiet>) -> Record {
         Record { id: id.into(), name: format!("c-{id}"), kind, code: Some(1), starts: None, quiet }
+    }
+
+    #[test]
+    fn every_exit_code_has_a_description() {
+        assert_eq!(exit_meaning(137), "SIGKILL – násilně ukončen (kill, nedostatek paměti)");
+        assert!(exit_hint(137).contains("paměti"));
+        // neznámý aplikační kód, neznámý signál, mimo rozsah
+        assert!(exit_meaning(42).starts_with("chyba aplikace"));
+        assert!(exit_hint(42).contains("logu"));
+        assert_eq!(exit_meaning(138), "SIGUSR1 – ukončen signálem 10");
+        assert_eq!(exit_meaning(128 + 64), "ukončen signálem 64");
+        assert!(exit_meaning(-1).starts_with("neobvyklý"));
+        for c in [-5, 0, 1, 2, 3, 124, 125, 126, 127, 128, 129, 143, 150, 192, 200, 255, 300] {
+            assert!(!exit_meaning(c).is_empty() && !exit_hint(c).is_empty(), "{c}");
+        }
+        let e = Entry {
+            seq: 1, ts: 0, last: 0, count: 1, id: "a".into(), name: "a".into(), kind: Kind::Crash,
+            code: Some(42), starts: None, toast: true, quiet: None, detail: None,
+        };
+        assert_eq!(e.summary(), "kód 42 – chyba aplikace – význam kódu určuje aplikace");
     }
 
     #[test]

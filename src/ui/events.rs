@@ -282,6 +282,10 @@ fn detail(ui: &mut egui::Ui, e: &Entry) {
             }
         };
         row(t!("Kontejner", "Container"), format!("{} ({})", e.name, crate::docker::short_id(&e.id)));
+        if let (Kind::Crash | Kind::Loop, Some(c)) = (e.kind, e.code) {
+            row(t!("Kód ukončení", "Exit code"), format!("{c} – {}", eventlog::exit_meaning(c)));
+            row(t!("Co to znamená", "What it means"), eventlog::exit_hint(c).to_string());
+        }
         row("Image", d.image.clone());
         if !d.project.is_empty() {
             row("Compose", if d.service.is_empty() { d.project.clone() } else { format!("{} / {}", d.project, d.service) });

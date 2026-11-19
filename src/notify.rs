@@ -39,9 +39,12 @@ pub fn register() {}
 #[cfg(windows)]
 pub fn show_with(title: &str, body: &str, on_click: impl Fn() + Send + 'static) {
     use tauri_winrt_notification::{Duration, Sound, Toast};
+    // druhý řádek (za `\n`) jako samostatný text oznámení
+    let (line1, line2) = body.split_once('\n').unwrap_or((body, ""));
     let r = Toast::new(AUMID)
         .title(title)
-        .text1(body)
+        .text1(line1)
+        .text2(line2)
         .sound(Some(Sound::Default))
         .duration(Duration::Short)
         .on_activated(move |_| {

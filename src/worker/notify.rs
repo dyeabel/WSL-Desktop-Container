@@ -243,10 +243,8 @@ fn texts(r: &Record) -> (String, String) {
     match r.kind {
         Kind::Crash => {
             let code = r.code.unwrap_or(0);
-            let body = match eventlog::exit_meaning(code) {
-                Some(m) => tf!("Ukončil se s kódem {code} ({m}).", "Exited with code {code} ({m})."),
-                None => tf!("Ukončil se s kódem {code}.", "Exited with code {code}."),
-            };
+            let (m, hint) = (eventlog::exit_meaning(code), eventlog::exit_hint(code));
+            let body = tf!("Kód {code}: {m}.\n{hint}", "Code {code}: {m}.\n{hint}");
             (tf!("Kontejner {name} spadl", "Container {name} crashed"), body)
         }
         Kind::Oom => (
