@@ -8,6 +8,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if !need_engine(app, ui) {
         return;
     }
+    if !super::net_overview::tabs(app, ui) {
+        return;
+    }
     let mut prune = false;
     toolbar_lr(
         ui,
@@ -88,4 +91,5 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             });
         }
     });
+    super::net_overview::network_map(app, ui);
 }

@@ -13,6 +13,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if !need_engine(app, ui) {
         return;
     }
+    super::net_overview::touch_list(app, ui.ctx());
     let mut cmd: Option<Cmd> = None;
     let mut prune = false;
     toolbar_lr(
@@ -112,6 +113,7 @@ fn row(app: &mut App, r: &mut TableRow<'_>, c: &Container) {
         ui.label(crate::engine::short_image(&c.image)).on_hover_text(&c.image);
     });
     r.col(|ui| {
+        super::net_overview::port_hint(ui, &app.net, c);
         ui.label(c.ports_text());
     });
     r.col(|ui| {

@@ -1,4 +1,5 @@
 pub mod build;
+pub mod chart;
 pub mod compose;
 pub mod compose_new;
 pub mod container_files;
@@ -10,6 +11,7 @@ pub mod engine;
 pub mod files;
 pub mod images;
 pub mod logs;
+pub mod net_overview;
 pub mod networks;
 pub mod settings;
 pub mod volumes;

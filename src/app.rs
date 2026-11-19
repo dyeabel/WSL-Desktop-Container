@@ -85,6 +85,8 @@ pub struct App {
     pub new_volume: String,
     pub new_net: String,
     pub new_net_driver: String,
+    /// síťový přehled (záložky stránky Sítě, porty kontejnerů v seznamu)
+    pub net: ui::net_overview::NetState,
     pub compose_dir: String,
     /// stránka Compose: nový stack, editor souborů, škálování
     pub compose: ui::compose::ComposeState,
@@ -186,6 +188,8 @@ impl App {
             "settings" => Page::Settings,
             _ => Page::Dashboard,
         };
+        // pro ladění/screenshoty: WLS_DEBUG_NETWORK=1|ports|map otevře síťový přehled
+        let page = if std::env::var_os("WLS_DEBUG_NETWORK").is_some() { Page::Networks } else { page };
         Self {
             cfg,
             tx,
@@ -217,6 +221,7 @@ impl App {
             new_volume: String::new(),
             new_net: String::new(),
             new_net_driver: "bridge".into(),
+            net: Default::default(),
             compose_dir: String::new(),
             compose: ui::compose::ComposeState::default(),
             daemon_json: String::new(),
