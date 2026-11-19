@@ -1,4 +1,5 @@
 pub mod alerts;
+pub mod events;
 pub mod build;
 pub mod chart;
 pub mod compose;

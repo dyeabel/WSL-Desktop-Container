@@ -12,6 +12,7 @@ mod docker;
 mod dpapi;
 mod engine;
 mod error;
+mod eventlog;
 mod fs;
 mod history;
 mod icon_art;

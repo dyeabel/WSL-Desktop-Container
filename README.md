@@ -127,11 +127,22 @@ any change – also changes made from the CLI or compose. Polling then runs only
 fallback (the Overview page keeps the configured interval for live stats); when the stream drops,
 the app reconnects with a backoff and polls at the normal interval meanwhile.
 
-With *Settings → Windows notifications* the app shows a Windows toast when a container
-**crashes** (non-zero exit code), runs **out of memory**, becomes **unhealthy** or **keeps
-restarting** (3 starts within a minute). Stops initiated by the user – from the app, the
-`docker` command or `compose down` – and stopping the engine are not reported. Clicking the
-notification opens the window.
+Every container **crash** (non-zero exit code), **out-of-memory** kill, **unhealthy** health
+check and **restart loop** (3 starts within a minute) is recorded on the **Events** page – with
+the exit code and its meaning, image, compose project / service, run time, restart policy and
+count, engine error, last health-check output and the last 40 log lines (captured right at
+`die`, so even `--rm` containers usually keep their log). Repeats of the same problem merge
+into one record (`3×`); the history is kept in `container_events.jsonl` in the data folder for
+30 days (at most 500 records). The sidebar shows a badge with new problems.
+
+*Settings → Container notifications* chooses what is also shown as a Windows toast: per type,
+at most once per N minutes (default 30) for the same container, and muted containers (also from
+the record: *Mute <name>*). Routine exits are only recorded, not notified: exit by **SIGTERM /
+SIGINT / SIGHUP** (143 / 130 / 129 – a regular shutdown from outside), **temporary containers**
+removed right after exiting (`--rm`) and **Testcontainers** (label `org.testcontainers`) – both
+can be switched on. Toasts arriving within 2 s (WSL shutdown, compose) are merged into one.
+Stops initiated by the user – from the app, the `docker` command or `compose down` – and
+stopping the engine are not recorded at all. Clicking a notification opens the record.
 
 ### Start with Windows
 
@@ -350,7 +361,16 @@ app's current setting. `docker context create dev --distro Ubuntu --engine docke
 
 Remaining differences from the Docker CLI for Windows: `docker login` and `config.json` live
 inside WSL; commands outside the fast path have the overhead of starting `wsl.exe`
-(~0.1–0.3 s); Podman has no buildx or swarm.
+(~0.1–0.3 s); Podman has no swarm.
+
+With **Podman** the shim smooths over differences that break Docker scripts: `docker ps` shows
+the health state (`Up 5 seconds (healthy)`, from the libpod list API); `docker events --format`
+translates Docker template fields (`.Action`, `.Actor.ID`, `.Actor.Attributes.name`, `.From`,
+`.Scope`) to Podman's; `docker buildx ls|create|use|inspect|rm|bake|imagetools…` run the real
+buildx plugin (when the distribution has the Docker CLI with `docker-buildx`) against the Podman
+API – the `docker-container` driver runs BuildKit in a container and `--load` imports the image
+into Podman. `buildx build` stays on Buildah unless a custom builder is selected (`--builder`,
+`BUILDX_BUILDER`, `buildx use`). Pull progress of Podman goes to stderr (Docker: stdout).
 
 Consoles and log tails open in **Windows Terminal** (`wt.exe`), falling back to a classic
 console window when it is not available.
@@ -529,10 +549,11 @@ src/
   main.rs          entry point, window, single instance
   app.rs           app state, navigation, dialogs, toasts
   config.rs        app settings (config.json), data folder, portable mode
+  eventlog.rs      history of container problems (container_events.jsonl)
   worker/          background thread: refresh and actions
     mod.rs         commands, messages, refresh loop, dispatcher
     events.rs      engine event stream (/events), debounced refresh
-    notify.rs      crash / OOM / unhealthy / restart-loop detection for notifications
+    notify.rs      crash / OOM / unhealthy / restart-loop detection, history records, toasts
     tracking.rs    remembering and restoring running containers
     engine_ops.rs  engine start / stop, install, API setup, TLS, keep-alive, daemon.json
     distro.rs      adding a distribution
@@ -584,7 +605,7 @@ src/
   npipe.rs         named-pipe relay for tools
   live_tests.rs    integration tests against a real WSL distribution (ignored by default)
   live_docker.rs   Docker end-to-end test in a fresh distribution (live_docker_e2e)
-  ui/              individual pages (+ chart.rs, memory.rs, net_overview.rs, alerts.rs, distros.rs)
+  ui/              individual pages (+ chart.rs, memory.rs, net_overview.rs, alerts.rs, distros.rs, events.rs)
 build.rs           generates the .ico and embeds it into the EXE (winresource)
 ```
 

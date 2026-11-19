@@ -33,6 +33,7 @@ mod contexts;
 mod ctxcmd;
 mod envfwd;
 mod fast;
+mod podmanfix;
 
 use std::io::Write;
 use std::process::{Command, ExitCode};
@@ -162,8 +163,12 @@ fn main() -> ExitCode {
     );
 
     let args = pathmap::translate_args(&args);
+    // Podman: pole šablon, které se liší od Dockeru (`events --format '{{.Action}}'`)
+    let args = if target.engine == engine::Engine::Podman { podmanfix::rewrite(&args) } else { args };
     // Docker -> `docker …`, Podman -> `podman --url tcp://127.0.0.1:<port> …`
     let cli = target.engine.cli(target.port, target.tls);
+    // Podman: buildery buildx obslouží skutečný buildx (je-li v distribuci), viz podmanfix
+    let cli = if target.engine == engine::Engine::Podman { podmanfix::buildx_cli(&args, &cli).unwrap_or(cli) } else { cli };
 
     let mut cmd = Command::new("wsl.exe");
     cmd.args(["-d", &target.distro]);

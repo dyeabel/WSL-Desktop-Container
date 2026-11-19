@@ -23,7 +23,7 @@
 //! - `logs`: `-n` znamená `--tail` jako v Docker CLI (Podman CLI by ho bral jako `--names`).
 
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
@@ -1695,12 +1695,53 @@ pub fn execute(cmd: &Cmd, fetch: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>
             }
         }
         _ => {
-            let body: Value = serde_json::from_slice(&get(cmd.api_path())?).map_err(|e| format!("bad JSON: {e}"))?;
+            let mut body: Value = serde_json::from_slice(&get(cmd.api_path())?).map_err(|e| format!("bad JSON: {e}"))?;
+            if let Cmd::Ps { fmt, .. } = cmd {
+                if matches!(fmt, Fmt::Json) || fmt.uses("Status") {
+                    add_podman_health(&mut body, &mut get);
+                }
+            }
             let now = now_ns.div_euclid(1_000_000_000) as i64;
             vec![(1, cmd.output(&body, now, tz)?.into_bytes())]
         }
     };
     Ok(Output { chunks, paths })
+}
+
+/// Podman v kompatibilním `/containers/json` neuvádí ve `Status` stav healthchecku
+/// (Docker: `Up 5 seconds (healthy)`). Doplní se z libpod seznamu (`Status`: healthy /
+/// unhealthy / starting) – jen pro běžící kontejnery bez závorky, jedním dotazem.
+/// Verze v cestě je nutná (bez ní Podman vrací 404); Docker na libpod cestu odpoví 404 a nic se nezmění.
+fn add_podman_health(body: &mut Value, get: &mut dyn FnMut(String) -> Result<Vec<u8>, String>) {
+    let Some(rows) = body.as_array_mut() else { return };
+    let ids: Vec<String> = rows
+        .iter()
+        .filter(|c| s(c, "State") == "running" && !s(c, "Status").contains('('))
+        .map(|c| s(c, "Id").to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let filters = serde_json::json!({ "id": ids }).to_string();
+    let Ok(raw) = get(format!("/v4.0.0/libpod/containers/json?all=true&filters={}", enc(&filters))) else { return };
+    let Ok(Value::Array(lp)) = serde_json::from_slice::<Value>(&raw) else { return };
+    let health: HashMap<&str, &str> = lp.iter().map(|c| (s(c, "Id"), s(c, "Status"))).collect();
+    for c in rows.iter_mut() {
+        let suffix = match health.get(s(c, "Id")).copied() {
+            Some("healthy") => " (healthy)",
+            Some("unhealthy") => " (unhealthy)",
+            Some("starting") => " (health: starting)",
+            _ => continue,
+        };
+        if s(c, "State") != "running" || s(c, "Status").contains('(') {
+            continue;
+        }
+        let st = format!("{}{suffix}", s(c, "Status"));
+        if let Some(o) = c.as_object_mut() {
+            o.insert("Status".into(), Value::String(st));
+        }
+    }
 }
 
 // ================================================================ HTTP
@@ -2181,6 +2222,34 @@ nginx             latest    c05939e13a61   13 days ago          167MB
         assert_eq!(inspect_output(&[], None).unwrap(), "[]\n");
         assert_eq!(json_reformat(b" { \"a\" : [ 1 , 2 ] }\n", None).unwrap(), "{\"a\":[1,2]}");
         assert!(json_reformat(b"{\"a\":1", None).is_err());
+    }
+
+    #[test]
+    fn ps_adds_podman_health() {
+        let list = br#"[{"Id":"aaa","Names":["/hc"],"Image":"alpine","Command":"sleep 600","Created":1,"State":"running","Status":"Up 5 seconds","Ports":[]},
+            {"Id":"bbb","Names":["/plain"],"Image":"alpine","Command":"sleep 600","Created":2,"State":"running","Status":"Up 6 seconds","Ports":[]},
+            {"Id":"ccc","Names":["/dead"],"Image":"alpine","Command":"false","Created":3,"State":"exited","Status":"Exited (1) 2 seconds ago","Ports":[]}]"#.to_vec();
+        let libpod = br#"[{"Id":"aaa","Status":"healthy"},{"Id":"bbb","Status":""}]"#.to_vec();
+        let mut fetch = |p: &str| -> Result<Vec<u8>, String> {
+            if p.starts_with("/containers/json") {
+                Ok(list.clone())
+            } else if p.starts_with("/v4.0.0/libpod/containers/json?all=true&filters=") {
+                // jen běžící kontejnery bez závorky
+                assert!(p.contains("aaa") && p.contains("bbb") && !p.contains("ccc"), "{p}");
+                Ok(libpod.clone())
+            } else {
+                Err("HTTP 404".into())
+            }
+        };
+        let out = execute(&parse(&a(&["ps", "-a", "--format", "{{.Names}}|{{.Status}}"])).unwrap(), &mut fetch, 0, utc).unwrap();
+        let text = String::from_utf8(out.chunks[0].1.clone()).unwrap();
+        assert_eq!(text, "dead|Exited (1) 2 seconds ago\nplain|Up 6 seconds\nhc|Up 5 seconds (healthy)\n");
+        // formát bez Status = žádný dotaz navíc; Docker (404) = beze změny
+        let out = execute(&parse(&a(&["ps", "-q"])).unwrap(), &mut fetch, 0, utc).unwrap();
+        assert_eq!(out.paths.len(), 1);
+        let mut docker = |p: &str| -> Result<Vec<u8>, String> { if p.starts_with("/containers/json") { Ok(list.clone()) } else { Err("HTTP 404".into()) } };
+        let out = execute(&parse(&a(&["ps", "--format", "{{.Status}}"])).unwrap(), &mut docker, 0, utc).unwrap();
+        assert!(String::from_utf8(out.chunks[0].1.clone()).unwrap().contains("Up 5 seconds\n"));
     }
 
     #[test]

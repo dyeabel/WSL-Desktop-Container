@@ -34,11 +34,6 @@ pub fn register() {
 #[cfg(not(windows))]
 pub fn register() {}
 
-/// Zobrazí oznámení; kliknutí na něj otevře okno aplikace.
-pub fn show(title: &str, body: &str) {
-    show_with(title, body, || {});
-}
-
 /// Zobrazí oznámení; kliknutí nejdřív zavolá `on_click` (např. požadavek na přechod
 /// na stránku) a pak otevře okno aplikace.
 #[cfg(windows)]

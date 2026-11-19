@@ -367,7 +367,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
         }
         let mut c = app.cfg.read().map(|c| c.clone()).unwrap_or_default();
-        let before = (c.close_to_tray, c.minimize_to_tray, c.start_hidden, c.notifications, c.auto_free_memory);
+        let before = (c.close_to_tray, c.minimize_to_tray, c.start_hidden, c.auto_free_memory);
         ui.checkbox(
             &mut c.auto_free_memory,
             t!(
@@ -379,27 +379,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             "VmmemWSL drží paměť, kterou Linux použil jako cache souborů (image, buildy), i když ji nepotřebuje. Uvolnění ji vrátí Windows; další čtení souborů může být chvíli pomalejší.",
             "VmmemWSL keeps memory Linux used as file cache (images, builds) even when it is not needed. Freeing returns it to Windows; the next file reads may be slightly slower."
         ));
-        ui.checkbox(
-            &mut c.notifications,
-            t!(
-                "Oznámení ve Windows: pád kontejneru, nedostatek paměti, selhávající healthcheck, opakované restarty",
-                "Windows notifications: container crash, out of memory, failing health check, restart loop"
-            ),
-        )
-        .on_hover_text(t!(
-            "Zastavení z aplikace, z příkazu docker ani compose down se za pád nepovažuje.",
-            "Stopping a container from the app, the docker command or compose down does not count as a crash."
-        ));
         ui.checkbox(&mut c.close_to_tray, t!("Zavření okna (křížek) aplikaci jen schová do oznamovací oblasti", "Closing the window (×) only hides the app to the tray"));
         ui.checkbox(&mut c.minimize_to_tray, t!("Minimalizace schová okno do oznamovací oblasti", "Minimizing hides the window to the tray"));
         ui.checkbox(&mut c.start_hidden, t!("Spouštět rovnou schované v oznamovací oblasti", "Start hidden in the tray"));
-        if (c.close_to_tray, c.minimize_to_tray, c.start_hidden, c.notifications, c.auto_free_memory) != before {
+        if (c.close_to_tray, c.minimize_to_tray, c.start_hidden, c.auto_free_memory) != before {
             let _ = c.save();
             crate::tray::sync_checks(c.close_to_tray, c.minimize_to_tray);
             app.cfg_draft.close_to_tray = c.close_to_tray;
             app.cfg_draft.minimize_to_tray = c.minimize_to_tray;
             app.cfg_draft.start_hidden = c.start_hidden;
-            app.cfg_draft.notifications = c.notifications;
             app.cfg_draft.auto_free_memory = c.auto_free_memory;
             if let Ok(mut g) = app.cfg.write() {
                 *g = c;
@@ -408,6 +396,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ui.label(muted(t!("Aplikaci úplně ukončíš přes pravý klik na ikonu v oznamovací oblasti \u{E06C} Ukončit. Levý klik okno zobrazí nebo schová.", "To quit the app completely, right-click the tray icon \u{E06C} Quit. Left-click shows or hides the window.")).small());
     });
 
+    super::events::settings_section(app, ui);
     super::alerts::settings_section(app, ui);
     super::memory::history_settings(app, ui);
 

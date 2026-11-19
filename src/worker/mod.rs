@@ -15,7 +15,7 @@ mod fs_ops;
 mod limits;
 mod memory;
 pub(crate) mod net_overview;
-mod notify;
+pub(crate) mod notify;
 mod recreate_body;
 mod spec;
 #[cfg(test)]
@@ -274,6 +274,8 @@ pub struct Shared {
     pub events_live: AtomicBool,
     refresh_pending: AtomicBool,
     notifier: Mutex<notify::Notifier>,
+    /// historie problémů kontejnerů (stránka Události)
+    pub event_log: Arc<Mutex<crate::eventlog::EventLog>>,
     /// poslední automatické uvolnění paměti
     last_free_memory: Mutex<Option<Instant>>,
     /// předchozí vzorek CPU (čas, kumulované ns) pro výpočet vytížení z rozdílu
@@ -301,6 +303,9 @@ pub fn spawn(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) -> (Sender<Cm
     let (cmd_tx, cmd_rx) = channel::<Cmd>();
     let (msg_tx, msg_rx) = channel::<Msg>();
     let shared = Arc::new(Shared::default());
+    if let Ok(mut l) = shared.event_log.lock() {
+        *l = crate::eventlog::EventLog::load();
+    }
     crate::history::start(shared.clone(), cfg.read().map(|c| c.history_on_disk).unwrap_or(true));
     let w = Worker { ctx, cfg, msg: msg_tx, cmd: cmd_tx.clone(), shared: shared.clone() };
     thread::spawn(move || w.run(cmd_rx));

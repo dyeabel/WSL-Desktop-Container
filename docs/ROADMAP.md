@@ -5,7 +5,11 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
 ## Done
 
 - Live updates via the engine event stream (`/events`), polling only as a fallback.
-- Windows notifications: crash, out of memory, unhealthy, restart loop.
+- Windows notifications: crash, out of memory, unhealthy, restart loop; Events page with the
+  history and details, routine exits (SIGTERM, `--rm`, Testcontainers) only recorded, merged
+  toasts, per-type settings and muting.
+- Shim with Podman: health in `docker ps`, Docker fields in `events --format`, real buildx
+  builders over the Podman API.
 - Container detail: inspect, CPU / memory history, logs, actions, *Recreate with changes*.
 - Securing the API: mutual TLS proxy (opt-in) – see README *API security* and
   [SECURITY.md](SECURITY.md).

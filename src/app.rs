@@ -19,12 +19,13 @@ pub enum Page {
     Networks,
     Compose,
     Files,
+    Events,
     Engine,
     Settings,
 }
 
 impl Page {
-    pub const MAIN: [Page; 7] = [Page::Dashboard, Page::Containers, Page::Images, Page::Volumes, Page::Networks, Page::Compose, Page::Files];
+    pub const MAIN: [Page; 8] = [Page::Dashboard, Page::Containers, Page::Images, Page::Volumes, Page::Networks, Page::Compose, Page::Files, Page::Events];
     pub const BOTTOM: [Page; 2] = [Page::Engine, Page::Settings];
     pub fn label(self) -> &'static str {
         match self {
@@ -35,6 +36,7 @@ impl Page {
             Page::Networks => t!("\u{E408}  Sítě", "\u{E408}  Networks"),
             Page::Compose => "\u{E466}  Compose",
             Page::Files => t!("\u{E260}  Soubory", "\u{E260}  Files"),
+            Page::Events => t!("\u{E0CE}  Události", "\u{E0CE}  Events"),
             Page::Engine => "\u{EB02}  WSL engine",
             Page::Settings => t!("\u{E270}  Nastavení", "\u{E270}  Settings"),
         }
@@ -68,6 +70,8 @@ pub struct App {
     pub df: Option<DfSummary>,
     /// sekce Paměť WSL na přehledu (průběh a výsledek uvolnění)
     pub mem: ui::memory::MemUi,
+    /// stránka Události (filtr, rozbalený záznam)
+    pub events: ui::events::EventsUi,
     pub tcp_configured: Option<bool>,
     pub page: Page,
     toasts: Vec<Toast>,
@@ -188,6 +192,7 @@ impl App {
             "networks" => Page::Networks,
             "compose" => Page::Compose,
             "files" => Page::Files,
+            "events" => Page::Events,
             "engine" => Page::Engine,
             "settings" => Page::Settings,
             _ => Page::Dashboard,
@@ -207,6 +212,7 @@ impl App {
             stats: Vec::new(),
             df: None,
             mem: Default::default(),
+            events: Default::default(),
             tcp_configured: None,
             page,
             toasts: Vec::new(),
@@ -296,6 +302,10 @@ impl App {
         // kliknutí na oznámení o prahu paměti / disku
         if let Some(t) = crate::worker::alerts::take_nav() {
             ui::alerts::navigate(self, t);
+        }
+        // kliknutí na oznámení o problému kontejneru
+        if let Some(seq) = crate::worker::notify::take_nav() {
+            ui::events::navigate(self, seq);
         }
         let (close_to_tray, min_to_tray, start_hidden) = self
             .cfg
@@ -634,6 +644,16 @@ impl App {
                 .frame(sel)
                 .min_size(egui::vec2(ui.available_width(), 36.0)),
         );
+        // odznak s počtem nových problémů kontejnerů
+        let unread = if p == Page::Events && !sel { ui::events::unread(self) } else { 0 };
+        if unread > 0 {
+            let txt = if unread > 99 { "99+".to_string() } else { unread.to_string() };
+            let galley = ui.painter().layout_no_wrap(txt, egui::FontId::proportional(11.0), egui::Color32::WHITE);
+            let w = (galley.size().x + 10.0).max(18.0);
+            let rect = egui::Rect::from_center_size(egui::pos2(r.rect.right() - 8.0 - w / 2.0, r.rect.center().y), egui::vec2(w, 18.0));
+            ui.painter().rect_filled(rect, 9.0, theme::red());
+            ui.painter().galley(rect.center() - galley.size() / 2.0, galley, egui::Color32::WHITE);
+        }
         if sel {
             let rect = r.rect;
             ui.painter().rect_filled(
@@ -806,6 +826,7 @@ impl eframe::App for App {
                     Page::Networks => ui::networks::show(self, ui),
                     Page::Compose => ui::compose::show(self, ui),
                     Page::Files => ui::files::show(self, ui),
+                    Page::Events => ui::events::show(self, ui),
                     Page::Engine => ui::engine::show(self, ui),
                     Page::Settings => ui::settings::show(self, ui),
                     }

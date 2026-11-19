@@ -31,6 +31,8 @@ pub struct Config {
     pub theme: String,
     /// Oznámení ve Windows při pádu kontejneru, selhání healthchecku, opakovaných restartech
     pub notifications: bool,
+    /// Které problémy kontejnerů oznamovat a které jen zapsat do historie
+    pub container_notify: ContainerNotify,
     /// Každých 10 min uvolnit cache Linuxu ve WSL (když je nad 1 GB), aby VmmemWSL vracel paměť Windows
     pub auto_free_memory: bool,
     /// API enginu jen přes TLS s klientským certifikátem (port 2376, certifikáty v %APPDATA%\WLS_Desktop\tls)
@@ -100,6 +102,41 @@ impl Default for AlertsConfig {
     }
 }
 
+/// Oznámení o problémech kontejnerů. Všechno se zapisuje do historie (stránka Události),
+/// tady se volí, co se navíc ohlásí ve Windows.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ContainerNotify {
+    pub crash: bool,
+    pub oom: bool,
+    pub health: bool,
+    pub restart_loop: bool,
+    /// oznamovat i ukončení signálem SIGTERM / SIGINT / SIGHUP (kód 143 / 130 / 129)
+    pub signal_exits: bool,
+    /// oznamovat i dočasné kontejnery (`--rm`) a Testcontainers
+    pub ephemeral: bool,
+    /// stejný problém stejného kontejneru nejvýš jednou za tolik minut
+    pub repeat_minutes: u32,
+    /// ztlumené kontejnery (podle názvu) – jen historie
+    pub muted: Vec<String>,
+}
+
+impl Default for ContainerNotify {
+    fn default() -> Self {
+        Self { crash: true, oom: true, health: true, restart_loop: true, signal_exits: false, ephemeral: false, repeat_minutes: 30, muted: vec![] }
+    }
+}
+
+impl ContainerNotify {
+    pub fn is_muted(&self, name: &str) -> bool {
+        self.muted.iter().any(|m| m == name)
+    }
+
+    pub fn repeat_secs(&self) -> i64 {
+        self.repeat_minutes.max(1) as i64 * 60
+    }
+}
+
 impl AlertsConfig {
     /// Je zapnuté aspoň jedno upozornění na disk?
     pub fn any_disk(&self) -> bool {
@@ -123,6 +160,7 @@ impl Default for Config {
             language: "cs".into(),
             theme: "dark".into(),
             notifications: true,
+            container_notify: ContainerNotify::default(),
             auto_free_memory: true,
             tls: false,
             security_hint_dismissed: false,
