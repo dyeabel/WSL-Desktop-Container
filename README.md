@@ -97,7 +97,8 @@ the buffer keeps the last ~50 000 lines.
 
 *Compose → stack → Logs* opens **merged live logs of the whole stack**: one stream per container,
 lines prefixed with the colored service name, ordered by timestamp (300 ms reorder buffer) and
-filterable per service.
+filterable per service. Containers that start later (new replicas, recreated services) are
+attached automatically.
 
 ### Files inside a container
 
@@ -158,6 +159,40 @@ track of running containers (per distribution and engine, in
 e.g. after a WSL restart or a reboot. Stopping the engine, putting the distribution to sleep or
 shutting WSL down from the app does not overwrite the list. A restart policy such as
 `unless-stopped` on the container is the engine-native alternative.
+
+### Memory overview
+
+*Overview → WSL memory* shows where the RAM taken by WSL goes: **VmmemWSL** (what Windows sees,
+read via `NtQuerySystemInformation`) against the WSL limit from `.wslconfig` and the Windows RAM,
+and a stacked bar of containers / engine (podman, conmon, dockerd, TLS proxy …) / rest of Linux /
+file cache / memory not returned to Windows yet / free (`/proc/meminfo`). Below are a one-hour
+history chart with markers for every *Free WSL memory* (before → after) and a sortable table of
+containers and compose stacks. Sampling runs while the Overview is open, otherwise once a minute.
+
+### Network overview and ports
+
+*Networks* has three tabs:
+
+- **Networks** – the network table plus a map of networks (subnet, gateway) with their containers,
+  IPs and aliases.
+- **Traffic** – rx / tx of the WSL VM (`eth0`) with a 15-minute chart, traffic per container and
+  per compose stack, the WSL networking mode and IP, and the app's own endpoints (engine API with
+  TLS state, TLS proxy, named pipe, `docker` shim, DOCKER_HOST).
+- **Ports** – published ports (host address → container port, stack, Windows state: forwarded by
+  WSL / conflict with another process / not forwarded, *open in browser*, copy) and listening
+  sockets of the distribution with known ones labelled (engine API, TLS proxy, DNS).
+
+The container detail has a **Network** tab: **in** – ports the container's processes really listen
+on (`ss` in the container's network namespace via `nsenter`, works for images without tools),
+compared with the published ones (*not published*, *nothing listens*, *loopback only*); **out** –
+established connections with remote address, protocol and process, refreshed every ~2 s. The
+container list shows a compact in / out count and a warning when a published port has no listener.
+
+**`localhost` for published ports:** in NAT mode WSL forwards ports to Windows only on IPv4
+`127.0.0.1`, and `localhost` → `::1` hangs until a timeout. The app therefore relays every
+published TCP port also on `[::1]:<port>` → `127.0.0.1:<port>` (*Settings → Published ports also on
+localhost IPv6*, on by default; not needed and not started in `mirrored` mode; a port already taken
+on `[::1]` is reported as a conflict). The relay runs only while the app runs; UDP is not relayed.
 
 ### WSL memory
 
@@ -488,6 +523,9 @@ src/
   theme.rs         colors, style
   icon_art.rs      icon drawing (shared with build.rs for the .ico in the EXE)
   logbuf.rs        log buffer, search, timestamps, merged stack streams
+  memory.rs        memory breakdown (meminfo, VmmemWSL, engine RSS), history
+  netinfo.rs       network parsers (/proc/net/dev, ss, ip, netstat), port comparison
+  portrelay.rs     IPv6 localhost relay for published ports
   container_fs.rs  files inside a container (exec listing, archive API, tar)
   contexts.rs      docker contexts for the shim
   npipe.rs         named-pipe relay for tools

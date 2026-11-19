@@ -172,19 +172,37 @@ fn summary(ui: &mut egui::Ui, b: &Breakdown) {
         (None, t!("Volná v Linuxu", "Free in Linux"), b.free, t!("MemFree v /proc/meminfo.", "MemFree in /proc/meminfo.")),
     ];
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.spacing_mut().item_spacing.x = 16.0;
         for (c, name, v, tip) in items {
-            let r = ui
-                .horizontal(|ui| {
-                    swatch(ui, c);
-                    ui.label(muted(name));
-                    ui.label(RichText::new(fmt_bytes(v)).strong());
-                })
-                .response;
-            r.on_hover_text(tip);
-            ui.add_space(10.0);
+            legend_item(ui, c, name, &fmt_bytes(v)).on_hover_text(tip);
         }
     });
+}
+
+/// Položka legendy jako JEDEN prvek (čtvereček + název + hodnota), aby se v zalamovaném
+/// řádku zalomila celá – vnořené `ui.horizontal` egui nezalamuje a řádek by přetekl.
+fn legend_item(ui: &mut egui::Ui, c: Option<Color32>, name: &str, value: &str) -> egui::Response {
+    use egui::text::{LayoutJob, TextFormat};
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let mut job = LayoutJob::default();
+    job.append(name, 0.0, TextFormat { font_id: font.clone(), color: theme::muted(), ..Default::default() });
+    job.append(value, 6.0, TextFormat { font_id: font, color: ui.visuals().strong_text_color(), ..Default::default() });
+    let galley = ui.fonts(|f| f.layout_job(job));
+    let sw = 11.0;
+    let size = egui::vec2(sw + 6.0 + galley.size().x, galley.size().y.max(sw));
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let sq = egui::Rect::from_center_size(egui::pos2(rect.left() + sw / 2.0, rect.center().y), egui::vec2(sw, sw));
+    match c {
+        Some(c) => {
+            ui.painter().rect_filled(sq, 2.0, c);
+        }
+        None => {
+            ui.painter().rect_stroke(sq, 2.0, egui::Stroke::new(1.0_f32, theme::muted()), egui::StrokeKind::Inside);
+        }
+    }
+    let pos = egui::pos2(rect.left() + sw + 6.0, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(pos, galley, theme::muted());
+    resp
 }
 
 fn swatch(ui: &mut egui::Ui, c: Option<Color32>) {

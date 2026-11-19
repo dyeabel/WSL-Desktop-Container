@@ -25,6 +25,13 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
   file browser inside a container.
 - Docker end-to-end test in a fresh WSL distribution; code signing support (`scripts/sign.ps1`,
   Azure Artifact Signing in CI) and winget manifest generation (`scripts/winget.ps1`).
+- Merged stack logs attach containers that start later; manual CI workflow `e2e` for the Docker
+  end-to-end test on a self-hosted runner.
+- Memory overview (VmmemWSL vs. Linux vs. containers, history, freeing markers), WSL memory
+  freeing (manual and automatic).
+- Network overview: VM / container / stack traffic, published ports with Windows state, distro
+  listeners, network map; ports in / out per container (nsenter + ss).
+- `localhost` (IPv6 `::1`) relay for published ports.
 
 ## Recommended next steps
 
@@ -32,48 +39,10 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
    account (or SignPath for OSS) and submit the winget manifest to `microsoft/winget-pkgs`.
 2. ★ **Self-update**: check GitHub releases and offer the new portable ZIP.
 3. ★ **Embedded terminal** inside the app instead of Windows Terminal (exec / console).
-4. ★ Logs: follow containers that start later in a merged stack view automatically.
-5. ★ Run the Docker end-to-end test (`live_docker_e2e`) in CI on a self-hosted Windows runner
-   with WSL.
-6. ★ **Memory overview** on the Overview page – where the RAM taken by WSL actually goes:
-   - **VmmemWSL** (what Windows sees) vs. the WSL memory limit from `.wslconfig`;
-   - inside Linux: used by processes, **file cache**, free (`/proc/meminfo`) – the difference
-     between VmmemWSL and Linux "used" is memory WSL has not returned to Windows yet;
-   - **per container** (cgroup memory incl. cache) and per compose stack, plus the engine itself
-     (dockerd / Podman service) and the rest of the distribution;
-   - a history chart (last hour) and the effect of *Free WSL memory* (before / after), so it is
-     visible whether the automatic freeing helps.
-7. ★ **Network overview** – what uses the network and where it is reachable:
-   - traffic of the whole WSL VM (the `vEthernet (WSL)` adapter / `eth0` in Linux) vs. per
-     container and per compose stack – current rate (rx / tx per second) and totals, history chart;
-   - **published ports**: which `127.0.0.1:port` / `0.0.0.0:port` on Windows leads to which
-     container and container port, with conflicts (a port already taken in Windows or by another
-     distribution) and a quick *open in browser*;
-   - container networks (bridge, custom) with their subnets, gateways and connected containers as a
-     simple map; networking mode of WSL (NAT / mirrored) and the WSL IP address;
-   - listening sockets inside the distribution (`ss -ltnp`) that are not containers – e.g. the
-     engine API, the TLS proxy – so it is visible what is exposed on localhost.
-   - **ports per application / container, in and out** – directly in the container list and the
-     container detail (and for the app itself: engine API port, TLS proxy, named pipe):
-     - *in*: ports the process actually listens on inside the container (`ss -ltnp` in its
-       network namespace) next to the published ones, highlighting ports that listen but are not
-       published and published ports nobody listens on;
-     - *out*: active outgoing connections (remote address:port, protocol, state – from
-       `ss -tunp` / conntrack in the container's namespace), with traffic per connection where
-       available;
-     - refreshed live while the view is open, filterable, copyable.
-8. ★ **`localhost` answers immediately for published ports (IPv6 `::1`)** – in NAT mode the WSL
-   relay (`wslrelay`) listens on Windows only on IPv4 `127.0.0.1`. Windows resolves `localhost`
-   to `::1` first; the connection there is not refused but hangs until a timeout, only then the
-   client falls back to IPv4. `http://127.0.0.1:<port>` works right away, `http://localhost:<port>`
-   only with a delay (browsers and `Invoke-WebRequest` cope with it, tools with a short timeout
-   and health checks fail). Options:
-   - the app runs a small relay on `[::1]:<port>` → `127.0.0.1:<port>` for every published
-     container port (started / stopped from the event stream, like Docker Desktop does), with a
-     setting to turn it off;
-   - or recommend `networkingMode=mirrored` in the `.wslconfig` editor (where Windows 11 22H2+
-     supports it) with an explanation of the trade-offs;
-   - show a hint in the container detail / port list when a port is reachable only on IPv4.
+4. ★ **Traffic per connection** in the container Network tab (conntrack accounting) and a
+   history of connections; detect port conflicts with other WSL distributions.
+5. ★ **Alerts** for memory / disk thresholds (e.g. VmmemWSL above 80 % of the limit, VHDX almost
+   full) as Windows notifications.
 
 ## Containers, images, compose
 
