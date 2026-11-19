@@ -297,9 +297,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 });
                 ui.label(muted(tf!("Příkaz docker … ve Windows se provede přes {ename} v {distro}. Po změně otevři nový terminál.", "docker … in Windows runs via {ename} in {distro}. Open a new terminal after a change.")).small());
                 if let Some(s) = &st {
-                    for o in &s.other_docker {
-                        ui.label(RichText::new(tf!("\u{E4E0} V PATH je i jiný docker: {o}", "\u{E4E0} Another docker is also in PATH: {o}")).color(theme::yellow()).small());
-                    }
+                    super::settings::other_docker_ui(app, ui, s, checking);
+                    super::settings::duplicates_ui(app, ui, s, checking);
                 }
 
                 // DOCKER_HOST pro nástroje, které mluví přímo s API

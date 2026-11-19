@@ -433,9 +433,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 } else {
                     ui.label(muted(t!("Není nainstalováno.", "Not installed.")));
                 }
-                for o in &s.other_docker {
-                    ui.label(RichText::new(tf!("\u{E4E0} V PATH je i jiný docker: {o} – může mít přednost", "\u{E4E0} Another docker is also in PATH: {o} – it may take precedence")).color(theme::yellow()).small());
-                }
+                other_docker_ui(app, ui, s, checking);
+                duplicates_ui(app, ui, s, checking);
                 if !s.source_ok {
                     ui.label(RichText::new(t!("\u{E4E0} docker.exe nebyl nalezen vedle aplikace (sestav projekt přes cargo build --release).", "\u{E4E0} docker.exe was not found next to the app (build the project with cargo build --release).")).color(theme::red()).small());
                 }
@@ -536,4 +535,65 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         "WLS Desktop {} · Rust + egui · Docker API via tcp://127.0.0.1 · configuration in %APPDATA%\\WLS_Desktop",
         env!("CARGO_PKG_VERSION")
     )));
+}
+
+/// Jiné kopie shimu WLS Desktop (starší verze v PATH, zbylá výchozí instalace) a tlačítko úklidu.
+pub fn duplicates_ui(app: &App, ui: &mut egui::Ui, s: &crate::shim_install::Status, checking: bool) {
+    if s.duplicates.is_empty() {
+        return;
+    }
+    ui.label(RichText::new(t!("\u{E4E0} Další kopie příkazu docker z WLS Desktop:", "\u{E4E0} Other copies of the WLS Desktop docker command:")).color(theme::yellow()).small());
+    for d in &s.duplicates {
+        let what = match (d.in_path, d.delete_files) {
+            (true, true) => t!("v PATH, soubory se smažou", "in PATH, files will be deleted"),
+            (true, false) => t!("v PATH, odebere se z něj", "in PATH, will be removed from it"),
+            (false, _) => t!("mimo PATH, zbylé soubory se smažou", "not in PATH, leftover files will be deleted"),
+        };
+        ui.label(muted(format!("    {} – {what}", d.path)).small());
+    }
+    ui.add_enabled_ui(!checking, |ui| {
+        if ui
+            .button(t!("\u{E4A6} Odstranit duplicity", "\u{E4A6} Remove duplicates"))
+            .on_hover_text(t!(
+                "Aktuální složka v PATH zůstane jednou. Složky jiných verzí se jen odeberou z PATH (portable balíčky se nemažou), kopie ve výchozí instalační složce se smažou.",
+                "The current folder stays in PATH once. Folders of other versions are only removed from PATH (portable packages are not deleted); copies in the default install folder are deleted."
+            ))
+            .clicked()
+        {
+            app.shim_action(ui.ctx(), crate::shim_install::Action::RemoveDuplicates);
+        }
+    });
+}
+
+/// Varování o jiném dockeru v PATH (`other_docker` obsahuje jen ty, které mají přednost)
+/// a tlačítko, které jeho složku odebere z uživatelského PATH.
+pub fn other_docker_ui(app: &App, ui: &mut egui::Ui, s: &crate::shim_install::Status, checking: bool) {
+    for o in &s.other_docker {
+        let file = &o.file;
+        let text = if s.in_path {
+            tf!("\u{E4E0} V PATH je před ním jiný docker, který má přednost: {file}", "\u{E4E0} Another docker comes earlier in PATH and takes precedence: {file}")
+        } else {
+            tf!("\u{E4E0} V PATH je jiný docker: {file}", "\u{E4E0} Another docker is in PATH: {file}")
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(text).color(theme::yellow()).small());
+            if o.user {
+                ui.add_enabled_ui(!checking, |ui| {
+                    if ui
+                        .small_button(t!("\u{E4A6} Odebrat z PATH", "\u{E4A6} Remove from PATH"))
+                        .on_hover_text(tf!(
+                            "Odebere {} z uživatelského PATH. Soubory zůstanou, program jen přestane být dostupný jako docker.",
+                            "Removes {} from the user PATH. The files stay; the program just stops being available as docker.",
+                            o.dir
+                        ))
+                        .clicked()
+                    {
+                        app.shim_action(ui.ctx(), crate::shim_install::Action::RemoveFromPath(o.dir.clone()));
+                    }
+                });
+            } else {
+                ui.label(muted(t!("(systémový PATH – změní jen správce)", "(system PATH – only an administrator can change it)")).small());
+            }
+        });
+    }
 }

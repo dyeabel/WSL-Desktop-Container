@@ -321,6 +321,12 @@ translated (`-v D:\data:/data`, `--mount source=C:\x`, `-f C:\p\compose.yml`, `.
 
 Install it from *WSL engine → Install & setup* (or *Settings*): it is copied to
 `%LOCALAPPDATA%\WLS_Desktop\bin` and that folder is added to the user PATH (no admin rights).
+The check reads PATH from the registry (machine, then user – what a new terminal sees) and warns
+only about another `docker` that comes *before* ours. Other copies of the WLS Desktop shim – older
+portable versions in PATH, a repeated entry, a PATH entry of a moved package, leftovers in
+`%LOCALAPPDATA%\WLS_Desktop\bin` after switching to portable – are listed with *Remove
+duplicates*: PATH keeps the current folder once, other package folders are only removed from
+PATH (never deleted), copies in the default install folder are deleted.
 
 To behave as close to the Docker CLI as possible:
 
