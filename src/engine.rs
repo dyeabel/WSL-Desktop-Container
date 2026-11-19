@@ -160,6 +160,8 @@ systemctl disable --now docker.socket docker containerd >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf
 systemctl disable --now wls-tls-proxy >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/wls-tls-proxy.service
+systemctl disable --now wls-dns >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/wls-dns.service
 rmdir /etc/systemd/system/docker.service.d 2>/dev/null || true
 systemctl daemon-reload 2>/dev/null || true
 PKGS=$(pkg_installed docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
@@ -198,6 +200,40 @@ rm -f /etc/tmpfiles.d/wls-docker-sock.conf
 if [ -L /run/docker.sock ]; then rm -f /run/docker.sock; fi
 EXTRA=""
 if systemctl cat containerd.service >/dev/null 2>&1; then EXTRA="--containerd=/run/containerd/containerd.sock"; fi
+# host.docker.internal jako v Docker Desktopu (Podman ho má sám): DNS pro kontejnery na
+# 172.17.0.1 (dnsmasq) – odpoví host.docker.internal a ostatní dotazy předá DNS distribuce
+if [ -f /etc/docker/daemon.json ] && grep -qE '"(dns|bip)"' /etc/docker/daemon.json; then
+  echo "VAROVANI: daemon.json nastavuje dns nebo bip - host.docker.internal se nenastavi." >&2
+  systemctl disable --now wls-dns >/dev/null 2>&1 || true
+else
+  M=$(command -v dnsmasq || true)
+  if [ -z "$M" ]; then
+    if command -v apt-get >/dev/null; then pkg_install dnsmasq-base >/dev/null 2>&1 || true; else pkg_install dnsmasq >/dev/null 2>&1 || true; fi
+    M=$(command -v dnsmasq || true)
+  fi
+  if [ -n "$M" ]; then
+    cat > /etc/systemd/system/wls-dns.service <<EOF
+[Unit]
+Description=DNS pro kontejnery Dockeru (host.docker.internal, WLS Desktop)
+Before=docker.service
+
+[Service]
+ExecStart=$M --keep-in-foreground --conf-file=/dev/null --bind-dynamic --listen-address=172.17.0.1 --except-interface=lo --no-hosts --resolv-file=/etc/resolv.conf --address=/host.docker.internal/172.17.0.1 --address=/gateway.docker.internal/172.17.0.1 --cache-size=1000 --user=nobody --pid-file=
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=docker.service
+EOF
+    systemctl daemon-reload
+    systemctl enable wls-dns >/dev/null 2>&1 || true
+    systemctl restart wls-dns || echo "VAROVANI: wls-dns (DNS pro kontejnery) nenabehla - viz journalctl -u wls-dns" >&2
+    EXTRA="$EXTRA --dns 172.17.0.1"
+    echo "host.docker.internal -> 172.17.0.1 (DNS pro kontejnery)"
+  else
+    echo "VAROVANI: dnsmasq se nepodarilo nainstalovat - host.docker.internal nebude fungovat." >&2
+  fi
+fi
 mkdir -p /etc/systemd/system/docker.service.d
 if [ "$TLS" = "1" ]; then
   # API jen na unix socketu, TCP obslouží TLS proxy

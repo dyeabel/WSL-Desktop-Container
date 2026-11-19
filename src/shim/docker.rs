@@ -83,7 +83,7 @@ fn main() -> ExitCode {
             eprintln!("wls-docker: APPDATA is not set, cannot store contexts");
             return ExitCode::from(1);
         };
-        let env = ctxcmd::CtxEnv { store_path, default: default_target, env_ctx: env_ctx.clone(), distros: &contexts::wsl_distros };
+        let env = ctxcmd::CtxEnv { store_path, default: default_target, env_ctx: env_ctx.clone(), docker_host: std::env::var("DOCKER_HOST").ok(), distros: &contexts::wsl_distros };
         let r = ctxcmd::run(&args[1..], &env);
         let _ = std::io::stdout().lock().write_all(r.out.as_bytes());
         let _ = std::io::stderr().lock().write_all(r.err.as_bytes());

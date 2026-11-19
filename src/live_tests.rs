@@ -1171,3 +1171,34 @@ fn live_switch_primary() {
     assert!(l.iter().any(|d| d.name == b && !d.running()), "{b} běží: {l:?}");
     let _ = std::fs::remove_dir_all(&data);
 }
+
+/// Nastavení Docker API (jako „Nastavit API“) a překlad host.docker.internal v kontejneru –
+/// na výchozím bridge i ve vlastní síti (compose). WLS_DISTRO s Dockerem, WLS_TLS=1 pro TLS.
+#[test]
+#[ignore]
+fn live_docker_host_internal() {
+    let d = distro();
+    let tls = std::env::var("WLS_TLS").is_ok_and(|v| v == "1");
+    let port = if tls { "2376" } else { "2375" };
+    let user = wsl::run(&d, None, None, &["id", "-un"]).map(|u| u.trim().to_string()).unwrap_or_default();
+    let script = crate::engine::Engine::Docker.setup_script();
+    let out = wsl::run(
+        &d,
+        Some("root"),
+        None,
+        &["env", &format!("PORT={port}"), &format!("TLS={}", tls as u8), &format!("U={user}"), "REGEN=0", "sh", "-c", &script],
+    )
+    .expect("setup");
+    eprintln!("{out}");
+    assert!(out.contains("host.docker.internal -> 172.17.0.1"), "{out}");
+    let probe = "getent hosts host.docker.internal && nslookup example.com >/dev/null && echo DNS-OK";
+    let a = wsl::run(&d, Some("root"), None, &["docker", "run", "--rm", "docker.io/library/alpine:3.20", "sh", "-c", probe]).expect("bridge");
+    let _ = wsl::run(&d, Some("root"), None, &["docker", "network", "create", "wls-test-hdi"]);
+    let b = wsl::run(&d, Some("root"), None, &["docker", "run", "--rm", "--network", "wls-test-hdi", "docker.io/library/alpine:3.20", "sh", "-c", probe]);
+    let _ = wsl::run(&d, Some("root"), None, &["docker", "network", "rm", "wls-test-hdi"]);
+    let b = b.expect("user network");
+    eprintln!("bridge: {a}\nnetwork: {b}");
+    for r in [&a, &b] {
+        assert!(r.contains("172.17.0.1") && r.contains("host.docker.internal") && r.contains("DNS-OK"), "{r}");
+    }
+}

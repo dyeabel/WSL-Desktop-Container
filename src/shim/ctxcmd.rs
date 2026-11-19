@@ -26,6 +26,9 @@ pub struct CtxEnv<'a> {
     pub default: Target,
     /// hodnota DOCKER_CONTEXT
     pub env_ctx: Option<String>,
+    /// hodnota DOCKER_HOST (např. npipe:////./pipe/wls_docker_engine) – výchozí kontext ji
+    /// ukazuje jako svůj endpoint, stejně jako Docker CLI
+    pub docker_host: Option<String>,
     /// seznam WSL distribucí (wsl.exe -l -q)
     pub distros: &'a dyn Fn() -> Result<Vec<String>, String>,
 }
@@ -41,8 +44,13 @@ fn default_description(t: &Target) -> String {
     format!("WLS Desktop settings ({}, {})", t.distro, t.engine.name())
 }
 
+/// Endpoint výchozího kontextu: DOCKER_HOST, když je nastavená (má přednost), jinak API aplikace.
+fn default_endpoint(env: &CtxEnv) -> String {
+    env.docker_host.clone().filter(|h| !h.trim().is_empty()).unwrap_or_else(|| env.default.endpoint())
+}
+
 fn rows(store: &Store, env: &CtxEnv, current: &str) -> Vec<Row> {
-    let mut out = vec![Row { name: DEFAULT.into(), description: default_description(&env.default), endpoint: env.default.endpoint(), current: current == DEFAULT }];
+    let mut out = vec![Row { name: DEFAULT.into(), description: default_description(&env.default), endpoint: default_endpoint(env), current: current == DEFAULT }];
     let mut cs: Vec<&Context> = store.contexts.iter().collect();
     cs.sort_by(|a, b| a.name.cmp(&b.name));
     for c in cs {
@@ -193,12 +201,12 @@ struct Inspect {
     storage: Storage,
 }
 
-fn inspect_one(name: &str, desc: &str, t: &Target, store_path: &std::path::Path) -> Inspect {
+fn inspect_one(name: &str, desc: &str, t: &Target, host: String, store_path: &std::path::Path) -> Inspect {
     let tls_dir = crate::apitls::tls_dir().map(|d| d.display().to_string()).unwrap_or_default();
     Inspect {
         name: name.into(),
         metadata: Meta { description: desc.into(), wls: WlsMeta { distro: t.distro.clone(), engine: t.engine.name().to_ascii_lowercase(), port: t.port, tls: t.tls } },
-        endpoints: Endpoints { docker: DockerEp { host: t.endpoint(), skip_tls_verify: false } },
+        endpoints: Endpoints { docker: DockerEp { host, skip_tls_verify: false } },
         tls_material: Default::default(),
         storage: Storage {
             metadata_path: if name == DEFAULT { "<IN MEMORY>".into() } else { store_path.display().to_string() },
@@ -303,7 +311,13 @@ pub fn run(args: &[String], env: &CtxEnv) -> Res {
                 return Err("\"docker context ls\" accepts no arguments.".into());
             }
             let rows = rows(&store, env, &current);
-            Ok(Res { out: ls_output(&rows, p.has("--quiet"), p.last("--format"))?, ..Default::default() })
+            // jako Docker CLI: DOCKER_HOST přebíjí vybraný kontext
+            let err = if current != DEFAULT && env.docker_host.as_deref().is_some_and(|h| !h.trim().is_empty()) {
+                "Warning: DOCKER_HOST environment variable overrides the active context. To use a context, either set the global --context flag, or unset DOCKER_HOST environment variable.\n".to_string()
+            } else {
+                String::new()
+            };
+            Ok(Res { out: ls_output(&rows, p.has("--quiet"), p.last("--format"))?, err, ..Default::default() })
         }),
         "show" => Ok(Res { out: format!("{current}\n"), ..Default::default() }),
         "use" => (|| {
@@ -364,10 +378,10 @@ pub fn run(args: &[String], env: &CtxEnv) -> Res {
             let mut items = Vec::new();
             for n in &names {
                 let it = if n == DEFAULT {
-                    inspect_one(DEFAULT, &default_description(&env.default), &env.default, &env.store_path)
+                    inspect_one(DEFAULT, &default_description(&env.default), &env.default, default_endpoint(env), &env.store_path)
                 } else {
                     let c = store.get(n).ok_or_else(|| format!("context \"{n}\" does not exist"))?;
-                    inspect_one(n, &c.description, &c.target(), &env.store_path)
+                    inspect_one(n, &c.description, &c.target(), c.target().endpoint(), &env.store_path)
                 };
                 items.push(it);
             }
@@ -488,8 +502,26 @@ mod tests {
             store_path: dir.join("contexts.json"),
             default: Target { distro: "Debian".into(), engine: Engine::Podman, port: 2375, tls: false },
             env_ctx: env_ctx.map(String::from),
+            docker_host: None,
             distros: &distros,
         }
+    }
+
+    #[test]
+    fn docker_host_is_default_endpoint() {
+        let dir = std::env::temp_dir().join(format!("wls-ctxcmd-dh-{}", std::process::id()));
+        let _g = Tmp(dir.clone());
+        let mut env = env_in(&dir, None);
+        env.docker_host = Some("npipe:////./pipe/wls_docker_engine".into());
+        let r = run(&s(&["ls", "--format", "{{.Name}} {{.DockerEndpoint}}"]), &env);
+        assert_eq!(r.out, "default npipe:////./pipe/wls_docker_engine\n");
+        assert!(r.err.is_empty(), "{}", r.err);
+        let r = run(&s(&["inspect"]), &env);
+        assert!(r.out.contains("\"Host\": \"npipe:////./pipe/wls_docker_engine\""), "{}", r.out);
+        // jiný vybraný kontext: varování jako Docker CLI
+        assert_eq!(run(&s(&["create", "ubu", "--distro", "Ubuntu", "--port", "2380"]), &env).code, 0);
+        let env = CtxEnv { env_ctx: Some("ubu".into()), ..env };
+        assert!(run(&s(&["ls"]), &env).err.contains("DOCKER_HOST environment variable overrides the active context"));
     }
 
     #[test]
