@@ -394,6 +394,16 @@ to the community repository means a pull request to `microsoft/winget-pkgs` (e.g
 cargo test
 ```
 
+**Docker end-to-end test** – `cargo test live_docker_e2e -- --ignored --nocapture` creates a fresh
+distribution `WLS-Test-Docker`, installs Docker from the distribution packages the same way the
+app does and goes through the plain and the TLS API, containers, events, build, compose,
+*Recreate* and the `docker.exe` shim, then unregisters the distribution (~3 minutes; port 2385,
+`iptables: false` so the shared WSL network of other engines is not touched, app data in a
+temporary `WLS_DATA_DIR`; `WLS_E2E_KEEP=1` keeps the distribution for debugging). In GitHub
+Actions it runs via the manually started workflow `e2e` on a self-hosted Windows runner with the
+labels `self-hosted, windows, wsl` (running under a normal user account – WSL distributions are
+per user); see `.github/workflows/e2e.yml` for the requirements.
+
 Integration tests against a real WSL distribution and engine (distribution from `WLS_DISTRO`,
 default `Ubuntu`; the Podman test expects an API on `WLS_PODMAN_PORT`, default 2376).
 `live_add_distro` installs and removes a temporary Debian (`WLS-Test-Debian`),

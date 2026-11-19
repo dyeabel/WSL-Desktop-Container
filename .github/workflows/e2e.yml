@@ -1,0 +1,57 @@
+# End-to-end test Dockeru (live_docker_e2e) na vlastním Windows runneru s WSL.
+#
+# GitHub hostované runnery WSL nemají, proto runner s labely [self-hosted, windows, wsl]:
+#   - Windows 10/11 s WSL 2 (wsl --version), povolená virtualizace, přístup na internet
+#     (stahuje Debian a balíčky Dockeru);
+#   - runner běží pod BĚŽNÝM uživatelským účtem (run.cmd, nebo služba s tímto účtem) –
+#     distribuce WSL patří uživateli, pod SYSTEM / NetworkService je wsl.exe nevidí;
+#   - volný port 2385 na 127.0.0.1;
+#   - Rust (MSVC) a Visual Studio Build Tools s Windows SDK (rc.exe), nebo nechat nainstalovat
+#     krok rust-toolchain.
+# Test vytvoří a na konci odregistruje distribuci WLS-Test-Docker; nesahá na ostatní distribuce,
+# běžící engine ani konfiguraci aplikace (WLS_DATA_DIR = dočasná složka).
+#
+# Spuštění: Actions → e2e → Run workflow (jen ručně – bez runneru by úloha čekala ve frontě).
+name: e2e
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: 'Ponechat distribuci WLS-Test-Docker po testu (ladění)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: e2e-docker
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  docker-e2e:
+    runs-on: [self-hosted, windows, wsl]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prostředí
+        shell: pwsh
+        run: |
+          wsl --version
+          wsl -l -v
+          if (Get-NetTCPConnection -LocalPort 2385 -State Listen -ErrorAction SilentlyContinue) { throw 'Port 2385 je obsazený' }
+      - name: Build (shim pro test)
+        run: cargo build --bin docker
+      - name: Docker E2E
+        shell: pwsh
+        env:
+          WLS_E2E_KEEP: ${{ inputs.keep && '1' || '' }}
+        run: |
+          if (-not $env:WLS_E2E_KEEP) { Remove-Item Env:WLS_E2E_KEEP -ErrorAction SilentlyContinue }
+          cargo test live_docker_e2e -- --ignored --nocapture --test-threads=1
+      - name: Úklid
+        if: always() && !inputs.keep
+        shell: pwsh
+        run: wsl --unregister WLS-Test-Docker 2>$null; exit 0
