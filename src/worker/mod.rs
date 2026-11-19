@@ -140,6 +140,8 @@ pub enum Cmd {
     SetTls(bool),
     /// uvolnit paměť WSL (cache Linuxu) – VmmemWSL ji pak vrátí Windows
     FreeMemory,
+    /// smazat historii zdrojů z disku
+    ClearHistory,
     /// přegenerovat TLS certifikáty
     RegenCerts,
     SetKeepAlive(bool),
@@ -293,6 +295,7 @@ pub fn spawn(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) -> (Sender<Cm
     let (cmd_tx, cmd_rx) = channel::<Cmd>();
     let (msg_tx, msg_rx) = channel::<Msg>();
     let shared = Arc::new(Shared::default());
+    crate::history::start(shared.clone(), cfg.read().map(|c| c.history_on_disk).unwrap_or(true));
     let w = Worker { ctx, cfg, msg: msg_tx, cmd: cmd_tx.clone(), shared: shared.clone() };
     thread::spawn(move || w.run(cmd_rx));
     (cmd_tx, msg_rx, shared)
@@ -352,6 +355,7 @@ impl Worker {
         let running: Vec<(String, String)> =
             snap.containers.iter().filter(|c| c.running()).map(|c| (c.id.clone(), c.name())).collect();
         let connected = snap.connected;
+        let ncpu = snap.info.as_ref().map(|i| i.ncpu.max(1)).unwrap_or(1) as f64;
         let (n_run, n_total) = snap.info.as_ref().map(|i| (i.containers_running, i.containers)).unwrap_or((0, 0));
         self.track_running(&snap);
         // relaye [::1] -> 127.0.0.1 pro publikované porty (odpojený engine = žádné)
@@ -418,6 +422,7 @@ impl Worker {
                     prev.extend(rows.iter().map(|r| (r.id.clone(), (now, r.cpu_total))));
                 }
                 let df = d.df();
+                w.history_stats(&rows, df.as_ref(), ncpu);
                 if distro_running {
                     w.memory_sample(Some(&rows));
                 }
@@ -590,6 +595,7 @@ impl Worker {
             Cmd::Sleep => self.sleep_distro(),
             Cmd::SetTls(on) => self.set_tls(on),
             Cmd::FreeMemory => self.free_memory(false),
+            Cmd::ClearHistory => crate::history::store().clear().map(|_| t!("Historie zdrojů smazána", "Resource history deleted").into()),
             Cmd::RegenCerts => self.regen_certs(),
             Cmd::SetKeepAlive(on) => self.set_keep_alive(on),
             Cmd::PauseAll => self.set_paused_all(true),

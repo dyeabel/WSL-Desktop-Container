@@ -3,6 +3,7 @@
 
 use super::{Msg, Worker};
 use crate::docker::StatRow;
+use crate::history::Sample;
 use crate::memory::{self, FreeEvent, MemNow, MemPoint};
 use crate::wsl;
 use std::sync::atomic::Ordering;
@@ -44,6 +45,9 @@ impl Worker {
             let sum = rows.iter().map(|r| r.mem).sum();
             MemNow { b: memory::breakdown(&mi, vmmem, limit, ram, sum, engine.unwrap_or(0)) }
         });
+        // historie na disku: paměť a čítače eth0 VM (stejný výstup wsl, žádné další volání)
+        let net = memory::parse_net(&out);
+        crate::history::store().record(t, Sample { vmmem, used: Some(mi.used()), cache: Some(mi.cache()), net, ..Default::default() });
         if let Ok(mut m) = self.shared.memory.lock() {
             m.history.push(MemPoint::new(t, vmmem, mi.used(), mi.cache()));
             m.last_sample = t;
@@ -58,9 +62,26 @@ impl Worker {
     pub(super) fn memory_freed(&self, auto: bool, r: Result<FreeEvent, String>) {
         if let (Ok(e), Ok(mut m)) = (&r, self.shared.memory.lock()) {
             m.history.add_event(*e);
+            crate::history::store().record_event(*e);
         }
         self.send(Msg::MemoryFreed { auto, result: r });
         // nový bod do grafu hned po uvolnění
         self.memory_sample(None);
+    }
+
+    /// Historie na disku ze statistik kontejnerů: celkové CPU (% všech CPU WSL, stejně jako
+    /// dlaždice na přehledu) a úložiště enginu z `/system/df`.
+    pub(super) fn history_stats(&self, rows: &[StatRow], df: Option<&crate::docker::DfSummary>, ncpu: f64) {
+        let cpu = rows.iter().map(|r| r.cpu).sum::<f64>() / ncpu.max(1.0);
+        let engine = df.map(|s| [s.images, s.containers, s.volumes, s.build_cache].iter().map(|v| (*v).max(0) as u64).sum());
+        crate::history::store().record(memory::now_secs(), Sample { cpu: Some(cpu), engine, ..Default::default() });
+    }
+
+    /// Historie na disku z kontroly disku (jednou za 5 min): disk distribuce, případně úložiště enginu.
+    pub(super) fn history_disk(&self, d: &super::alerts::DiskInput) {
+        let disk = d.inside.as_ref().map(|r| (r.used, r.avail));
+        if disk.is_some() || d.engine_used.is_some() {
+            crate::history::store().record(memory::now_secs(), Sample { disk, engine: d.engine_used, ..Default::default() });
+        }
     }
 }

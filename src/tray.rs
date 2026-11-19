@@ -304,6 +304,7 @@ pub fn init(
             }
             "quit" => {
                 crate::portrelay::app().stop_all();
+                crate::history::flush_on_exit();
                 std::process::exit(0)
             }
             _ => {}
