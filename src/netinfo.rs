@@ -2,7 +2,7 @@
 //! výpočet rychlostí, porovnání naslouchajících a publikovaných portů a hledání konfliktů.
 //! Bez I/O – sběr dat dělá `worker::net_overview`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 /// Oddělovač sekcí ve výstupu sběrného skriptu.
 pub const MARK: &str = "@@WLS@@";
@@ -94,6 +94,12 @@ pub struct Sock {
     pub procs: Vec<String>,
     /// PID prvního procesu
     pub pid: Option<u32>,
+    /// TCP: přijato bajtů (`bytes_received` z `ss -i`); None = ss čítače nevypsal
+    pub bytes_in: Option<u64>,
+    /// TCP: odesláno a potvrzeno bajtů (`bytes_acked`, jinak `bytes_sent`)
+    pub bytes_out: Option<u64>,
+    /// inode socketu (`ino:` z `ss -e`) – odliší nové spojení na stejné čtveřici adres
+    pub inode: Option<u64>,
 }
 
 impl Sock {
@@ -159,9 +165,51 @@ fn parse_users(s: &str) -> (Vec<String>, Option<u32>) {
 }
 
 /// Výstup `ss -H` (`-ltnup`, `-tunp state established`, s Netid i bez něj, se stavem i bez něj).
-/// Neznámé řádky (chyby, hlavičky) se přeskočí.
+/// S `-i` / `-e` přečte i čítače bajtů a inode – z odsazeného pokračovacího řádku
+/// i z jednořádkového výstupu (`-O`). Neznámé řádky (chyby, hlavičky) se přeskočí.
 pub fn parse_ss(text: &str) -> Vec<Sock> {
-    text.lines().filter_map(parse_ss_line).collect()
+    let mut v: Vec<Sock> = Vec::new();
+    for l in text.lines() {
+        push_ss_line(&mut v, l);
+    }
+    v
+}
+
+/// Přidá řádek `ss`: nový socket, nebo odsazené podrobnosti (`-i`) k poslednímu.
+fn push_ss_line(v: &mut Vec<Sock>, l: &str) {
+    if let Some(s) = parse_ss_line(l) {
+        v.push(s);
+    } else if l.starts_with([' ', '\t']) {
+        if let Some(last) = v.last_mut() {
+            apply_info(last, l.split_whitespace());
+        }
+    }
+}
+
+/// Čítače TCP (`bytes_received`, `bytes_acked`, `bytes_sent`) a inode (`ino:`) z tokenů `ss -ie`.
+/// ss vypisuje jen nenulové čítače: když je vidět blok TCP info (`rto:`, `mss:`…),
+/// chybějící čítač znamená 0. Bez bloku info zůstanou čítače None.
+fn apply_info<'a>(s: &mut Sock, toks: impl Iterator<Item = &'a str>) {
+    let (mut sent, mut acked, mut recv, mut info) = (None, None, None, false);
+    for t in toks {
+        let Some((k, v)) = t.split_once(':') else { continue };
+        match k {
+            "ino" => s.inode = v.parse().ok().or(s.inode),
+            "bytes_sent" => sent = v.parse::<u64>().ok(),
+            "bytes_acked" => acked = v.parse::<u64>().ok(),
+            "bytes_received" => recv = v.parse::<u64>().ok(),
+            "rto" | "rtt" | "mss" | "cwnd" | "segs_out" | "segs_in" => info = true,
+            _ => {}
+        }
+    }
+    if info || sent.is_some() || acked.is_some() || recv.is_some() {
+        s.bytes_in = Some(recv.unwrap_or(0));
+        // bytes_acked počítá i SYN (o 1 víc než odeslaná data); bytes_sent i opakovaná vysílání
+        s.bytes_out = Some(match (acked, sent) {
+            (Some(a), Some(b)) => a.min(b),
+            (a, b) => a.or(b).unwrap_or(0),
+        });
+    }
 }
 
 fn parse_ss_line(line: &str) -> Option<Sock> {
@@ -190,7 +238,15 @@ fn parse_ss_line(line: &str) -> Option<Sock> {
         // bez sloupce Netid (jen jeden protokol): odhad podle stavu
         proto = if state == "UNCONN" { "udp".into() } else { "tcp".into() };
     }
-    Some(Sock { proto, state, local_ip, local_port: lp?, peer_ip, peer_port, procs, pid })
+    let mut s = Sock { proto, state, local_ip, local_port: lp?, peer_ip, peer_port, procs, pid, ..Default::default() };
+    // jednořádkový výstup (`-O`) nebo `-e` na hlavním řádku
+    apply_info(&mut s, tok[i + 4..].iter().copied());
+    Some(s)
+}
+
+/// Spojení je příchozí (místní port je port, na kterém kontejner naslouchá).
+pub fn is_inbound(s: &Sock, listen: &[Sock]) -> bool {
+    listen.iter().any(|l| l.proto == s.proto && l.local_port == s.local_port)
 }
 
 /// Výpis socketů v síťových jmenných prostorech kontejnerů (skript `ns_script`).
@@ -199,46 +255,199 @@ pub struct NsDump {
     pub listen: Vec<Sock>,
     pub conns: Vec<Sock>,
     pub error: Option<String>,
+    /// součet čítačů rozhraní kromě `lo` (rx, tx) v síťovém prostoru kontejneru
+    pub dev: Option<(u64, u64)>,
 }
 
 /// Rozdělí výstup skriptu na části podle PID: `@@PID <pid>`, pak naslouchající sockety,
-/// volitelně `@@EST` a navázaná spojení. Řádky `nsenter: …` jsou chyba.
+/// volitelně `@@EST` a navázaná spojení (i s odsazenými řádky `ss -i`) a `@@DEV`
+/// (`/proc/net/dev`). Řádky `nsenter: …` jsou chyba.
 pub fn parse_ns_dump(text: &str) -> HashMap<u32, NsDump> {
+    #[derive(PartialEq)]
+    enum Part {
+        Listen,
+        Est,
+        Dev,
+    }
     let mut out: HashMap<u32, NsDump> = HashMap::new();
     let mut cur: Option<u32> = None;
-    let mut est = false;
+    let mut part = Part::Listen;
     for l in text.lines() {
         if let Some(p) = l.strip_prefix("@@PID ") {
             cur = p.trim().parse().ok();
-            est = false;
+            part = Part::Listen;
             if let Some(p) = cur {
                 out.entry(p).or_default();
             }
             continue;
         }
-        if l.trim() == "@@EST" {
-            est = true;
-            continue;
+        match l.trim() {
+            "@@EST" => {
+                part = Part::Est;
+                continue;
+            }
+            "@@DEV" => {
+                part = Part::Dev;
+                continue;
+            }
+            _ => {}
         }
         let Some(d) = cur.and_then(|p| out.get_mut(&p)) else { continue };
-        if l.starts_with("nsenter:") || l.starts_with("ss:") {
+        if l.starts_with("nsenter:") || l.starts_with("ss:") || l.starts_with("cat:") {
             d.error.get_or_insert_with(|| l.trim().to_string());
-        } else if let Some(s) = parse_ss_line(l) {
-            if est { d.conns.push(s) } else { d.listen.push(s) }
+            continue;
+        }
+        match part {
+            Part::Listen => push_ss_line(&mut d.listen, l),
+            Part::Est => push_ss_line(&mut d.conns, l),
+            Part::Dev => {
+                for i in parse_proc_net_dev(l).into_iter().filter(|i| i.name != "lo") {
+                    let (rx, tx) = d.dev.unwrap_or((0, 0));
+                    d.dev = Some((rx + i.rx, tx + i.tx));
+                }
+            }
         }
     }
     out
 }
 
-/// Skript pro `sh -c`: `$1` = `listen` nebo `all`, další argumenty = PID kontejnerů.
+/// Skript pro `sh -c`: `$1` = `listen` (jen naslouchající), `all` (i navázaná spojení
+/// s čítači TCP) nebo `detail` (navíc čítače rozhraní), další argumenty = PID kontejnerů.
 /// PID se předávají jako argumenty (nikdy se nevkládají do textu skriptu) a ještě se ověří.
 pub const NS_SCRIPT: &str = r#"mode=$1; shift
 for p in "$@"; do
   case "$p" in ''|*[!0-9]*) continue;; esac
   echo "@@PID $p"
   nsenter -t "$p" -n ss -ltnupH 2>&1
-  if [ "$mode" = all ]; then echo "@@EST"; nsenter -t "$p" -n ss -tunpH state established 2>&1; fi
+  if [ "$mode" != listen ]; then echo "@@EST"; nsenter -t "$p" -n ss -tuinpeH state established 2>&1; fi
+  if [ "$mode" = detail ]; then echo "@@DEV"; nsenter -t "$p" -n cat /proc/net/dev 2>&1; fi
 done"#;
+
+// ---------------------------------------------------------------- spojení: rychlosti a historie
+
+/// Klíč spojení: protokol + místní a vzdálená adresa s porty.
+pub fn conn_key(s: &Sock) -> String {
+    format!("{} {} {}", s.proto, s.local(), s.peer())
+}
+
+/// Navázané spojení sledované mezi vzorky.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Conn {
+    pub sock: Sock,
+    pub inbound: bool,
+    /// čas prvního a posledního vzorku, ve kterém spojení existovalo (s)
+    pub first_seen: f64,
+    pub last_seen: f64,
+    /// (dovnitř B/s, ven B/s); None = první vzorek nebo spojení bez čítačů
+    pub rate: Option<(f64, f64)>,
+}
+
+impl Conn {
+    pub fn key(&self) -> String {
+        conn_key(&self.sock)
+    }
+}
+
+/// Je to pořád stejné spojení? Jiný inode nebo čítač, který klesl = čtveřice adres
+/// se mezi vzorky znovu použila pro nové spojení.
+fn same_conn(old: &Sock, new: &Sock) -> bool {
+    let dropped = |a: Option<u64>, b: Option<u64>| matches!((a, b), (Some(a), Some(b)) if b < a);
+    let other_inode = matches!((old.inode, new.inode), (Some(a), Some(b)) if a != b);
+    !other_inode && !dropped(old.bytes_in, new.bytes_in) && !dropped(old.bytes_out, new.bytes_out)
+}
+
+/// Rychlosti spojení podle klíče, historie ukončených spojení a provoz kontejneru
+/// za posledních `window` sekund. Paměť je omezená (nejvýš `cap` ukončených spojení).
+#[derive(Debug, Clone)]
+pub struct ConnTracker {
+    live: HashMap<String, Conn>,
+    /// ukončená spojení, nejstarší první
+    pub closed: VecDeque<Conn>,
+    /// (t, přijato B/s, odesláno B/s) z čítačů rozhraní kontejneru
+    pub traffic: VecDeque<(f64, f64, f64)>,
+    dev: Option<(u64, u64, f64)>,
+    window: f64,
+    cap: usize,
+}
+
+/// Nejvýš tolik vzorků provozu (pojistka pro velmi časté vzorky).
+const TRAFFIC_CAP: usize = 4096;
+
+impl ConnTracker {
+    pub fn new(window: f64, cap: usize) -> Self {
+        Self { live: HashMap::new(), closed: VecDeque::new(), traffic: VecDeque::new(), dev: None, window, cap: cap.max(1) }
+    }
+
+    /// Nový vzorek navázaných spojení `(příchozí, socket)` v čase `t` (s).
+    pub fn update(&mut self, t: f64, conns: &[(bool, Sock)]) {
+        let mut next: HashMap<String, Conn> = HashMap::with_capacity(conns.len());
+        for (inbound, s) in conns {
+            let key = conn_key(s);
+            if next.contains_key(&key) {
+                continue;
+            }
+            let fresh = Conn { sock: s.clone(), inbound: *inbound, first_seen: t, last_seen: t, rate: None };
+            let c = match self.live.remove(&key) {
+                Some(old) if same_conn(&old.sock, s) => {
+                    let dt = t - old.last_seen;
+                    let r = match (old.sock.bytes_in, s.bytes_in, old.sock.bytes_out, s.bytes_out) {
+                        (Some(a), Some(b), Some(c), Some(d)) => rate(a, b, dt).zip(rate(c, d, dt)),
+                        _ => None,
+                    };
+                    Conn { first_seen: old.first_seen, rate: r, ..fresh }
+                }
+                Some(old) => {
+                    // stejná čtveřice adres, ale nové spojení: staré do historie
+                    self.close(old);
+                    fresh
+                }
+                None => fresh,
+            };
+            next.insert(key, c);
+        }
+        let mut gone: Vec<Conn> = std::mem::replace(&mut self.live, next).into_values().collect();
+        gone.sort_by(|a, b| a.first_seen.total_cmp(&b.first_seen).then_with(|| a.key().cmp(&b.key())));
+        for c in gone {
+            self.close(c);
+        }
+        self.evict(t);
+    }
+
+    /// Kumulované čítače rozhraní kontejneru v čase `t` -> vzorek provozu
+    /// (po vynulování čítačů – restart kontejneru – se jeden vzorek vynechá).
+    pub fn push_dev(&mut self, t: f64, rx: u64, tx: u64) {
+        if let Some((prx, ptx, pt)) = self.dev {
+            if let Some((r, w)) = rate(prx, rx, t - pt).zip(rate(ptx, tx, t - pt)) {
+                self.traffic.push_back((t, r, w));
+            }
+        }
+        self.dev = Some((rx, tx, t));
+        self.evict(t);
+    }
+
+    fn close(&mut self, c: Conn) {
+        self.closed.push_back(c);
+        while self.closed.len() > self.cap {
+            self.closed.pop_front();
+        }
+    }
+
+    fn evict(&mut self, t: f64) {
+        while self.closed.front().is_some_and(|c| c.last_seen < t - self.window) {
+            self.closed.pop_front();
+        }
+        while self.traffic.front().is_some_and(|s| s.0 < t - self.window) || self.traffic.len() > TRAFFIC_CAP {
+            self.traffic.pop_front();
+        }
+    }
+
+    /// Právě navázaná spojení (seřazeno podle klíče).
+    pub fn live(&self) -> Vec<Conn> {
+        let mut v: Vec<Conn> = self.live.values().cloned().collect();
+        v.sort_by_key(|c| c.key());
+        v
+    }
+}
 
 // ---------------------------------------------------------------- porty kontejneru
 
@@ -445,6 +654,50 @@ fn ip_overlaps_win(win_ip: &str, host_ip: &str) -> bool {
         return true;
     }
     !host_ip.is_empty() && win_ip == host_ip
+}
+
+// ---------------------------------------------------------------- ostatní distribuce WSL
+
+/// Naslouchající TCP sockety v jiné běžící distribuci WSL.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DistroListen {
+    pub distro: String,
+    /// síťový jmenný prostor (`net:[4026531840]`), prázdné = neznámý
+    pub netns: String,
+    pub listen: Vec<Sock>,
+    pub error: Option<String>,
+}
+
+/// Skript pro distribuci: síťový jmenný prostor a naslouchající TCP sockety
+/// (`ss`, v distribucích bez iproute2 záložně `netstat`).
+pub const DISTRO_SCRIPT: &str = "readlink /proc/self/ns/net; echo @@WLS@@; ss -ltnpH 2>/dev/null || netstat -ltn 2>/dev/null";
+
+/// Výstup `DISTRO_SCRIPT` -> (síťový prostor, naslouchající sockety).
+pub fn parse_distro_listen(text: &str) -> (String, Vec<Sock>) {
+    let (ns, ss) = text.split_once(MARK).unwrap_or(("", text));
+    let ns = ns.trim();
+    let ns = if ns.starts_with("net:") { ns.to_string() } else { String::new() };
+    (ns, parse_ss(ss).into_iter().filter(|s| s.proto == "tcp").collect())
+}
+
+/// Distribuce, které drží publikovaný port kontejneru (konflikt – wslrelay do Windows
+/// přeposílá jejich socket, ne kontejner).
+///
+/// Distribuce WSL 2 v režimu NAT i mirrored sdílejí jeden síťový prostor VM, takže `ss`
+/// v jiné distribuci vidí i sockety enginu. Socket se proto té distribuci přisoudí jen,
+/// když v ní `ss` ukáže vlastnící proces (procesy jiných distribucí nevidí), nebo když
+/// distribuce má prokazatelně vlastní síťový prostor (`engine_netns` se liší).
+pub fn distro_conflicts(p: &Published, engine_netns: &str, others: &[DistroListen]) -> Vec<String> {
+    others
+        .iter()
+        .filter(|d| {
+            let separate = !d.netns.is_empty() && !engine_netns.is_empty() && d.netns != engine_netns;
+            d.listen.iter().any(|s| {
+                s.proto == p.proto && s.local_port == p.host_port && ip_overlaps(&s.local_ip, &p.host_ip) && (separate || !s.procs.is_empty())
+            })
+        })
+        .map(|d| d.distro.clone())
+        .collect()
 }
 
 // ---------------------------------------------------------------- naslouchající sockety v distribuci
@@ -696,6 +949,176 @@ Active Connections
         assert_eq!(windows_state(&publ(80, "", 8080), &w, 777), WinState::Forwarded);
         assert_eq!(windows_state(&publ(80, "", 9), &w, 1), WinState::NotForwarded);
         assert_eq!(windows_state(&publ(80, "", 135), &w, 1), WinState::Conflict("PID 2144".into(), 2144));
+    }
+
+    /// Skutečný výstup `nsenter -t <pid> -n ss -tinpH state established` (nginx:alpine,
+    /// klient wget v druhém kontejneru, wget po IPv6 loopbacku a nečinné `nc`).
+    const SS_TI: &str = "0      0      10.88.0.37:80    10.88.0.38:54358 users:((\"nginx\",pid=48549,fd=18))
+\t cubic wscale:10,10 rto:204 rtt:0.066/0.019 ato:40 mss:1448 pmtu:1500 rcvmss:536 advmss:1448 cwnd:94 ssthresh:75 bytes_sent:12058881 bytes_acked:12058881 bytes_received:89 segs_out:8433 segs_in:452 data_segs_out:8432 data_segs_in:1 send 16498424242bps lastsnd:176 lastrcv:22220 lastack:176 pacing_rate 19649251120bps delivery_rate 12790666664bps delivered:8433 app_limited busy:32ms rcv_space:14480 rcv_ssthresh:64088 minrtt:0.009 snd_wnd:3636224 rcv_wnd:65536
+0      0       127.0.0.1:80     127.0.0.1:42719 users:((\"nginx\",pid=48548,fd=18))
+\t cubic wscale:10,10 rto:204 rtt:0.045/0.022 mss:32768 pmtu:65535 rcvmss:536 advmss:65483 cwnd:10 segs_in:2 send 58254222222bps lastsnd:3044 lastrcv:3044 lastack:3044 pacing_rate 116508444440bps delivered:1 app_limited rcv_space:65483 rcv_ssthresh:65483 minrtt:0.045 snd_wnd:65536 rcv_wnd:65483
+0      0       127.0.0.1:42719  127.0.0.1:80    users:((\"nc\",pid=48781,fd=3))
+\t cubic wscale:10,10 rto:204 rtt:0.039/0.019 mss:32741 pmtu:65535 rcvmss:536 advmss:65483 cwnd:10 bytes_acked:1 segs_out:2 segs_in:1 send 67161025641bps lastsnd:3044 lastrcv:3044 lastack:3044 pacing_rate 134322051280bps delivered:1 app_limited rcv_space:65495 rcv_ssthresh:65495 minrtt:0.039 snd_wnd:65483 rcv_wnd:65536
+0      0           [::1]:59342      [::1]:80    users:((\"wget\",pid=48764,fd=3))
+\t cubic wscale:10,10 rto:204 rtt:0.481/0.282 ato:40 mss:32768 pmtu:65536 rcvmss:65464 advmss:65464 cwnd:10 bytes_sent:84 bytes_acked:85 bytes_received:2097409 segs_out:54 segs_in:58 data_segs_out:1 data_segs_in:56 send 5449979210bps lastsnd:3132 lastrcv:128 lastack:128 pacing_rate 10885813648bps delivery_rate 15420235288bps delivered:2 app_limited rcv_rtt:125.012 rcv_space:458752 rcv_ssthresh:2966023 minrtt:0.017 snd_wnd:65536 rcv_wnd:2966528
+0      0           [::1]:80         [::1]:59342 users:((\"nginx\",pid=48549,fd=20))
+\t cubic wscale:10,10 rto:204 rtt:0.026/0.01 ato:40 mss:65464 pmtu:65536 rcvmss:536 advmss:65464 cwnd:10 bytes_sent:2097409 bytes_acked:2097409 bytes_received:84 segs_out:57 segs_in:54 data_segs_out:56 data_segs_in:1 send 201427692308bps lastsnd:128 lastrcv:3132 lastack:128 pacing_rate 395254339616bps delivery_rate 43642666664bps delivered:57 busy:8ms rcv_space:65464 rcv_ssthresh:65464 minrtt:0.005 snd_wnd:2966528 rcv_wnd:65536
+";
+
+    #[test]
+    fn ss_tcp_info_counters() {
+        let v = parse_ss(SS_TI);
+        assert_eq!(v.len(), 5);
+        // server posílá soubor
+        assert_eq!(v[0].peer(), "10.88.0.38:54358");
+        assert_eq!(v[0].procs, vec!["nginx"]);
+        assert_eq!((v[0].bytes_in, v[0].bytes_out), (Some(89), Some(12058881)));
+        // nečinné spojení bez čítačů v bloku info = 0
+        assert_eq!((v[1].bytes_in, v[1].bytes_out), (Some(0), Some(0)));
+        // bytes_acked:1 (jen SYN), bytes_sent chybí
+        assert_eq!((v[2].bytes_in, v[2].bytes_out), (Some(0), Some(1)));
+        // IPv6; bytes_acked o 1 větší než bytes_sent -> bere se menší
+        assert_eq!(v[3].local(), "[::1]:59342");
+        assert_eq!(v[3].peer(), "[::1]:80");
+        assert_eq!((v[3].bytes_in, v[3].bytes_out), (Some(2097409), Some(84)));
+        assert_eq!((v[4].bytes_in, v[4].bytes_out), (Some(84), Some(2097409)));
+        // bez -i: žádné čítače
+        let w = parse_ss("0 0 10.88.0.37:80 10.88.0.38:54358 users:((\"nginx\",pid=1,fd=18))\n");
+        assert_eq!((w[0].bytes_in, w[0].bytes_out, w[0].inode), (None, None, None));
+        // jednořádkový výstup (-O) s -e
+        let o = parse_ss("tcp 0 0 10.0.0.2:5 10.0.0.1:443 users:((\"curl\",pid=7,fd=3)) uid:1000 ino:4242 sk:1 <-> cubic rto:204 mss:1448 bytes_acked:10 bytes_received:2048\n");
+        assert_eq!((o[0].bytes_in, o[0].bytes_out, o[0].inode), (Some(2048), Some(10), Some(4242)));
+        // starší ss / jádro: blok info bez bytes_* -> 0, ne chyba; chybový řádek se ignoruje
+        let x = parse_ss("ss: unknown option\n0 0 1.1.1.1:1 2.2.2.2:2\n\t cubic rto:204 mss:1448\n");
+        assert_eq!((x.len(), x[0].bytes_in), (1, Some(0)));
+    }
+
+    #[test]
+    fn ns_dump_with_info_and_dev() {
+        let t = format!(
+            "@@PID 100\ntcp LISTEN 0 511 0.0.0.0:80 0.0.0.0:* users:((\"nginx\",pid=101,fd=6))\n@@EST\n{}@@DEV\n{DEV}",
+            SS_TI.replace("0      0", "tcp 0 0")
+        );
+        let d = parse_ns_dump(&t);
+        let x = &d[&100];
+        assert_eq!(x.listen.len(), 1);
+        assert_eq!(x.conns.len(), 5);
+        assert_eq!(x.conns[0].bytes_out, Some(12058881));
+        assert_eq!(x.conns[3].bytes_in, Some(2097409));
+        assert!(is_inbound(&x.conns[0], &x.listen) && !is_inbound(&x.conns[3], &x.listen));
+        // lo se nepočítá: eth0 + podman0
+        assert_eq!(x.dev, Some((1683225892 + 4528281, 19239598 + 362268730)));
+    }
+
+    fn conn(local: u16, peer: u16, rx: Option<u64>, tx: Option<u64>, ino: Option<u64>) -> Sock {
+        Sock {
+            proto: "tcp".into(),
+            local_ip: "10.0.0.2".into(),
+            local_port: local,
+            peer_ip: "10.0.0.1".into(),
+            peer_port: Some(peer),
+            bytes_in: rx,
+            bytes_out: tx,
+            inode: ino,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn conn_rates_reuse_and_resets() {
+        let mut t = ConnTracker::new(900.0, 100);
+        let a = |rx, tx| (false, conn(5000, 80, Some(rx), Some(tx), Some(1)));
+        t.update(0.0, &[a(100, 10), (true, conn(80, 6000, None, None, None))]);
+        assert!(t.live().iter().all(|c| c.rate.is_none()));
+        t.update(2.0, &[a(2100, 410), (true, conn(80, 6000, None, None, None))]);
+        let live = t.live();
+        let c = live.iter().find(|c| c.sock.local_port == 5000).unwrap();
+        assert_eq!(c.rate, Some((1000.0, 200.0)));
+        assert_eq!((c.first_seen, c.last_seen), (0.0, 2.0));
+        // spojení bez čítačů: bez rychlosti, ale sleduje se
+        let n = live.iter().find(|c| c.sock.local_port == 80).unwrap();
+        assert!(n.inbound && n.rate.is_none() && n.first_seen == 0.0);
+        // čítač klesl = stejná čtveřice, nové spojení -> staré do historie
+        t.update(4.0, &[a(50, 5)]);
+        assert_eq!(t.closed.len(), 2);
+        assert_eq!(t.closed[0].sock.bytes_in, Some(2100));
+        assert_eq!((t.closed[0].first_seen, t.closed[0].last_seen), (0.0, 2.0));
+        assert_eq!(t.closed[1].sock.local_port, 80);
+        let c = &t.live()[0];
+        assert_eq!((c.first_seen, c.rate), (4.0, None));
+        // jiný inode při vyšších čítačích = také nové spojení
+        t.update(6.0, &[(false, conn(5000, 80, Some(9000), Some(90), Some(2)))]);
+        assert_eq!(t.closed.len(), 3);
+        assert_eq!(t.live()[0].first_seen, 6.0);
+        t.update(8.0, &[(false, conn(5000, 80, Some(13000), Some(90), Some(2)))]);
+        assert_eq!(t.live()[0].rate, Some((2000.0, 0.0)));
+        // spojení zmizelo
+        t.update(10.0, &[]);
+        assert!(t.live().is_empty());
+        let last = t.closed.back().unwrap();
+        assert_eq!((last.first_seen, last.last_seen, last.sock.bytes_in), (6.0, 8.0, Some(13000)));
+    }
+
+    #[test]
+    fn conn_history_eviction_and_cap() {
+        let mut t = ConnTracker::new(60.0, 3);
+        for i in 0..5u16 {
+            let f = f64::from(i) * 2.0;
+            t.update(f, &[(false, conn(1000 + i, 80, Some(1), Some(1), None))]);
+        }
+        t.update(10.0, &[]);
+        // 5 ukončených, ale strop 3 -> zůstanou nejnovější
+        assert_eq!(t.closed.iter().map(|c| c.sock.local_port).collect::<Vec<_>>(), vec![1002, 1003, 1004]);
+        // starší než okno se zahodí
+        t.update(66.5, &[]);
+        assert_eq!(t.closed.iter().map(|c| c.sock.local_port).collect::<Vec<_>>(), vec![1004]);
+        t.update(80.0, &[]);
+        assert!(t.closed.is_empty());
+        // provoz rozhraní: rychlost z rozdílu, reset čítače vynechá vzorek, okno ořízne
+        t.push_dev(0.0, 1000, 100);
+        t.push_dev(2.0, 3000, 300);
+        t.push_dev(4.0, 10, 10);
+        t.push_dev(6.0, 210, 50);
+        assert_eq!(t.traffic.iter().copied().collect::<Vec<_>>(), vec![(2.0, 1000.0, 100.0), (6.0, 100.0, 20.0)]);
+        t.push_dev(64.0, 210, 50);
+        assert_eq!(t.traffic.iter().map(|s| s.0).collect::<Vec<_>>(), vec![6.0, 64.0]);
+    }
+
+    #[test]
+    fn distro_port_conflicts() {
+        let p = publ(80, "", 8080);
+        let lis = |port: u16, procs: &[&str]| Sock {
+            proto: "tcp".into(),
+            local_ip: "0.0.0.0".into(),
+            local_port: port,
+            procs: procs.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        let d = |name: &str, ns: &str, listen: Vec<Sock>| DistroListen { distro: name.into(), netns: ns.into(), listen, error: None };
+        let engine = "net:[4026531840]";
+        let others = [
+            // sdílený prostor: socket enginu (proces z jiné distribuce není vidět) – ne konflikt
+            d("Ubuntu", engine, vec![lis(8080, &[]), lis(22, &["sshd"])]),
+            // sdílený prostor a vlastní proces – konflikt
+            d("Fedora", engine, vec![lis(8080, &["python3"])]),
+            // vlastní síťový prostor – konflikt i bez procesu
+            d("Alpine", "net:[4026532000]", vec![lis(8080, &[])]),
+            // neznámý prostor bez procesu – nepřisuzovat
+            d("Arch", "", vec![lis(8080, &[])]),
+        ];
+        assert_eq!(distro_conflicts(&p, engine, &others), vec!["Fedora", "Alpine"]);
+        assert!(distro_conflicts(&publ(80, "", 9999), engine, &others).is_empty());
+        // jiná adresa hostitele (10.0.0.1 × 127.0.0.1) se nepřekrývá
+        let mut lo = lis(8080, &["node"]);
+        lo.local_ip = "127.0.0.1".into();
+        assert!(distro_conflicts(&publ(80, "10.0.0.1", 8080), engine, &[d("X", engine, vec![lo])]).is_empty());
+        let (ns, socks) = parse_distro_listen("net:[4026531840]\n@@WLS@@\nLISTEN 0 4096 0.0.0.0:8080 0.0.0.0:* users:((\"python3\",pid=9,fd=3))\n");
+        assert_eq!(ns, engine);
+        assert_eq!(socks[0].procs, vec!["python3"]);
+        // záložní netstat bez procesů
+        let (ns, socks) = parse_distro_listen("readlink: x\n@@WLS@@\nActive Internet connections\ntcp 0 0 0.0.0.0:22 0.0.0.0:* LISTEN\ntcp6 0 0 :::80 :::* LISTEN\n");
+        assert_eq!(ns, "");
+        assert_eq!(socks.iter().map(|s| s.local_port).collect::<Vec<_>>(), vec![22, 80]);
     }
 
     #[test]
