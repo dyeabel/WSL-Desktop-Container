@@ -11,6 +11,8 @@
 #   4. cargo build --release a scripts\package.ps1 -> dist\WLS-Desktop-<verze>-win-x64.zip (portable)
 #      a -winget.zip (+ .sha256); s -Sign se EXE podepíšou (scripts\sign.ps1, proměnné WLS_SIGN_*)
 #   5. volitelně git tag vX.Y.Z – po `git push origin vX.Y.Z` vytvoří GitHub Actions release se ZIPem
+#   6. úklid (scripts\cleanup.ps1): staré mezivýsledky v target\ a balíčky starších verzí v dist\;
+#      -NoCleanup ho přeskočí
 #
 # Živé testy (cargo test -- --ignored) se nespouští – potřebují WSL distribuci s enginem;
 # přepínač -LiveTests je spustí (WLS_DISTRO určuje distribuci).
@@ -19,8 +21,10 @@ param(
     [switch]$Tag,
     [switch]$LiveTests,
     [switch]$AllowDirty,
-    [switch]$Sign
+    [switch]$Sign,
+    [switch]$NoCleanup
 )
+$start = Get-Date
 # nativní příkazy (cargo, git) píší průběh na stderr – úspěch se kontroluje přes $LASTEXITCODE
 $ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot -Parent
@@ -72,6 +76,11 @@ if ($Tag) {
     git tag -a "v$ver" -m "WLS Desktop $ver"
     Check 'git tag'
     Write-Host "Vytvořen tag v$ver – vydání: git push origin main v$ver"
+}
+
+if (-not $NoCleanup) {
+    Step 'Úklid'
+    & (Join-Path $PSScriptRoot 'cleanup.ps1') -Since $start
 }
 
 Write-Host "`nHotovo: dist\WLS-Desktop-$ver-win-x64.zip" -ForegroundColor Green
