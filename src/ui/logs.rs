@@ -103,6 +103,33 @@ impl LogView {
         }
     }
 
+    /// Sloučené logy stacku: připojí kontejnery projektu, které ještě nejsou připojené
+    /// (spuštěné později, nové repliky, znovu vytvořené). Vrací počet nově připojených.
+    fn attach_new(&mut self, targets: Vec<(String, String)>) -> usize {
+        let mut n = 0;
+        for (id, label) in targets {
+            if self.ids.contains(&id) {
+                continue;
+            }
+            let src = self.ids.len() as u16;
+            // stejná služba jako dřív skrytá -> nový kontejner taky skrytý
+            let hidden = self.sources.iter().position(|s| *s == label).and_then(|i| self.hidden.get(i).copied()).unwrap_or(false);
+            if let Ok(mut g) = self.buf.lock() {
+                g.push_note(src, &tf!("[připojen kontejner {}]", "[attached container {}]", crate::docker::short_id(&id)), std::time::Instant::now());
+            }
+            self.ids.push(id.clone());
+            self.sources.push(label);
+            self.hidden.push(hidden);
+            // nový kontejner: celý jeho log (je krátký), u ostatních STACK_TAIL
+            self.streams.add(self.port, self.buf.clone(), &id, src, self.tail);
+            n += 1;
+        }
+        if n > 0 {
+            self.cache = ViewCache::default();
+        }
+        n
+    }
+
     /// Znovu připojí streamy do prázdného bufferu (u stacku s novým seznamem kontejnerů).
     fn restart(&mut self, targets: Option<Vec<(String, String)>>) {
         self.streams.stop();
@@ -139,6 +166,13 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
         let targets = logbuf::stack_targets(&app.snap.containers, &project);
         if let Some(lv) = app.logs.as_mut() {
             lv.restart(Some(targets));
+        }
+    }
+    // stack: kontejnery, které naběhly později (snapshot se obnovuje z událostí enginu)
+    if let Some(project) = app.logs.as_ref().and_then(|l| l.stack.clone()) {
+        let targets = logbuf::stack_targets(&app.snap.containers, &project);
+        if let Some(lv) = app.logs.as_mut() {
+            lv.attach_new(targets);
         }
     }
     let mut term = None;

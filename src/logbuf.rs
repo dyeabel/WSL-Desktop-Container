@@ -616,14 +616,19 @@ pub struct Streams {
 impl Streams {
     /// `ids[i]` se zapisuje jako zdroj `i`.
     pub fn start(port: u16, buf: Arc<Mutex<LogBuf>>, ids: &[String], tail: u32) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let mut closers = Vec::new();
-        let mut handles = Vec::new();
+        let mut s = Self { stop: Arc::new(AtomicBool::new(false)), closers: Vec::new(), handles: Vec::new() };
         for (src, id) in ids.iter().enumerate() {
-            let src = src as u16;
+            s.add(port, buf.clone(), id, src as u16, tail);
+        }
+        s
+    }
+
+    /// Připojí další kontejner za běhu (zdroj `src`) – ostatní streamy běží dál.
+    pub fn add(&mut self, port: u16, buf: Arc<Mutex<LogBuf>>, id: &str, src: u16, tail: u32) {
+        {
             let opts = LogOpts::follow(tail);
-            closers.push(opts.closer.clone());
-            let (buf, stop, id) = (buf.clone(), stop.clone(), id.clone());
+            self.closers.push(opts.closer.clone());
+            let (buf, stop, id) = (buf, self.stop.clone(), id.to_string());
             let h = std::thread::Builder::new().name(format!("logs-{src}")).spawn(move || {
                 let d = Docker::new(port);
                 let res = d.stream_logs(&id, &opts, |chunk, complete| {
@@ -644,10 +649,9 @@ impl Streams {
                 }
             });
             if let Ok(h) = h {
-                handles.push(h);
+                self.handles.push(h);
             }
         }
-        Self { stop, closers, handles }
     }
 
     pub fn stop(&self) {

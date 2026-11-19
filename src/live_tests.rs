@@ -1072,3 +1072,67 @@ fn live_free_memory() {
     eprintln!("{r:?}");
     assert!(r.as_ref().is_ok_and(|s| s.contains("VmmemWSL") || s.contains("cache")), "{r:?}");
 }
+
+/// Sloučené logy stacku: kontejner, který naběhne později, se připojí za běhu (Streams::add)
+/// a jeho řádky dorazí, aniž by se přerušil stream prvního.
+#[test]
+#[ignore]
+fn live_stack_logs_attach_later() {
+    use crate::logbuf::{self, LogBuf, Streams, MAX_LINES, REORDER};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+    const PROJECT: &str = "wls-test-follow";
+    let cfg = crate::config::Config::load();
+    crate::docker::configure_tls(cfg.tls).expect("tls");
+    let d = Docker::new(cfg.port);
+    assert!(d.ping(), "API na {} neodpovídá", cfg.port);
+    let cli = cfg.engine.cli(cfg.port, cfg.tls);
+    let distro = std::env::var("WLS_DISTRO").unwrap_or(cfg.distro.clone());
+    let run = |extra: &[&str]| {
+        let mut a: Vec<String> = cli.clone();
+        a.extend(extra.iter().map(|s| s.to_string()));
+        wsl::run_owned(&distro, None, None, &a)
+    };
+    let start = |svc: &str| {
+        let name = format!("{PROJECT}-{svc}");
+        run(&[
+            "run", "-d", "--name", &name,
+            "--label", &format!("com.docker.compose.project={PROJECT}"),
+            "--label", &format!("com.docker.compose.service={svc}"),
+            "docker.io/library/alpine:3.20", "sh", "-c", &format!("i=0; while true; do i=$((i+1)); echo {svc} line $i; sleep 0.3; done"),
+        ])
+        .expect("run");
+    };
+    let _ = run(&["rm", "-f", "wls-test-follow-a", "wls-test-follow-b"]);
+    start("a");
+    std::thread::sleep(Duration::from_millis(800));
+    let t0 = logbuf::stack_targets(&d.snapshot().containers, PROJECT);
+    assert_eq!(t0.len(), 1, "{t0:?}");
+    let buf = Arc::new(Mutex::new(LogBuf::new(MAX_LINES, Some(REORDER))));
+    let ids: Vec<String> = t0.iter().map(|t| t.0.clone()).collect();
+    let mut streams = Streams::start(cfg.port, buf.clone(), &ids, 50);
+    std::thread::sleep(Duration::from_secs(2));
+    // druhá služba naběhne až teď – připojit stejně jako okno logů (attach_new)
+    start("b");
+    std::thread::sleep(Duration::from_millis(800));
+    let t1 = logbuf::stack_targets(&d.snapshot().containers, PROJECT);
+    let new: Vec<_> = t1.iter().filter(|t| !ids.contains(&t.0)).cloned().collect();
+    assert_eq!(new.len(), 1, "{t1:?}");
+    streams.add(cfg.port, buf.clone(), &new[0].0, 1, 50);
+    let a_before = buf.lock().unwrap().iter().filter(|l| l.src == 0).count();
+    std::thread::sleep(Duration::from_secs(3));
+    {
+        let mut g = buf.lock().unwrap();
+        g.flush(Instant::now() + Duration::from_secs(5));
+    }
+    let g = buf.lock().unwrap();
+    let a = g.iter().filter(|l| l.src == 0).count();
+    let b = g.iter().filter(|l| l.src == 1 && l.text.contains("b line")).count();
+    drop(g);
+    let stopped = streams.stop_and_join(Duration::from_secs(5));
+    let _ = run(&["rm", "-f", "wls-test-follow-a", "wls-test-follow-b"]);
+    eprintln!("a: {a_before} -> {a} řádků, b (připojeno později): {b}, vlákna skončila: {stopped}");
+    assert!(a > a_before, "stream prvního kontejneru se přerušil");
+    assert!(b >= 5, "řádky nového kontejneru nedorazily");
+    assert!(stopped);
+}
