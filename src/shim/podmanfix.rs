@@ -186,6 +186,31 @@ fn with_health(c: &mut serde_json::Value) {
     }
 }
 
+/// Image a porty jako u Dockeru: bez `docker.io/library/` a `localhost/`, publikované porty
+/// z `Publishers` (Podman neposílá adresu, compose pak ukáže jen `80/tcp`).
+fn docker_like(c: &mut serde_json::Value) {
+    if let Some(img) = c.get("Image").and_then(|i| i.as_str()) {
+        let short = crate::engine::short_image(img.strip_prefix("localhost/").unwrap_or(img));
+        c["Image"] = serde_json::Value::String(short);
+    }
+    if let Some(pubs) = c.get("Publishers").and_then(|p| p.as_array()) {
+        let ports: Vec<serde_json::Value> = pubs
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "IP": p.get("URL").and_then(|u| u.as_str()).unwrap_or(""),
+                    "PrivatePort": p.get("TargetPort").and_then(|x| x.as_u64()).unwrap_or(0),
+                    "PublicPort": p.get("PublishedPort").and_then(|x| x.as_u64()).unwrap_or(0),
+                    "Type": p.get("Protocol").and_then(|x| x.as_str()).unwrap_or("tcp"),
+                })
+            })
+            .collect();
+        if !ports.is_empty() {
+            c["Ports"] = serde_json::Value::String(crate::fast::displayable_ports(&ports));
+        }
+    }
+}
+
 /// Výstup `compose ps --format json` (pole, nebo objekt na řádek) -> tabulka jako Docker
 /// Compose, nebo JSON s doplněným stavem. None = výstup nerozumíme (vypíše se beze změny).
 pub fn render_compose_ps(stdout: &str, json: bool) -> Option<String> {
@@ -198,6 +223,7 @@ pub fn render_compose_ps(stdout: &str, json: bool) -> Option<String> {
         t.lines().filter(|l| !l.trim().is_empty()).map(serde_json::from_str).collect::<Result<_, _>>().ok()?
     };
     rows.iter_mut().for_each(with_health);
+    rows.iter_mut().for_each(docker_like);
     if json {
         let mut s = String::new();
         for r in &rows {
@@ -209,11 +235,7 @@ pub fn render_compose_ps(stdout: &str, json: bool) -> Option<String> {
     let f = |r: &serde_json::Value, k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let mut text = String::from("NAME\tIMAGE\tCOMMAND\tSERVICE\tCREATED\tSTATUS\tPORTS\n");
     for r in &rows {
-        let mut cols = ["Name", "Image", "Command", "Service", "RunningFor", "Status", "Ports"].map(|k| f(r, k));
-        // lokálně sestavený obraz bez `localhost/` (jako Docker)
-        if let Some(rest) = cols[1].strip_prefix("localhost/") {
-            cols[1] = rest.to_string();
-        }
+        let cols = ["Name", "Image", "Command", "Service", "RunningFor", "Status", "Ports"].map(|k| f(r, k));
         text.push_str(&cols.join("\t"));
         text.push('\n');
     }
@@ -250,6 +272,18 @@ mod tests {
         assert_eq!(&c[3..], &a(&["wls-buildx", "unix:///run/wls-podman/podman.sock"])[..]);
         assert!(buildx_cli(&a(&["build", "."]), &cli).is_none());
         assert!(buildx_cli(&a(&["buildx", "ls"]), &a(&["docker"])).is_none());
+    }
+
+    #[test]
+    fn compose_ps_image_and_ports_like_docker() {
+        let out = r#"{"Name":"p-web-1","Image":"docker.io/library/nginx:alpine","Command":"x","Service":"web","RunningFor":"1 second ago","Status":"Up 1 second","Health":"","Ports":"80/tcp","Publishers":[{"Protocol":"tcp","PublishedPort":18080,"TargetPort":80,"URL":""}]}
+{"Name":"p-app-1","Image":"localhost/compat-app:1.0","Command":"y","Service":"app","RunningFor":"1 second ago","Status":"Up 1 second","Health":"","Ports":"","Publishers":[]}"#;
+        let t = render_compose_ps(out, false).unwrap();
+        assert!(t.contains("nginx:alpine ") && !t.contains("docker.io/"), "{t}");
+        assert!(t.contains("0.0.0.0:18080->80/tcp"), "{t}");
+        assert!(t.contains("compat-app:1.0") && !t.contains("localhost/"), "{t}");
+        let j = render_compose_ps(out, true).unwrap();
+        assert!(j.contains(r#""Ports":"0.0.0.0:18080->80/tcp""#) && j.contains(r#""Image":"nginx:alpine""#), "{j}");
     }
 
     #[test]

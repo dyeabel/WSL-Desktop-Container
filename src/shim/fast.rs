@@ -645,7 +645,15 @@ pub fn displayable_ports(ports: &[Value]) -> String {
     }
     let mut ps: Vec<P> = ports
         .iter()
-        .map(|p| P { ip: s(p, "IP").to_string(), private: n(p, "PrivatePort") as u32, public: n(p, "PublicPort") as u32, typ: s(p, "Type").to_string() })
+        .map(|p| {
+            let public = n(p, "PublicPort") as u32;
+            // Podman u publikovaného portu adresu neposílá – Docker by ukázal 0.0.0.0
+            let ip = match s(p, "IP") {
+                "" if public > 0 => "0.0.0.0".to_string(),
+                ip => ip.to_string(),
+            };
+            P { ip, private: n(p, "PrivatePort") as u32, public, typ: s(p, "Type").to_string() }
+        })
         .collect();
     ps.sort_by(|a, b| (a.private, &a.ip, a.public, &a.typ).cmp(&(b.private, &b.ip, b.public, &b.typ)));
     let form = |key: &str, first: u32, last: u32| -> String {
@@ -1854,6 +1862,59 @@ pub fn http_get(port: u16, tls: Option<Arc<rustls::ClientConfig>>, path: &str) -
     serde_json::from_slice(&body).map_err(|e| format!("bad JSON: {e}"))
 }
 
+/// `Built:` jako Docker CLI: `2025-12-21T17:42:01+01:00` -> `Sun Dec 21 17:42:01 2025`.
+fn docker_built(t: &str) -> String {
+    let p = |a: usize, b: usize| t.get(a..b).and_then(|x| x.parse::<i64>().ok());
+    match (p(0, 4), p(5, 7), p(8, 10), t.get(11..19)) {
+        (Some(y), Some(m), Some(d), Some(hms)) if (1..=12).contains(&m) => {
+            const WD: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+            const MO: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            let wd = WD[days_from_civil(y, m, d).rem_euclid(7) as usize];
+            format!("{wd} {} {d} {hms} {y}", MO[(m - 1) as usize])
+        }
+        _ => t.to_string(),
+    }
+}
+
+/// `docker version` (bez přepínačů) pro Podman ve tvaru Docker CLI: verze API z kompatibilního
+/// API (1.41), ne verze Podmanu, kterou vypisuje `podman version`.
+pub fn podman_version_text(v: &Value, client_version: &str, context: &str) -> String {
+    let f = |k: &str| s(v, k).to_string();
+    let api = f("ApiVersion");
+    let mut o = String::new();
+    o.push_str("Client: WLS Desktop (docker shim)\n");
+    o.push_str(&format!(" Version:           {client_version}\n API version:       {api}\n OS/Arch:           windows/amd64\n Context:           {context}\n\n"));
+    o.push_str("Server: Podman Engine\n Engine:\n");
+    o.push_str(&format!("  Version:          {}\n", f("Version")));
+    let min = f("MinAPIVersion");
+    o.push_str(&format!("  API version:      {api}{}\n", if min.is_empty() { String::new() } else { format!(" (minimum version {min})") }));
+    o.push_str(&format!("  Go version:       {}\n", f("GoVersion")));
+    o.push_str(&format!("  Git commit:       {}\n", f("GitCommit")));
+    o.push_str(&format!("  Built:            {}\n", docker_built(&f("BuildTime"))));
+    o.push_str(&format!("  OS/Arch:          {}/{}\n", f("Os"), f("Arch")));
+    o.push_str("  Experimental:     false\n");
+    if let Some(cs) = v.get("Components").and_then(|c| c.as_array()) {
+        for c in cs.iter().skip(1) {
+            let ver = s(c, "Version").lines().next().unwrap_or("").to_string();
+            o.push_str(&format!(" {}:\n  Version:          {ver}\n", s(c, "Name")));
+        }
+    }
+    o
+}
+
+/// `docker version` bez přepínačů z API (jen Podman). None = nechat na CLI.
+pub fn try_podman_version(args: &[String], port: u16, tls: bool, context: &str) -> Option<String> {
+    if args.len() != 1 || args[0] != "version" {
+        return None;
+    }
+    let tls = if tls { Some(Arc::new(crate::apitls::tls_config(&crate::apitls::tls_dir()?).ok()?)) } else { None };
+    let v: Value = serde_json::from_slice(&http_get_raw(port, tls, "/version").ok()?).ok()?;
+    if s(&v, "ApiVersion").is_empty() {
+        return None;
+    }
+    Some(podman_version_text(&v, env!("CARGO_PKG_VERSION"), context))
+}
+
 /// Celá rychlá cesta: rozbor, dotazy na API, výstup. `Err(důvod)` = použij wsl.exe.
 pub fn try_run(args: &[String], port: u16, tls: bool) -> Result<Output, String> {
     let cmd = parse(args)?;
@@ -2044,6 +2105,26 @@ nginx             latest    c05939e13a61   13 days ago          167MB
         assert_eq!(out, "NETWORK ID     NAME      DRIVER    SCOPE\n2f259bab93aa   podman    bridge    local\n");
         let out = parse(&a(&["network", "ls", "--format", "{{.Name}} {{.Internal}} {{.IPv6}}"])).unwrap().output(&nets, NOW, utc).unwrap();
         assert_eq!(out, "podman false false\n");
+    }
+
+    #[test]
+    fn podman_ports_without_ip() {
+        let p = json!([{"PrivatePort":80,"PublicPort":18080,"Type":"tcp"},{"PrivatePort":443,"Type":"tcp"}]);
+        assert_eq!(displayable_ports(p.as_array().unwrap()), "443/tcp, 0.0.0.0:18080->80/tcp");
+    }
+
+    #[test]
+    fn podman_version_like_docker() {
+        assert_eq!(docker_built("2025-12-21T17:42:01+01:00"), "Sun Dec 21 17:42:01 2025");
+        assert_eq!(docker_built("nesmysl"), "nesmysl");
+        let v = json!({"Version":"5.4.2","ApiVersion":"1.41","MinAPIVersion":"1.24","GoVersion":"go1.24.4","Os":"linux","Arch":"amd64",
+            "BuildTime":"2025-12-21T17:42:01+01:00","Components":[{"Name":"Podman Engine","Version":"5.4.2"},{"Name":"Conmon","Version":"conmon version 2.1.12"},{"Name":"OCI Runtime (crun)","Version":"crun version 1.21\ncommit: x"}]});
+        let t = podman_version_text(&v, "0.6.2", "default");
+        assert!(t.contains(" API version:       1.41\n"), "{t}");
+        assert!(t.contains("  API version:      1.41 (minimum version 1.24)\n"), "{t}");
+        assert!(t.contains("  Version:          5.4.2\n") && t.contains("Built:            Sun Dec 21 17:42:01 2025"), "{t}");
+        assert!(t.contains(" OCI Runtime (crun):\n  Version:          crun version 1.21\n"), "{t}");
+        assert!(!t.contains("5.4.2\n API") && !t.contains("API version:      5.4.2"), "{t}");
     }
 
     #[test]

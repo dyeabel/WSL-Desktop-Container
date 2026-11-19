@@ -121,6 +121,10 @@ fn main() -> ExitCode {
     if exe_name != "docker-compose" && std::env::var("WLS_SHIM_FAST").map(|v| v != "0").unwrap_or(true) {
         // Podman: `docker events` z API ve schématu Dockeru (podman events má vlastní)
         if target.engine == engine::Engine::Podman {
+            if let Some(t) = fast::try_podman_version(&args, target.port, target.tls, &ctx_name) {
+                let _ = std::io::stdout().lock().write_all(t.as_bytes());
+                return ExitCode::SUCCESS;
+            }
             match events::run(&args, target.port, target.tls, debug) {
                 Ok(true) => return ExitCode::SUCCESS,
                 Ok(false) => {}
