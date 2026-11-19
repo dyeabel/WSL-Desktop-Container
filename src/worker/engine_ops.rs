@@ -41,26 +41,42 @@ impl Worker {
 
     /// Uvolní paměť WSL: zahodí cache Linuxu a zhutní paměť, aby ji VM mohl vrátit Windows
     /// (VmmemWSL). `quiet` = automatické uvolnění bez oznámení.
+    /// Výsledek se zapíše do historie paměti a pošle UI (`Msg::MemoryFreed`).
     pub(super) fn free_memory(&self, quiet: bool) -> Result<String, String> {
-        let distro = self.cfg().distro;
-        let before = vmmem_mb();
-        let out = wsl::run(&distro, Some("root"), None, &["sh", "-c", FREE_MEMORY_SCRIPT])?;
-        let cached = |tag: &str| -> u64 {
-            out.lines().find_map(|l| l.strip_prefix(tag)).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0) / 1024
-        };
-        let (c0, c1) = (cached("before:"), cached("after:"));
+        let r = self.free_memory_inner(quiet);
+        self.memory_freed(quiet, r.clone());
+        let e = r?;
         if quiet {
             return Ok(String::new());
         }
-        // VM vrací stránky Windows postupně – chvíli počkat
-        thread::sleep(Duration::from_secs(4));
-        let after = vmmem_mb();
-        Ok(match (before, after) {
+        let mb = |v: u64| v / 1024 / 1024;
+        let (c0, c1) = (mb(e.cache_before), mb(e.cache_after));
+        Ok(match (e.vmmem_before.map(mb), e.vmmem_after.map(mb)) {
             (Some(b), Some(a)) => tf!(
                 "Paměť WSL uvolněna: VmmemWSL {b} MB → {a} MB (cache Linuxu {c0} MB → {c1} MB)",
                 "WSL memory freed: VmmemWSL {b} MB → {a} MB (Linux cache {c0} MB → {c1} MB)"
             ),
             _ => tf!("Cache Linuxu uvolněna: {c0} MB → {c1} MB", "Linux cache freed: {c0} MB → {c1} MB"),
+        })
+    }
+
+    fn free_memory_inner(&self, auto: bool) -> Result<crate::memory::FreeEvent, String> {
+        let distro = self.cfg().distro;
+        let t = crate::memory::now_secs();
+        let before = crate::memory::vmmem_now();
+        let out = wsl::run(&distro, Some("root"), None, &["sh", "-c", FREE_MEMORY_SCRIPT])?;
+        let cached = |tag: &str| -> u64 {
+            out.lines().find_map(|l| l.strip_prefix(tag)).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0) * 1024
+        };
+        // VM vrací stránky Windows postupně – chvíli počkat
+        thread::sleep(Duration::from_secs(4));
+        Ok(crate::memory::FreeEvent {
+            t,
+            auto,
+            vmmem_before: before,
+            vmmem_after: crate::memory::vmmem_now(),
+            cache_before: cached("before:"),
+            cache_after: cached("after:"),
         })
     }
 
@@ -464,15 +480,6 @@ sync
 echo 3 > /proc/sys/vm/drop_caches
 echo 1 > /proc/sys/vm/compact_memory 2>/dev/null || true
 echo "after: $(awk '/^Cached:/{print $2}' /proc/meminfo)""#;
-
-/// Paměť procesu VmmemWSL (resp. vmmem) ve Windows v MB.
-fn vmmem_mb() -> Option<u64> {
-    let out = wsl::hidden("powershell.exe")
-        .args(["-NoProfile", "-Command", "(Get-Process vmmemWSL,vmmem -ErrorAction SilentlyContinue | Measure-Object WorkingSet64 -Sum).Sum"])
-        .output()
-        .ok()?;
-    String::from_utf8_lossy(&out.stdout).trim().parse::<u64>().ok().filter(|b| *b > 0).map(|b| b / 1024 / 1024)
-}
 
 /// Port API pro režim: výchozí 2375 bez ověření, 2376 s TLS; vlastní port zůstává.
 pub fn api_port(tls: bool, port: u16) -> u16 {

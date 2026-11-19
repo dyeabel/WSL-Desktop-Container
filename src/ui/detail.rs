@@ -513,52 +513,9 @@ fn stats(ui: &mut egui::Ui, feed: &StatsFeed, running: bool) {
     });
 }
 
-/// Jednoduchý čárový graf za posledních `STATS_WINDOW` sekund.
+/// Čárový graf za posledních `STATS_WINDOW` sekund (sdílený `ui::chart`).
 fn chart(ui: &mut egui::Ui, pts: &[(f64, f64)], now: f64, ymax: f64, color: egui::Color32, fmt: impl Fn(f64) -> String) {
-    let w = ui.available_width().max(200.0);
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 150.0), egui::Sense::hover());
-    let p = ui.painter_at(rect);
-    p.rect_filled(rect, 6.0, theme::bg());
-    p.rect_stroke(rect, 6.0, egui::Stroke::new(1.0_f32, theme::card_stroke()), egui::StrokeKind::Inside);
-    let plot = egui::Rect::from_min_max(rect.min + egui::vec2(8.0, 18.0), rect.max - egui::vec2(8.0, 18.0));
-    let x0 = now - STATS_WINDOW;
-    let to_screen = |t: f64, v: f64| {
-        let x = plot.left() + ((t - x0) / STATS_WINDOW).clamp(0.0, 1.0) as f32 * plot.width();
-        let y = plot.bottom() - (v / ymax).clamp(0.0, 1.0) as f32 * plot.height();
-        egui::pos2(x, y)
-    };
-    let small = egui::FontId::proportional(11.0);
-    for f in [0.0, 0.5, 1.0] {
-        let y = plot.bottom() - f * plot.height();
-        p.line_segment([egui::pos2(plot.left(), y), egui::pos2(plot.right(), y)], egui::Stroke::new(1.0_f32, theme::card_stroke()));
-    }
-    p.text(egui::pos2(plot.left(), plot.top() - 2.0), egui::Align2::LEFT_BOTTOM, fmt(ymax), small.clone(), theme::muted());
-    p.text(egui::pos2(plot.left(), plot.bottom() + 2.0), egui::Align2::LEFT_TOP, t!("−5 min", "−5 min"), small.clone(), theme::muted());
-    p.text(egui::pos2(plot.right(), plot.bottom() + 2.0), egui::Align2::RIGHT_TOP, t!("teď", "now"), small.clone(), theme::muted());
-    if pts.is_empty() {
-        p.text(plot.center(), egui::Align2::CENTER_CENTER, t!("Zatím žádná data…", "No data yet…"), small, theme::muted());
-        return;
-    }
-    let line: Vec<egui::Pos2> = pts.iter().filter(|(t, _)| *t >= x0).map(|(t, v)| to_screen(*t, *v)).collect();
-    if line.len() == 1 {
-        p.circle_filled(line[0], 2.5, color);
-    } else {
-        p.add(egui::Shape::line(line, egui::Stroke::new(1.8_f32, color)));
-    }
-    // hodnota pod kurzorem
-    if let Some(pos) = resp.hover_pos() {
-        let t = x0 + ((pos.x - plot.left()) / plot.width()) as f64 * STATS_WINDOW;
-        if let Some((st, sv)) = pts.iter().min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs())) {
-            let at = to_screen(*st, *sv);
-            p.line_segment([egui::pos2(at.x, plot.top()), egui::pos2(at.x, plot.bottom())], egui::Stroke::new(1.0_f32, theme::muted()));
-            p.circle_filled(at, 3.5, color);
-            let ago = (now - st).max(0.0).round();
-            let text = tf!("{} (před {ago:.0} s)", "{} ({ago:.0} s ago)", fmt(*sv));
-            resp.on_hover_ui_at_pointer(|ui| {
-                ui.label(text);
-            });
-        }
-    }
+    super::chart::line_chart(ui, &[super::chart::Series { name: "", color, pts }], now, STATS_WINDOW, ymax, fmt, &[]);
 }
 
 fn recreate(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, nets: &[String], actions: &mut Vec<Action>) {

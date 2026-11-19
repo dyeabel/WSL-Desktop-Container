@@ -64,6 +64,8 @@ pub struct App {
     pub distros: Vec<Distro>,
     pub stats: Vec<StatRow>,
     pub df: Option<DfSummary>,
+    /// sekce Paměť WSL na přehledu (průběh a výsledek uvolnění)
+    pub mem: ui::memory::MemUi,
     pub tcp_configured: Option<bool>,
     pub page: Page,
     toasts: Vec<Toast>,
@@ -186,6 +188,8 @@ impl App {
             "settings" => Page::Settings,
             _ => Page::Dashboard,
         };
+        // pro screenshoty: WLS_DEBUG_MEMORY=1 otevře přehled a posune na sekci Paměť WSL
+        let page = if std::env::var_os("WLS_DEBUG_MEMORY").is_some() { Page::Dashboard } else { page };
         Self {
             cfg,
             tx,
@@ -195,6 +199,7 @@ impl App {
             distros: Vec::new(),
             stats: Vec::new(),
             df: None,
+            mem: Default::default(),
             tcp_configured: None,
             page,
             toasts: Vec::new(),
@@ -446,6 +451,7 @@ impl App {
                 Msg::Stack(m) => ui::compose::on_msg(self, m),
                 Msg::DistroDisk(name, r) => ui::distros::on_disk(self, name, r),
                 Msg::ContainerFs(view, m) => ui::container_files::on_msg(self, view, m),
+                Msg::MemoryFreed { auto, result } => ui::memory::on_freed(self, auto, result),
                 Msg::ConfigChanged => {
                     if let Ok(c) = self.cfg.read() {
                         self.cfg_draft = c.clone();
