@@ -11,6 +11,7 @@ mod distro_manage;
 mod engine_ops;
 mod events;
 mod fs_ops;
+mod memory;
 mod notify;
 mod recreate_body;
 mod spec;
@@ -216,6 +217,8 @@ pub enum Msg {
     DistroDisk(String, Result<DistroDisk, String>),
     /// odpověď prohlížeči souborů kontejneru (číslo pohledu)
     ContainerFs(u64, CfMsg),
+    /// uvolnění paměti WSL skončilo (auto = automatické z nastavení)
+    MemoryFreed { auto: bool, result: Result<crate::memory::FreeEvent, String> },
 }
 
 /// Souhrnný stav pro tray (zapisuje worker, čte vlákno UI/traye).
@@ -266,6 +269,10 @@ pub struct Shared {
     last_free_memory: Mutex<Option<Instant>>,
     /// předchozí vzorek CPU (čas, kumulované ns) pro výpočet vytížení z rozdílu
     cpu_prev: Mutex<std::collections::HashMap<String, (Instant, u64)>>,
+    /// přehled paměti WSL: historie, aktuální rozpad (zapisuje worker, čte UI)
+    pub memory: Mutex<crate::memory::MemState>,
+    mem_probe: Mutex<crate::memory::VmmemProbe>,
+    mem_running: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -348,9 +355,11 @@ impl Worker {
             *t = snap.containers.iter().map(crate::tray::menu_model::Item::from_container).collect();
         }
         self.send(Msg::Snapshot(Box::new(snap)));
+        let mut distro_running = false;
         if let Ok(list) = wsl::list() {
             let distro = self.cfg().distro;
             let running = list.iter().any(|d| d.name == distro && d.running());
+            distro_running = running;
             if let Ok(mut st) = self.shared.status.lock() {
                 *st = EngineStatus {
                     connected,
@@ -373,10 +382,9 @@ impl Worker {
             }
         }
         self.auto_free_memory();
-        if connected
-            && self.shared.want_stats.load(Ordering::Relaxed)
-            && !self.shared.stats_running.swap(true, Ordering::SeqCst)
-        {
+        let want_stats = self.shared.want_stats.load(Ordering::Relaxed);
+        self.memory_tick(distro_running, connected && want_stats);
+        if connected && want_stats && !self.shared.stats_running.swap(true, Ordering::SeqCst) {
             let w = self.clone();
             thread::spawn(move || {
                 let d = w.docker();
@@ -404,6 +412,9 @@ impl Worker {
                     prev.extend(rows.iter().map(|r| (r.id.clone(), (now, r.cpu_total))));
                 }
                 let df = d.df();
+                if distro_running {
+                    w.memory_sample(Some(&rows));
+                }
                 w.send(Msg::Stats(rows, df));
                 w.shared.stats_running.store(false, Ordering::SeqCst);
             });

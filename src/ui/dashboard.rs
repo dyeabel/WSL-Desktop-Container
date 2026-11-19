@@ -83,6 +83,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 
     if !need_engine(app, ui) {
+        // paměť WSL se měří i bez enginu
+        super::memory::show(app, ui);
         return;
     }
 
@@ -135,7 +137,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 Cmd::PruneContainers,
             ),
             Some(1) => app.send(Cmd::PruneImages { all: false }),
-            Some(5) => app.send(Cmd::FreeMemory),
+            Some(5) => super::memory::free(app),
             Some(2) => app.ask(
                 t!("Odstranit nepoužívané image?", "Remove unused images?"),
                 t!("Smažou se všechny image, které nepoužívá žádný kontejner.", "All images not used by any container will be deleted."),
@@ -150,6 +152,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             _ => {}
         }
     }
+
+    super::memory::show(app, ui);
 
     section(ui, t!("Výkon běžících kontejnerů", "Running container performance"));
     if !app.snap.containers.iter().any(|c| c.running()) {
