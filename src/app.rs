@@ -56,6 +56,8 @@ pub struct Confirm {
 pub use crate::ui::logs::LogView;
 
 pub struct App {
+    /// historie celkového CPU kontejnerů (čas s, % všech CPU WSL) – dlaždice CPU
+    pub cpu_hist: std::collections::VecDeque<(f64, f64)>,
     pub cfg: Arc<RwLock<Config>>,
     tx: Sender<Cmd>,
     rx: Receiver<Msg>,
@@ -195,6 +197,7 @@ impl App {
         // pro ladění/screenshoty: WLS_DEBUG_NETWORK=1|ports|map otevře síťový přehled
         let page = if std::env::var_os("WLS_DEBUG_NETWORK").is_some() { Page::Networks } else { page };
         Self {
+            cpu_hist: Default::default(),
             cfg,
             tx,
             rx,
@@ -417,6 +420,9 @@ impl App {
                 Msg::Snapshot(s) => self.snap = *s,
                 Msg::Distros(d) => self.distros = d,
                 Msg::Stats(rows, df) => {
+                    let ncpu = self.snap.info.as_ref().map(|i| i.ncpu.max(1)).unwrap_or(1) as f64;
+                    let total: f64 = rows.iter().map(|r| r.cpu).sum();
+                    ui::dashboard::push_cpu(&mut self.cpu_hist, total / ncpu);
                     self.stats = rows;
                     if df.is_some() {
                         self.df = df;

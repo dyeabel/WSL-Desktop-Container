@@ -91,32 +91,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
 
-    if let Some(df) = app.df.clone() {
-        section(ui, t!("Využití disku", "Disk usage"));
-        let mut pick: Option<u8> = None;
-        card(ui, |ui| {
-            ui.set_width(ui.available_width());
-            toolbar_lr(
-                ui,
-                130.0,
-                |ui, right| if !right {
-                    for (k, v) in [
-                        (t!("Image", "Images"), df.images),
-                        (t!("Kontejnery", "Containers"), df.containers),
-                        (t!("Volume", "Volumes"), df.volumes),
-                        ("Build cache", df.build_cache),
-                    ] {
-                        ui.label(muted(k));
-                        ui.label(RichText::new(fmt_bytes(v.max(0) as u64)).strong());
-                        ui.add_space(14.0);
-                    }
-                } else {
-                    pick = cleanup_menu(ui);
-                },
-            );
+    // CPU a disk jako dlaždice s grafem / pruhem
+    ui.add_space(8.0);
+    let mut pick = None;
+    let wide = ui.available_width() >= TWO_COL_MIN;
+    if wide {
+        ui.columns(2, |c| {
+            let (l, r) = c.split_at_mut(1);
+            cpu_tile(app, &mut l[0]);
+            pick = disk_tile(app, &mut r[0]);
         });
-        cleanup_apply(app, pick);
+    } else {
+        cpu_tile(app, ui);
+        ui.add_space(8.0);
+        pick = disk_tile(app, ui);
     }
+    cleanup_apply(app, pick);
 
     super::memory::show(app, ui);
     containers_perf(app, ui);
@@ -194,16 +184,7 @@ fn containers_perf(app: &mut App, ui: &mut egui::Ui) {
         4 => SortKey::num((r.blk_read + r.blk_write) as f64),
         _ => SortKey::text(&r.name),
     });
-    let total_cpu: f64 = rows.iter().map(|r| r.cpu).sum();
     let ncpu = app.snap.info.as_ref().map(|i| i.ncpu.max(1)).unwrap_or(1) as f64;
-    card(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(t!("Celkové CPU", "Total CPU")).strong());
-            ui.label(format!("{total_cpu:.1} %"));
-        });
-        ui.add(egui::ProgressBar::new((total_cpu / (ncpu * 100.0)) as f32).desired_height(6.0).fill(theme::accent()));
-    });
     ui.add_space(8.0);
     let cols = [
         (t!("NÁZEV", "NAME"), W::Fr(2.0)),
@@ -216,15 +197,21 @@ fn containers_perf(app: &mut App, ui: &mut egui::Ui) {
         for r in &rows {
             body.row(42.0, |mut row| {
                 row.col(|ui| {
-                    // název + image, ze kterého kontejner běží
-                    let image = app
+                    // název + image, ze kterého kontejner běží (a compose stack, pokud patří do něj)
+                    let sub = app
                         .snap
                         .containers
                         .iter()
                         .find(|c| c.id == r.id)
-                        .map(|c| crate::engine::short_image(&c.image))
+                        .map(|c| {
+                            let img = crate::engine::short_image(&c.image);
+                            match c.project() {
+                                Some(p) => format!("{img} · \u{E466} {p}"),
+                                None => img,
+                            }
+                        })
                         .unwrap_or_default();
-                    two_line(ui, RichText::new(&r.name).strong(), muted(&image).small());
+                    two_line(ui, RichText::new(&r.name).strong(), muted(&sub).small());
                 });
                 row.col(|ui| {
                     ui.vertical(|ui| {
@@ -248,4 +235,170 @@ fn containers_perf(app: &mut App, ui: &mut egui::Ui) {
             });
         }
     });
+}
+
+/// Výška dlaždic na přehledu (dvojice vedle sebe mají stejnou výšku).
+pub const TILE_H: f32 = 236.0;
+/// Od této šířky jsou dlaždice dvě vedle sebe.
+pub const TWO_COL_MIN: f32 = 860.0;
+/// Jak dlouhou historii CPU držet (s).
+const CPU_WINDOW: f64 = 900.0;
+
+/// Dvě dlaždice vedle sebe (v úzkém okně pod sebou).
+pub fn two_tiles(ui: &mut egui::Ui, a: impl FnOnce(&mut egui::Ui), b: impl FnOnce(&mut egui::Ui)) {
+    if ui.available_width() >= TWO_COL_MIN {
+        ui.columns(2, |c| {
+            a(&mut c[0]);
+            b(&mut c[1]);
+        });
+    } else {
+        a(ui);
+        ui.add_space(8.0);
+        b(ui);
+    }
+}
+
+/// Přidá vzorek celkového CPU (% všech CPU WSL) a zahodí starší než CPU_WINDOW.
+pub fn push_cpu(h: &mut std::collections::VecDeque<(f64, f64)>, pct: f64) {
+    let now = crate::memory::now_secs();
+    h.push_back((now, pct));
+    while h.front().is_some_and(|p| now - p.0 > CPU_WINDOW) {
+        h.pop_front();
+    }
+}
+
+/// Záhlaví dlaždice: popisek, velké číslo, šedý doplněk. Řádek s popiskem má výšku tlačítka,
+/// aby seděl s dlaždicí, která má vpravo nabídku (Disk → Uklidit).
+fn tile_head(ui: &mut egui::Ui, title: &str, big: &str, sub: &str) {
+    ui.horizontal(|ui| {
+        ui.set_min_height(theme::CONTROL_H);
+        ui.label(muted(title));
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(big).size(24.0).strong());
+        ui.label(muted(sub));
+    });
+    ui.add_space(4.0);
+}
+
+fn cpu_tile(app: &mut App, ui: &mut egui::Ui) {
+    card(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.set_min_height(TILE_H);
+        let ncpu = app.snap.info.as_ref().map(|i| i.ncpu.max(1)).unwrap_or(1);
+        let now_pct = app.cpu_hist.back().map(|p| p.1).unwrap_or(0.0);
+        tile_head(
+            ui,
+            t!("CPU kontejnerů", "Container CPU"),
+            &format!("{now_pct:.1} %"),
+            &tf!("z {ncpu} CPU ve WSL", "of {ncpu} CPUs in WSL"),
+        );
+        let pts: Vec<(f64, f64)> = app.cpu_hist.iter().copied().collect();
+        let max = pts.iter().map(|p| p.1).fold(0.0, f64::max);
+        let ymax = (max * 1.3).clamp(5.0, 100.0);
+        super::chart::line_chart(
+            ui,
+            &[super::chart::Series { name: "CPU", color: theme::accent(), pts: &pts }],
+            crate::memory::now_secs(),
+            CPU_WINDOW,
+            ymax,
+            |v| format!("{v:.0} %"),
+            &[],
+        );
+    });
+}
+
+/// Dlaždice Disk: úložiště enginu proti disku distribuce; vrací výběr z nabídky Uklidit.
+fn disk_tile(app: &mut App, ui: &mut egui::Ui) -> Option<u8> {
+    let disk = app.shared.alerts.lock().ok().and_then(|a| a.disk.clone());
+    let mut pick = None;
+    card(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.set_min_height(TILE_H);
+        ui.horizontal(|ui| {
+            ui.label(muted(t!("Disk", "Disk")));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                pick = cleanup_menu(ui);
+            });
+        });
+        let Some(df) = app.df.clone() else {
+            ui.label(muted(t!("Zjišťuji využití disku…", "Measuring disk usage…")));
+            return;
+        };
+        let v = |x: i64| x.max(0) as u64;
+        let engine = v(df.images) + v(df.containers) + v(df.volumes) + v(df.build_cache);
+        let inside = disk.as_ref().and_then(|d| d.inside.clone());
+        let sub = match &inside {
+            Some(i) => tf!(
+                "engine · disk distribuce {} z {}, volné {} %",
+                "engine · distribution disk {} of {}, {} % free",
+                fmt_bytes(i.used),
+                fmt_bytes(i.size),
+                (i.avail as f64 / i.size.max(1) as f64 * 100.0).round()
+            ),
+            None => t!("úložiště enginu", "engine storage").into(),
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(fmt_bytes(engine)).size(24.0).strong());
+            ui.label(muted(sub));
+        });
+        ui.add_space(6.0);
+        let other = inside.as_ref().map(|i| i.used.saturating_sub(engine)).unwrap_or(0);
+        let free = inside.as_ref().map(|i| i.avail).unwrap_or(0);
+        let parts: [(Option<Color32>, &str, u64); 6] = [
+            (Some(theme::accent()), t!("Image", "Images"), v(df.images)),
+            (Some(theme::hue(0.58)), t!("Kontejnery", "Containers"), v(df.containers)),
+            (Some(theme::hue(0.78)), t!("Volume", "Volumes"), v(df.volumes)),
+            (Some(theme::red()), "Build cache", v(df.build_cache)),
+            (Some(theme::green()), t!("Ostatní data", "Other data"), other),
+            (None, t!("Volné", "Free"), free),
+        ];
+        stacked_bar(ui, &parts);
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 16.0;
+            for (c, name, val) in parts {
+                if c.is_some() || inside.is_some() {
+                    super::memory::legend_item(ui, c, name, &fmt_bytes(val));
+                }
+            }
+        });
+        if let Some(d) = &disk {
+            ui.add_space(6.0);
+            let mut extra = Vec::new();
+            if let Some((_, size)) = &d.vhdx {
+                extra.push(tf!("VHDX {}", "VHDX {}", fmt_bytes(*size)));
+            }
+            if let Some(w) = &d.drive {
+                extra.push(tf!("disk {} volné {} z {}", "drive {} free {} of {}", w.name, fmt_bytes(w.free), fmt_bytes(w.total)));
+            }
+            if !extra.is_empty() {
+                ui.label(muted(extra.join(" · ")).small());
+            }
+        }
+    });
+    pick
+}
+
+/// Vodorovný pruh poskládaný z částí; část bez barvy (volné místo) zůstane prázdná.
+fn stacked_bar(ui: &mut egui::Ui, parts: &[(Option<Color32>, &str, u64)]) {
+    let w = ui.available_width().max(100.0);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 22.0), egui::Sense::hover());
+    let p = ui.painter_at(rect.expand(2.0));
+    p.rect_filled(rect, 4.0, theme::bg());
+    let total: u64 = parts.iter().map(|x| x.2).sum::<u64>().max(1);
+    let mut x = rect.left();
+    let mut tip = String::new();
+    for (c, name, val) in parts {
+        let pw = (*val as f64 / total as f64 * rect.width() as f64) as f32;
+        if let Some(c) = c {
+            if pw >= 0.5 {
+                p.rect_filled(egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(pw, rect.height())), 0.0, *c);
+            }
+        }
+        x += pw;
+        tip.push_str(&format!("{name}: {} ({:.0} %)\n", fmt_bytes(*val), *val as f64 / total as f64 * 100.0));
+    }
+    p.rect_stroke(rect, 4.0, egui::Stroke::new(1.0_f32, theme::card_stroke()), egui::StrokeKind::Inside);
+    resp.on_hover_text(tip.trim_end());
 }

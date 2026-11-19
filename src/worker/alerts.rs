@@ -381,6 +381,8 @@ pub struct Alerts {
     states: [State; 6],
     /// poslední spuštění kontroly disku
     last_disk: Option<Instant>,
+    /// poslední změřená data o disku (dlaždice Disk na přehledu)
+    pub disk: Option<DiskInput>,
 }
 
 impl Alerts {
@@ -409,6 +411,7 @@ impl Alerts {
     }
 
     pub fn check_disk(&mut self, c: &AlertsConfig, d: &DiskInput, now: Instant) -> Vec<Alert> {
+        self.disk = Some(d.clone());
         [
             (Kind::DistroDisk, eval_distro_disk(c, d)),
             (Kind::WinDrive, eval_win_drive(c, d)),

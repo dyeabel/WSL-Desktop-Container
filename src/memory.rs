@@ -192,8 +192,6 @@ pub fn breakdown(mi: &MemInfo, vmmem: Option<u64>, (limit, limit_set): (u64, boo
 #[derive(Debug, Clone, Default)]
 pub struct MemNow {
     pub b: Breakdown,
-    /// (id, název, paměť) běžících kontejnerů
-    pub containers: Vec<(String, String, u64)>,
 }
 
 // ---------------------------------------------------------------- historie

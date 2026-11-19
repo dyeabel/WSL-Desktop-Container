@@ -10,7 +10,7 @@ Docker Desktop and without the Docker CLI for Windows.
 
 | Page | What it does |
 |---|---|
-| **Overview** (Přehled) | engine status, container / image / volume counts, CPU and RAM available to WSL, disk usage with a *Clean up* menu (prune), live CPU, memory, network and disk stats per running container (with the image it runs from) |
+| **Overview** (Přehled) | engine status, container / image / volume counts, CPU and RAM available to WSL; tiles side by side: **CPU** of containers with a 15-minute chart, **Disk** – engine storage (images, containers, volumes, build cache) against the distribution disk with a usage bar, VHDX and Windows drive and a *Clean up* menu (prune), **WSL memory** summary bar next to its one-hour chart; live CPU, memory, network and disk stats per running container (with its image and compose stack) |
 | **Containers** (Kontejnery) | grouped by compose project; start, stop, restart, pause, remove; colored state badges (running, stopped, error with exit code, health); live logs (see *Logs*); **files inside the container**; console in Windows Terminal; *Run container* dialog; **container detail** (see below) |
 | **Images** | **build from a Dockerfile** (see below), search Docker Hub (dialog with tag picker, size and update date), pull by exact name, remove, prune, run a container from an image, which containers use an image |
 | **Volumes** | create, remove, prune, **size**, which containers use a volume, browse its content (as root), *run a container with this volume*, **back up to `.tar.gz`, restore, clone** |

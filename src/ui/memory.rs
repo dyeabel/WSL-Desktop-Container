@@ -3,7 +3,7 @@
 use super::chart::{line_chart, Marker, Series};
 use super::*;
 use crate::app::App;
-use crate::memory::{Breakdown, FreeEvent, MemNow, MemPoint, HISTORY_SECS};
+use crate::memory::{Breakdown, FreeEvent, MemPoint, HISTORY_SECS};
 use crate::worker::Cmd;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -90,39 +90,41 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         head.scroll_to_me(Some(egui::Align::TOP));
     }
 
-    card(ui, |ui| {
-        ui.set_width(ui.available_width());
-        match &now {
-            Some(n) => summary(ui, &n.b),
-            None => {
-                ui.label(muted(t!("Měřím paměť…", "Measuring memory…")));
-            }
-        }
-        if let Some(r) = &app.mem.last {
-            ui.add_space(6.0);
-            match r {
-                Ok(e) => {
-                    ui.label(muted(free_text(e, now_secs())).small());
+    // souhrn s pruhem a graf historie vedle sebe (v úzkém okně pod sebou)
+    let last = app.mem.last.clone();
+    super::dashboard::two_tiles(
+        ui,
+        |ui| {
+            card(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.set_min_height(super::dashboard::TILE_H);
+                match &now {
+                    Some(n) => summary(ui, &n.b),
+                    None => {
+                        ui.label(muted(t!("Měřím paměť…", "Measuring memory…")));
+                    }
                 }
-                Err(e) => {
-                    ui.label(RichText::new(tf!("Uvolnění selhalo: {e}", "Freeing failed: {e}")).small().color(theme::red()));
+                if let Some(r) = &last {
+                    ui.add_space(6.0);
+                    match r {
+                        Ok(e) => {
+                            ui.label(muted(free_text(e, now_secs())).small());
+                        }
+                        Err(e) => {
+                            ui.label(RichText::new(tf!("Uvolnění selhalo: {e}", "Freeing failed: {e}")).small().color(theme::red()));
+                        }
+                    }
                 }
-            }
-        }
-    });
-
-    ui.add_space(8.0);
-    card(ui, |ui| {
-        ui.set_width(ui.available_width());
-        history(ui, &points, &events);
-    });
-
-    if let Some(n) = &now {
-        if !n.containers.is_empty() {
-            ui.add_space(8.0);
-            mem_table(app, ui, n);
-        }
-    }
+            });
+        },
+        |ui| {
+            card(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.set_min_height(super::dashboard::TILE_H);
+                history(ui, &points, &events);
+            });
+        },
+    );
 }
 
 fn now_secs() -> f64 {
@@ -186,7 +188,7 @@ fn summary(ui: &mut egui::Ui, b: &Breakdown) {
 
 /// Položka legendy jako JEDEN prvek (čtvereček + název + hodnota), aby se v zalamovaném
 /// řádku zalomila celá – vnořené `ui.horizontal` egui nezalamuje a řádek by přetekl.
-fn legend_item(ui: &mut egui::Ui, c: Option<Color32>, name: &str, value: &str) -> egui::Response {
+pub(super) fn legend_item(ui: &mut egui::Ui, c: Option<Color32>, name: &str, value: &str) -> egui::Response {
     use egui::text::{LayoutJob, TextFormat};
     let font = egui::TextStyle::Body.resolve(ui.style());
     let mut job = LayoutJob::default();
@@ -313,98 +315,6 @@ fn history(ui: &mut egui::Ui, points: &[MemPoint], events: &[FreeEvent]) {
         muted(t!(
             "Vzorek při každém obnovení, když je přehled otevřený, jinak jednou za minutu. \u{EC54} = uvolnění paměti.",
             "Sampled on every refresh while the overview is open, otherwise once a minute. \u{EC54} = memory freed."
-        ))
-        .small(),
-    );
-}
-
-/// Řádek tabulky: stack (součet jeho kontejnerů) nebo samostatný kontejner.
-struct Row {
-    name: String,
-    /// stack: počet kontejnerů; kontejner: 0
-    members: usize,
-    sub: String,
-    mem: u64,
-}
-
-/// Seskupí kontejnery podle compose projektu.
-fn rows(app: &App, n: &MemNow) -> Vec<Row> {
-    let mut stacks: std::collections::BTreeMap<String, (u64, Vec<(String, u64)>)> = Default::default();
-    let mut out = Vec::new();
-    for (id, name, mem) in &n.containers {
-        let c = app.snap.containers.iter().find(|c| &c.id == id);
-        match c.and_then(|c| c.project()) {
-            Some(p) => {
-                let e = stacks.entry(p.to_string()).or_default();
-                e.0 += mem;
-                e.1.push((name.clone(), *mem));
-            }
-            None => out.push(Row {
-                name: name.clone(),
-                members: 0,
-                sub: c.map(|c| crate::engine::short_image(&c.image)).unwrap_or_default(),
-                mem: *mem,
-            }),
-        }
-    }
-    for (p, (mem, mut members)) in stacks {
-        members.sort_by_key(|m| std::cmp::Reverse(m.1));
-        let sub = members.iter().map(|(n, m)| format!("{n} {}", fmt_bytes(*m))).collect::<Vec<_>>().join(" · ");
-        out.push(Row { name: p, members: members.len(), sub, mem });
-    }
-    out
-}
-
-fn mem_table(app: &App, ui: &mut egui::Ui, n: &MemNow) {
-    let mut rows = rows(app, n);
-    rows.sort_by_key(|r| std::cmp::Reverse(r.mem));
-    sort_items(ui.ctx(), "mem", &mut rows, |r, col| match col {
-        1 => SortKey::num(r.members as f64),
-        2 | 3 => SortKey::num(r.mem as f64),
-        _ => SortKey::text(&r.name),
-    });
-    let used = n.b.used.max(1) as f64;
-    let cols = [
-        (t!("STACK / KONTEJNER", "STACK / CONTAINER"), W::Fr(2.4)),
-        (t!("TYP", "TYPE"), W::PxOpt(110.0)),
-        (t!("PAMĚŤ", "MEMORY"), W::Fr(1.4)),
-        (t!("Z LINUXU", "OF LINUX"), W::Px(80.0)),
-    ];
-    table_sort(ui, "mem", &cols, Sort { key: "mem", cols: &[0, 1, 2, 3] }, |mut body| {
-        for r in &rows {
-            body.row(42.0, |mut row| {
-                row.col(|ui| {
-                    two_line(ui, RichText::new(&r.name).strong(), muted(&r.sub).small());
-                });
-                row.col(|ui| {
-                    if r.members > 0 {
-                        ui.label(muted(tf!("\u{E466} stack ({})", "\u{E466} stack ({})", r.members)));
-                    } else {
-                        ui.label(muted(t!("\u{E1DA} kontejner", "\u{E1DA} container")));
-                    }
-                });
-                row.col(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(fmt_bytes(r.mem));
-                        ui.add(
-                            egui::ProgressBar::new((r.mem as f64 / used) as f32)
-                                .desired_width(ui.available_width() - 12.0)
-                                .desired_height(4.0)
-                                .fill(c_containers()),
-                        );
-                    });
-                });
-                row.col(|ui| {
-                    ui.label(format!("{:.1} %", r.mem as f64 / used * 100.0));
-                });
-            });
-        }
-    });
-    ui.add_space(2.0);
-    ui.label(
-        muted(t!(
-            "Paměť kontejnerů = statistiky enginu bez neaktivní cache souborů; podíl z paměti použité procesy v Linuxu.",
-            "Container memory = engine stats without inactive file cache; share of memory used by processes in Linux."
         ))
         .small(),
     );

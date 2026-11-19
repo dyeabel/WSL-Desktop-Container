@@ -40,9 +40,9 @@ impl Worker {
         let now = rows.map(|rows| {
             let ram = memory::total_ram();
             let limit = memory::limit_from(&crate::wslconfig::read(), ram);
-            let containers: Vec<(String, String, u64)> = rows.iter().map(|r| (r.id.clone(), r.name.clone(), r.mem)).collect();
-            let sum = containers.iter().map(|c| c.2).sum();
-            MemNow { b: memory::breakdown(&mi, vmmem, limit, ram, sum, engine.unwrap_or(0)), containers }
+            // paměť po kontejnerech ukazuje tabulka výkonu – tady jen součet
+            let sum = rows.iter().map(|r| r.mem).sum();
+            MemNow { b: memory::breakdown(&mi, vmmem, limit, ram, sum, engine.unwrap_or(0)) }
         });
         if let Ok(mut m) = self.shared.memory.lock() {
             m.history.push(MemPoint::new(t, vmmem, mi.used(), mi.cache()));
