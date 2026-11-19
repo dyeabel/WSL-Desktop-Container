@@ -77,7 +77,7 @@ pub fn install_dialog(app: &mut App, ctx: &egui::Context) {
 /// Potvrzení „Zapnout TLS“ (tlačítko v nastavení i upozornění nahoře).
 /// Potvrzení přepnutí primární distribuce (API aplikace se přesune do `distro`).
 pub fn ask_primary(app: &mut App, distro: &str, engine: Option<crate::engine::Engine>) {
-    let (old, port) = app.cfg.read().map(|c| (c.distro.clone(), c.port)).unwrap_or_default();
+    let (old, port, sleep_old) = app.cfg.read().map(|c| (c.distro.clone(), c.port, c.sleep_previous_primary)).unwrap_or_default();
     let with = engine.map(|e| format!(" ({})", e.name())).unwrap_or_default();
     app.ask(
         tf!("Přepnout primární distribuci na {distro}{with}?", "Switch the primary distribution to {distro}{with}?"),
@@ -85,7 +85,7 @@ pub fn ask_primary(app: &mut App, distro: &str, engine: Option<crate::engine::En
             "API aplikace (tcp://127.0.0.1:{port}), příkazy docker a všechny stránky budou pracovat s {distro}. V {old} se TCP API vypne, engine a kontejnery tam poběží dál (u Dockeru bez TLS se démon restartuje). Zpět přepneš stejně.",
             "The app API (tcp://127.0.0.1:{port}), docker commands and all pages will work with {distro}. In {old} the TCP API is turned off; the engine and containers keep running there (Docker without TLS restarts its daemon). Switch back the same way."
         ),
-        Cmd::SetPrimary { distro: distro.to_string(), engine },
+        Cmd::SetPrimary { distro: distro.to_string(), engine, sleep_old },
     );
 }
 

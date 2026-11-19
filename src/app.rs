@@ -590,6 +590,7 @@ impl App {
                                 // řádek 2: distribuce a kontejnery
                                 // klik = přepnutí primární distribuce
                                 let mut pick = None;
+                                let mut sleep = None;
                                 ui.horizontal(|ui| {
                                     ui.add_space(20.0);
                                     let btn = egui::Button::new(RichText::new(format!("{detail}  \u{E136}")).small().color(theme::muted())).frame(false);
@@ -603,12 +604,27 @@ impl App {
                                                 Some(e) => format!("{} · {e}", d.name),
                                                 None => d.name.clone(),
                                             };
-                                            if ui.add(egui::Button::new(text).selected(cur).min_size(egui::vec2(180.0, 0.0))).clicked() {
-                                                ui.close_menu();
-                                                if !cur {
-                                                    pick = Some(d.name.clone());
+                                            ui.horizontal(|ui| {
+                                                if ui.add(egui::Button::new(text).selected(cur).min_size(egui::vec2(180.0, 0.0))).clicked() {
+                                                    ui.close_menu();
+                                                    if !cur {
+                                                        pick = Some(d.name.clone());
+                                                    }
                                                 }
-                                            }
+                                                // neprimární běžící distribuci jde uspat rovnou odtud
+                                                if !cur && d.running() {
+                                                    if ui
+                                                        .small_button("\u{E330}")
+                                                        .on_hover_text(tf!("Uspat {} (wsl --terminate)", "Put {} to sleep (wsl --terminate)", d.name))
+                                                        .clicked()
+                                                    {
+                                                        ui.close_menu();
+                                                        sleep = Some(d.name.clone());
+                                                    }
+                                                } else {
+                                                    ui.add_space(22.0);
+                                                }
+                                            });
                                         }
                                     })
                                     .response
@@ -616,6 +632,16 @@ impl App {
                                 });
                                 if let Some(n) = pick {
                                     ui::engine::ask_primary(self, &n, None);
+                                }
+                                if let Some(n) = sleep {
+                                    self.ask(
+                                        tf!("Uspat {n}?", "Put {n} to sleep?"),
+                                        t!(
+                                            "Distribuce se ukončí (wsl --terminate) a uvolní paměť. Kontejnery v ní se zastaví; ty s restart policy se spustí při dalším startu.",
+                                            "The distribution is terminated (wsl --terminate) and frees memory. Its containers stop; those with a restart policy start again on the next start."
+                                        ),
+                                        Cmd::Wsl(crate::worker::WslCmd::Terminate(n)),
+                                    );
                                 }
                                 ui.add_space(6.0);
                                 // řádek 3: stejně široká tlačítka
@@ -732,9 +758,19 @@ impl App {
         // potvrzení
         let mut close = false;
         let mut run_cmd = None;
-        if let Some(c) = &self.confirm {
+        let distro = self.distro();
+        if let Some(c) = &mut self.confirm {
             let (_, esc) = ui::modal(ctx, "confirm", &c.title, 440.0, |ui| {
                 ui.label(RichText::new(&c.text).color(theme::body_text()));
+                // přepnutí primární distribuce: volba uspat tu dosavadní
+                if let Cmd::SetPrimary { sleep_old, .. } = &mut c.cmd {
+                    ui.add_space(6.0);
+                    ui.checkbox(sleep_old, tf!("Po přepnutí uspat {distro} (wsl --terminate)", "Put {distro} to sleep after switching (wsl --terminate)"))
+                        .on_hover_text(t!(
+                            "Uvolní paměť a CPU. Kontejnery v ní se zastaví; ty s restart policy se spustí při dalším startu distribuce.",
+                            "Frees memory and CPU. Its containers stop; those with a restart policy start again when the distribution next starts."
+                        ));
+                }
                 let (ok, cancel) = ui::dialog_buttons(ui, t!("Potvrdit", "Confirm"), true, true);
                 if ok {
                     run_cmd = Some(c.cmd.clone());

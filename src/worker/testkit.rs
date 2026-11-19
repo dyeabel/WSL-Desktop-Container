@@ -73,10 +73,10 @@ pub fn history_sample(cfg: Config, prev: &mut std::collections::HashMap<String, 
 }
 
 /// Přepnutí primární distribuce (jako „Nastavit jako primární“). Vrací výsledek, log a novou konfiguraci.
-pub fn set_primary(cfg: Config, distro: &str, engine: Option<Engine>) -> (Result<String, String>, String, Config) {
+pub fn set_primary(cfg: Config, distro: &str, engine: Option<Engine>, sleep_old: bool) -> (Result<String, String>, String, Config) {
     let w = worker(cfg);
     let mut log = String::new();
-    let r = w.set_primary(distro, engine, &mut log);
+    let r = w.set_primary(distro, engine, sleep_old, &mut log);
     w.kill_keepalive();
     let c = w.cfg();
     (r, log, c)

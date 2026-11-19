@@ -11,6 +11,8 @@ pub struct Config {
     pub engine: crate::engine::Engine,
     /// naposledy použitý engine v jednotlivých distribucích (pro přepnutí primární distribuce)
     pub distro_engines: std::collections::BTreeMap<String, crate::engine::Engine>,
+    /// při přepnutí primární distribuce uspat (wsl --terminate) tu dosavadní
+    pub sleep_previous_primary: bool,
     /// TCP port Docker API (dockerd -H tcp://127.0.0.1:<port>)
     pub port: u16,
     /// Interval automatického obnovení v sekundách
@@ -154,6 +156,7 @@ impl Default for Config {
             distro: "Ubuntu".into(),
             engine: crate::engine::Engine::Docker,
             distro_engines: Default::default(),
+            sleep_previous_primary: false,
             port: 2375,
             refresh_secs: 3,
             background_refresh_secs: 15,

@@ -1138,7 +1138,8 @@ fn live_stack_logs_attach_later() {
 }
 
 /// Přepnutí primární distribuce tam a zpět (WLS_PRIMARY_A = výchozí Ubuntu, WLS_PRIMARY_B = Debian):
-/// API na stejném portu pokaždé obslouží engine zvolené distribuce, v té druhé se TCP API vypne.
+/// API na stejném portu pokaždé obslouží engine zvolené distribuce, v té druhé se TCP API vypne;
+/// při návratu na A se B uspí (wsl --terminate).
 #[test]
 #[ignore]
 fn live_switch_primary() {
@@ -1154,7 +1155,7 @@ fn live_switch_primary() {
         v["Components"][0]["Name"].as_str().unwrap_or("").to_string()
     };
     for target in [b.clone(), a.clone()] {
-        let (r, log, c) = crate::worker::testkit::set_primary(cfg.clone(), &target, None);
+        let (r, log, c) = crate::worker::testkit::set_primary(cfg.clone(), &target, None, target == a);
         eprintln!("--- {target} ---\n{log}\n{r:?}");
         assert!(r.is_ok(), "{r:?}");
         assert_eq!(c.distro, target);
@@ -1165,5 +1166,8 @@ fn live_switch_primary() {
         assert_eq!(name.contains("Podman"), c.engine == crate::engine::Engine::Podman, "{name} vs {:?}", c.engine);
         cfg = c;
     }
+    // při návratu na A se B uspala
+    let l = wsl::list().expect("wsl -l");
+    assert!(l.iter().any(|d| d.name == b && !d.running()), "{b} běží: {l:?}");
     let _ = std::fs::remove_dir_all(&data);
 }

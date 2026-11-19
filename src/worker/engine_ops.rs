@@ -184,7 +184,7 @@ impl Worker {
 
     /// Přepne primární distribuci: v ostatních distribucích uvolní TCP port API (engine
     /// a kontejnery tam běží dál), přepne konfiguraci a nastaví API v nové distribuci.
-    pub(super) fn set_primary(&self, distro: &str, engine: Option<Engine>, log: &mut String) -> Result<String, String> {
+    pub(super) fn set_primary(&self, distro: &str, engine: Option<Engine>, sleep_old: bool, log: &mut String) -> Result<String, String> {
         let old = self.cfg();
         let step = |log: &mut String, s: &str| log.push_str(&format!("\n=== {s} ===\n"));
 
@@ -215,6 +215,20 @@ impl Worker {
         }
 
         self.kill_keepalive();
+        let mut slept = false;
+        if sleep_old && old.distro != distro {
+            step(log, &tf!("Uspání {}", "Putting {} to sleep", old.distro));
+            // i udržovací proces jiné instance aplikace, jinak by distribuci hned znovu probudil
+            self.kill_keepalive_all(&old.distro);
+            match wsl::terminate(&old.distro) {
+                Ok(_) => {
+                    slept = true;
+                    log.push_str(&tf!("{} ukončena (wsl --terminate)\n", "{} terminated (wsl --terminate)\n", old.distro));
+                }
+                Err(e) => log.push_str(&format!("{}: {e}\n", old.distro)),
+            }
+        }
+        let slept_note = if slept { tf!(", {} uspána", ", {} is asleep", old.distro) } else { String::new() };
         let mut cfg = old.clone();
         cfg.distro_engines.insert(old.distro.clone(), old.engine);
         cfg.distro = distro.to_string();
@@ -226,6 +240,7 @@ impl Worker {
             g.distro = cfg.distro.clone();
             g.engine = cfg.engine;
             g.distro_engines = cfg.distro_engines.clone();
+            g.sleep_previous_primary = sleep_old;
             let _ = g.save();
         }
         self.shared.tcp_checked.store(false, Ordering::SeqCst);
@@ -237,8 +252,8 @@ impl Worker {
 
         let Some(e) = engine else {
             return Ok(tf!(
-                "{distro} je primární distribuce – nainstaluj engine na stránce WSL engine",
-                "{distro} is the primary distribution – install an engine on the WSL engine page"
+                "{distro} je primární distribuce{slept_note} – nainstaluj engine na stránce WSL engine",
+                "{distro} is the primary distribution{slept_note} – install an engine on the WSL engine page"
             ));
         };
         step(log, &tf!("Nastavení API ({})", "Setting up the API ({})", e.name()));
@@ -248,10 +263,11 @@ impl Worker {
             Ok((o, _)) => {
                 log.push_str(&o);
                 Ok(tf!(
-                    "{distro} je primární distribuce ({}) – API na tcp://127.0.0.1:{}",
-                    "{distro} is the primary distribution ({}) – API on tcp://127.0.0.1:{}",
+                    "{distro} je primární distribuce ({}) – API na tcp://127.0.0.1:{}{}",
+                    "{distro} is the primary distribution ({}) – API on tcp://127.0.0.1:{}{}",
                     e.name(),
-                    cfg.port
+                    cfg.port,
+                    slept_note
                 ))
             }
             Err(err) => {
