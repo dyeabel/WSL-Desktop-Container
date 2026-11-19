@@ -72,7 +72,8 @@ impl Worker {
     /// Historie na disku ze statistik kontejnerů: celkové CPU (% všech CPU WSL, stejně jako
     /// dlaždice na přehledu) a úložiště enginu z `/system/df`.
     pub(super) fn history_stats(&self, rows: &[StatRow], df: Option<&crate::docker::DfSummary>, ncpu: f64) {
-        let cpu = rows.iter().map(|r| r.cpu).sum::<f64>() / ncpu.max(1.0);
+        // fold od 0.0: `sum()` prázdného seznamu dává -0.0
+        let cpu = rows.iter().fold(0.0, |a, r| a + r.cpu) / ncpu.max(1.0);
         let engine = df.map(|s| [s.images, s.containers, s.volumes, s.build_cache].iter().map(|v| (*v).max(0) as u64).sum());
         crate::history::store().record(memory::now_secs(), Sample { cpu: Some(cpu), engine, ..Default::default() });
     }

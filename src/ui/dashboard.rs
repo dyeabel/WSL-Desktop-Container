@@ -298,6 +298,8 @@ pub fn two_tiles(ui: &mut egui::Ui, a: impl FnOnce(&mut egui::Ui), b: impl FnOnc
 
 /// Přidá vzorek celkového CPU (% všech CPU WSL) a zahodí starší než CPU_WINDOW.
 pub fn push_cpu(h: &mut std::collections::VecDeque<(f64, f64)>, pct: f64) {
+    // -0.0 (prázdný součet) a NaN jako 0 – jinak dlaždice ukáže „-0.0 %“
+    let pct = if pct > 0.0 { pct } else { 0.0 };
     let now = crate::memory::now_secs();
     h.push_back((now, pct));
     while h.front().is_some_and(|p| now - p.0 > CPU_WINDOW) {
@@ -450,4 +452,20 @@ fn stacked_bar(ui: &mut egui::Ui, parts: &[(Option<Color32>, &str, u64)]) {
     }
     p.rect_stroke(rect, 4.0, egui::Stroke::new(1.0_f32, theme::card_stroke()), egui::StrokeKind::Inside);
     resp.on_hover_text(tip.trim_end());
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn no_negative_zero_cpu() {
+        // příčina „-0.0 %“: prázdný součet f64 je v Rustu -0.0
+        let empty: Vec<f64> = vec![];
+        assert!(empty.iter().sum::<f64>().is_sign_negative());
+        let mut h = std::collections::VecDeque::new();
+        super::push_cpu(&mut h, -0.0);
+        super::push_cpu(&mut h, f64::NAN);
+        super::push_cpu(&mut h, 12.5);
+        let v: Vec<String> = h.iter().map(|p| format!("{:.1}", p.1)).collect();
+        assert_eq!(v, ["0.0", "0.0", "12.5"]);
+    }
 }

@@ -431,7 +431,8 @@ impl App {
                 Msg::Distros(d) => self.distros = d,
                 Msg::Stats(rows, df) => {
                     let ncpu = self.snap.info.as_ref().map(|i| i.ncpu.max(1)).unwrap_or(1) as f64;
-                    let total: f64 = rows.iter().map(|r| r.cpu).sum();
+                    // fold od 0.0: `sum()` prázdného seznamu dává -0.0 („-0.0 %“ bez kontejnerů)
+                    let total = rows.iter().fold(0.0, |a, r| a + r.cpu);
                     ui::dashboard::push_cpu(&mut self.cpu_hist, total / ncpu);
                     self.stats = rows;
                     if df.is_some() {
