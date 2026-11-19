@@ -357,11 +357,12 @@ console window when it is not available.
 
 ## How it works
 
-- **Engine API over TCP:** besides its socket, the engine listens on `tcp://127.0.0.1:2375`.
-  For Docker this is a systemd override
+- **Engine API over TCP:** without TLS the engine listens besides its socket on
+  `tcp://127.0.0.1:2375` (no authentication). For Docker this is a systemd override
   `/etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf`, for Podman the unit
-  `/etc/systemd/system/wls-podman-api.service`. WSL forwards the port to `localhost` on Windows
-  automatically. Without TLS the API has no authentication (see *API security*).
+  `/etc/systemd/system/wls-podman-api.service`. With TLS the engine stays on its unix socket and
+  only the `wls-tls-proxy` listens on `127.0.0.1:2376` (see *API security*). WSL forwards the port
+  to `127.0.0.1` on Windows automatically; the app adds `[::1]` (see *Network overview and ports*).
 - **Live updates:** a background thread reads the engine event stream (`/events`) and triggers a
   debounced refresh; the same events drive the Windows notifications.
 - **Worker:** short actions (API calls, listings) run in a small thread pool, long ones
@@ -484,14 +485,23 @@ removes the Run registry value:
 cargo test -- --ignored --test-threads=1
 ```
 
+`live_net` (`cargo test live_net -- --ignored --nocapture`) checks the network overview (traffic,
+ports, in / out connections) against the engine from the app configuration.
+
 For debugging and screenshots: `WLS_START_PAGE` selects the start page (`containers`, `images`,
-`volumes`, `networks`, `compose`, `files`, `engine`, `settings`), `WLS_DEBUG_DIALOG=1` shows a
-sample confirmation dialog, `WLS_DEBUG_HUB=<image>` opens the Docker Hub dialog,
-`WLS_DEBUG_EXPAND=1` expands the engine setup section, `WLS_DEBUG_BUILD=1` opens the build
-dialog, `WLS_DEBUG_DETAIL=<container>[:overview|stats|logs|recreate]` opens the container detail,
+`volumes`, `networks`, `compose`, `files`, `engine`, `settings`; Overview otherwise),
+`WLS_DEBUG_DIALOG=1` shows a sample confirmation dialog, `WLS_DEBUG_HUB=<image>` opens the Docker
+Hub dialog, `WLS_DEBUG_EXPAND=1` expands the engine setup section, `WLS_DEBUG_BUILD=1` opens the
+build dialog,
+`WLS_DEBUG_DETAIL=<container>[:overview|stats|logs|recreate|files|network|limits]` opens the
+container detail, `WLS_DEBUG_CFILES=<container>[:<path>]` the container file browser,
+`WLS_DEBUG_LOGS=<container>[:search=<text>]` / `WLS_DEBUG_STACK_LOGS=<stack>[:search=<text>]` the
+log window, `WLS_DEBUG_MEMORY=1` scrolls the Overview to *WSL memory*,
+`WLS_DEBUG_NETWORK=1|ports|map` opens the *Networks* page on the Traffic / Ports / Networks tab,
 `WLS_DEBUG_COMPOSE_NEW=<template>` the new-stack dialog, `WLS_DEBUG_RESTORE=1` the volume restore
-dialog, `WLS_DEBUG_REMOVE_DISTRO=<name>` / `WLS_DEBUG_IMPORT=1` the distribution dialogs,
-`WLS_LANG=en|cs` overrides the language without saving it.
+dialog, `WLS_DEBUG_REMOVE_DISTRO=<name>` / `WLS_DEBUG_IMPORT=1` the distribution dialogs.
+`WLS_LANG=en|cs` and `WLS_THEME=dark|light|system` override the language and theme without
+saving them; `WLS_DATA_DIR` moves the app data folder (used by the tests).
 
 ## UI conventions
 
@@ -518,6 +528,7 @@ Ideas for future improvements are collected in [docs/ROADMAP.md](docs/ROADMAP.md
 src/
   main.rs          entry point, window, single instance
   app.rs           app state, navigation, dialogs, toasts
+  config.rs        app settings (config.json), data folder, portable mode
   worker/          background thread: refresh and actions
     mod.rs         commands, messages, refresh loop, dispatcher
     events.rs      engine event stream (/events), debounced refresh
@@ -533,6 +544,13 @@ src/
     distro_manage.rs  remove / export / import distributions, disk
     build.rs       building images from a Dockerfile
     fs_ops.rs      file operations
+    container_fs.rs  files inside a container: listing, editor, upload, download
+    limits.rs      live limit changes (update API), limits cache for the stats table
+    memory.rs      WSL memory sampling (full while the Overview is visible, else ~1/min)
+    alerts.rs      memory and disk threshold alerts (hysteresis, repeat limit)
+    net_overview.rs  network overview: VM / container traffic, sockets, in / out ports
+    net_overview_live.rs  live test of the network overview (live_net)
+    testkit.rs     worker operations for live tests without a running app
     spec.rs        RunSpec, BuildSpec, AddDistroSpec
   docker.rs        Docker Engine API client (ureq, optional mutual TLS), events, Docker Hub
   inspect.rs       parsing container inspect data
@@ -548,8 +566,10 @@ src/
   wslconfig.rs     editing %USERPROFILE%\.wslconfig
   pathmap.rs       Windows -> WSL path translation (shim)
   shim_install.rs  installing the shim into PATH, DOCKER_HOST
-  shim/            docker.exe shim (docker.rs, envfwd.rs, fast.rs – API fast path)
+  shim/            docker.exe shim (docker.rs, envfwd.rs, fast.rs – API fast path,
+                   ctxcmd.rs – docker context commands)
   tray.rs          tray icon, menu, hiding the window
+  tray/menu_model.rs  model of the tray Containers submenu (testable without the tray)
   i18n.rs          Czech / English texts (t!, tf!)
   theme.rs         colors, style
   icon_art.rs      icon drawing (shared with build.rs for the .ico in the EXE)
@@ -562,7 +582,9 @@ src/
   container_fs.rs  files inside a container (exec listing, archive API, tar)
   contexts.rs      docker contexts for the shim
   npipe.rs         named-pipe relay for tools
-  ui/              individual pages
+  live_tests.rs    integration tests against a real WSL distribution (ignored by default)
+  live_docker.rs   Docker end-to-end test in a fresh distribution (live_docker_e2e)
+  ui/              individual pages (+ chart.rs, memory.rs, net_overview.rs, alerts.rs, distros.rs)
 build.rs           generates the .ico and embeds it into the EXE (winresource)
 ```
 
