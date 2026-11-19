@@ -420,7 +420,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
+pub fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let z = z + 719468;
     let era = z.div_euclid(146097);
     let doe = z - era * 146097;
@@ -545,7 +545,12 @@ pub struct Ctx {
 // ================================================================ obrazy – názvy
 
 /// `reference.FamiliarName`: `docker.io/library/nginx` -> `nginx`, `docker.io/x/y` -> `x/y`.
+/// Navíc Podman: lokálně sestavené obrazy (`podman build -t myapp`) mají předponu
+/// `localhost/` – Docker je ukazuje bez ní (`localhost:5000/…` je registr, ten zůstává).
 pub fn familiar_name(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix("localhost/") {
+        return rest.to_string();
+    }
     for p in ["docker.io/", "index.docker.io/"] {
         if let Some(rest) = name.strip_prefix(p) {
             if let Some(r) = rest.strip_prefix("library/") {
@@ -2163,6 +2168,9 @@ nginx             latest    c05939e13a61   13 days ago          167MB
         assert_eq!(familiar_name("docker.io/library/nginx"), "nginx");
         assert_eq!(familiar_name("docker.io/bitnami/redis"), "bitnami/redis");
         assert_eq!(familiar_name("quay.io/podman/stable"), "quay.io/podman/stable");
+        assert_eq!(familiar_name("localhost/myapp"), "myapp");
+        assert_eq!(familiar_name("localhost/team/myapp"), "team/myapp");
+        assert_eq!(familiar_name("localhost:5000/myapp"), "localhost:5000/myapp");
         assert_eq!(split_ref("localhost:5000/app:1.0"), Some(("localhost:5000/app".into(), Some("1.0".into()), None)));
         assert_eq!(split_ref("<none>:<none>"), None);
         assert_eq!(split_ref("nginx@sha256:abc"), Some(("nginx".into(), None, Some("sha256:abc".into()))));

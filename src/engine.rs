@@ -150,6 +150,9 @@ D=$(command -v dockerd || true)
 if [ -z "$D" ]; then echo "dockerd nenalezen - pouzij Nainstalovat engine (nebo: curl -fsSL https://get.docker.com | sh)." >&2; exit 2; fi
 # Podman API by blokovalo port
 systemctl disable --now wls-podman-api >/dev/null 2>&1 || true
+# odkaz /run/docker.sock na Podman (z jeho nastavení) by překážel docker.socket
+rm -f /etc/tmpfiles.d/wls-docker-sock.conf
+if [ -L /run/docker.sock ]; then rm -f /run/docker.sock; fi
 EXTRA=""
 if systemctl cat containerd.service >/dev/null 2>&1; then EXTRA="--containerd=/run/containerd/containerd.sock"; fi
 mkdir -p /etc/systemd/system/docker.service.d
@@ -211,6 +214,33 @@ EOF
 # `podman compose` bez hlášky „Executing external compose provider…“ u každého příkazu
 mkdir -p /etc/containers/containers.conf.d
 printf '# WLS Desktop\n[engine]\ncompose_warning_logs = false\n' > /etc/containers/containers.conf.d/50-wls-desktop.conf
+# krátká jména obrazů jako u Dockeru: hledat na Docker Hubu (`postgres:16-alpine`); aliasy
+# z shortnames.conf, které míří jinam, přesměrovat na Docker Hub (`hello-world` = quay.io/podman/hello)
+mkdir -p /etc/containers/registries.conf.d
+cat > /etc/containers/registries.conf.d/zz-wls-desktop.conf <<'WLSREG'
+# WLS Desktop: kratka jmena obrazu jako Docker (Docker Hub)
+unqualified-search-registries = ["docker.io"]
+short-name-mode = "permissive"
+
+[aliases]
+"hello-world" = "docker.io/library/hello-world"
+"amazonlinux" = "docker.io/library/amazonlinux"
+"centos" = "docker.io/library/centos"
+"fedora" = "docker.io/library/fedora"
+"rockylinux" = "docker.io/library/rockylinux"
+"oraclelinux" = "docker.io/library/oraclelinux"
+"opensuse/leap" = "docker.io/opensuse/leap"
+"opensuse/tumbleweed" = "docker.io/opensuse/tumbleweed"
+WLSREG
+# /var/run/docker.sock -> API Podmanu (nástroje, `-v /var/run/docker.sock:…`, Docker-outside-of-Docker)
+if [ "$TLS" = "1" ]; then
+  DSOCK=/run/wls-podman/podman.sock
+else
+  systemctl enable --now podman.socket >/dev/null 2>&1 || true
+  DSOCK=/run/podman/podman.sock
+fi
+printf '# WLS Desktop: Docker socket -> Podman API\nL+ /run/docker.sock - - - - %s\n' "$DSOCK" > /etc/tmpfiles.d/wls-docker-sock.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/wls-docker-sock.conf >/dev/null 2>&1 || ln -sfn "$DSOCK" /run/docker.sock
 # kontejnery s restart policy po startu (podman nemá stále běžícího démona)
 systemctl enable podman-restart.service >/dev/null 2>&1 || true
 systemctl daemon-reload
@@ -267,7 +297,7 @@ BindsTo=$2
 After=$2
 
 [Service]
-ExecStart=$S OPENSSL-LISTEN:$PORT,bind=127.0.0.1,reuseaddr,fork,max-children=32,cert=$T/server.pem,key=$T/server-key.pem,cafile=$T/ca.pem,verify=1 UNIX-CONNECT:$1
+ExecStart=$S OPENSSL-LISTEN:$PORT,bind=127.0.0.1,reuseaddr,fork,backlog=128,max-children=256,cert=$T/server.pem,key=$T/server-key.pem,cafile=$T/ca.pem,verify=1 UNIX-CONNECT:$1
 Restart=always
 RestartSec=1
 

@@ -32,6 +32,7 @@ mod dpapi;
 mod contexts;
 mod ctxcmd;
 mod envfwd;
+mod events;
 mod fast;
 mod podmanfix;
 
@@ -118,6 +119,17 @@ fn main() -> ExitCode {
 
     // rychlá cesta: odpověď přímo z API, bez wsl.exe
     if exe_name != "docker-compose" && std::env::var("WLS_SHIM_FAST").map(|v| v != "0").unwrap_or(true) {
+        // Podman: `docker events` z API ve schématu Dockeru (podman events má vlastní)
+        if target.engine == engine::Engine::Podman {
+            match events::run(&args, target.port, target.tls, debug) {
+                Ok(true) => return ExitCode::SUCCESS,
+                Ok(false) => {}
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    return ExitCode::from(1);
+                }
+            }
+        }
         let t = std::time::Instant::now();
         match fast::try_run(&args, target.port, target.tls) {
             Ok(out) => {
@@ -169,6 +181,12 @@ fn main() -> ExitCode {
     let cli = target.engine.cli(target.port, target.tls);
     // Podman: buildery buildx obslouží skutečný buildx (je-li v distribuci), viz podmanfix
     let cli = if target.engine == engine::Engine::Podman { podmanfix::buildx_cli(&args, &cli).unwrap_or(cli) } else { cli };
+    // Podman: `compose ps` přes JSON, aby STATUS ukázal i stav healthchecku
+    let ps_plan = if target.engine == engine::Engine::Podman { podmanfix::compose_ps(&args) } else { None };
+    let args = match &ps_plan {
+        Some((a, _)) => a.clone(),
+        None => args,
+    };
 
     let mut cmd = Command::new("wsl.exe");
     cmd.args(["-d", &target.distro]);
@@ -191,6 +209,24 @@ fn main() -> ExitCode {
         if !forwarded.is_empty() {
             eprintln!("[wls-docker] předávám proměnné: {}", forwarded.join(", "));
         }
+    }
+
+    if let Some((_, json)) = ps_plan {
+        // stdout zachytit a vypsat upravený; stderr (chyby compose) jde rovnou
+        cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::inherit());
+        return match cmd.output() {
+            Ok(o) => {
+                let text = String::from_utf8_lossy(&o.stdout);
+                let shown = if o.status.success() { podmanfix::render_compose_ps(&text, json) } else { None };
+                let mut so = std::io::stdout().lock();
+                let _ = so.write_all(shown.as_deref().unwrap_or(&text).as_bytes()).and_then(|_| so.flush());
+                ExitCode::from(o.status.code().unwrap_or(1).clamp(0, 255) as u8)
+            }
+            Err(e) => {
+                eprintln!("wls-docker: nelze spustit wsl.exe: {e}");
+                ExitCode::from(127)
+            }
+        };
     }
 
     match cmd.status() {

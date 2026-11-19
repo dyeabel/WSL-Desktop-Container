@@ -369,14 +369,25 @@ Remaining differences from the Docker CLI for Windows: `docker login` and `confi
 inside WSL; commands outside the fast path have the overhead of starting `wsl.exe`
 (~0.1–0.3 s); Podman has no swarm.
 
-With **Podman** the shim smooths over differences that break Docker scripts: `docker ps` shows
-the health state (`Up 5 seconds (healthy)`, from the libpod list API); `docker events --format`
-translates Docker template fields (`.Action`, `.Actor.ID`, `.Actor.Attributes.name`, `.From`,
-`.Scope`) to Podman's; `docker buildx ls|create|use|inspect|rm|bake|imagetools…` run the real
+With **Podman** the shim smooths over differences that break Docker scripts: `docker ps` and
+`docker compose ps` show the health state (`Up 5 seconds (healthy)`, from the libpod list API /
+the compose `Health` field); locally built images are listed without `localhost/` (`myapp:1.0`);
+`docker events` reads the compatible API stream, so the default line, `--format json` and simple
+templates (`{{.Action}} {{.Actor.Attributes.name}}`) have Docker's schema, including
+`health_status: healthy` – more complex templates (`if`, `index`) go to `podman events` with Docker
+fields translated; `docker buildx ls|create|use|inspect|rm|bake|imagetools…` run the real
 buildx plugin (when the distribution has the Docker CLI with `docker-buildx`) against the Podman
 API – the `docker-container` driver runs BuildKit in a container and `--load` imports the image
 into Podman. `buildx build` stays on Buildah unless a custom builder is selected (`--builder`,
 `BUILDX_BUILDER`, `buildx use`). Pull progress of Podman goes to stderr (Docker: stdout).
+
+The Podman setup also configures the distribution like Docker: short image names are looked up
+on Docker Hub (`unqualified-search-registries = ["docker.io"]`, so `postgres:16-alpine` works),
+Podman aliases that point elsewhere are redirected to Docker Hub (`hello-world`, `fedora`,
+`centos`, …; `/etc/containers/registries.conf.d/zz-wls-desktop.conf`), and `/var/run/docker.sock`
+links to the Podman API (`/etc/tmpfiles.d/wls-docker-sock.conf`) for tools and
+Docker-outside-of-Docker containers. Switching to Docker removes the link. The TLS proxy accepts
+up to 256 concurrent connections with a listen backlog of 128 (Testcontainers, parallel CI).
 
 Consoles and log tails open in **Windows Terminal** (`wt.exe`), falling back to a classic
 console window when it is not available.

@@ -124,6 +124,102 @@ pub fn buildx_cli(args: &[String], cli: &[String]) -> Option<Vec<String>> {
     Some(vec!["sh".into(), "-c".into(), BUILDX_SCRIPT.into(), "wls-buildx".into(), url])
 }
 
+/// Přepínače `docker compose` (před podpříkazem), které berou hodnotu.
+const COMPOSE_VALUE_FLAGS: &[&str] =
+    &["-f", "--file", "-p", "--project-name", "--project-directory", "--env-file", "--profile", "--ansi", "--progress", "--parallel"];
+
+/// `docker compose ps` s výchozí tabulkou nebo `--format json`: compose bere `Status`
+/// z kompatibilního API Podmanu, kde chybí stav healthchecku (ten má jen v poli `Health`).
+/// Vrací (argumenty s `--format json`, výstup má být JSON); None = spustit beze změny.
+pub fn compose_ps(args: &[String]) -> Option<(Vec<String>, bool)> {
+    let mut i = match args.first() {
+        Some(a) if a == "compose" => 1,
+        _ => return None,
+    };
+    while i < args.len() {
+        let a = args[i].as_str();
+        if COMPOSE_VALUE_FLAGS.contains(&a) {
+            i += 2;
+        } else if a.starts_with('-') {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    if args.get(i).map(|s| s.as_str()) != Some("ps") {
+        return None;
+    }
+    let mut out: Vec<String> = args[..=i].to_vec();
+    let mut json = false;
+    let mut it = args[i + 1..].iter();
+    while let Some(a) = it.next() {
+        let fmt = if a == "--format" {
+            Some(it.next()?.clone())
+        } else {
+            a.strip_prefix("--format=").map(String::from)
+        };
+        match fmt.as_deref() {
+            Some("json") => json = true,
+            Some("table") => {}
+            Some(_) => return None,
+            None if matches!(a.as_str(), "-q" | "--quiet" | "--services") => return None,
+            None => out.push(a.clone()),
+        }
+    }
+    out.extend(["--format".to_string(), "json".to_string()]);
+    Some((out, json))
+}
+
+/// Doplní do `Status` stav healthchecku z pole `Health` (jako Docker: `Up 5 seconds (healthy)`).
+fn with_health(c: &mut serde_json::Value) {
+    let health = c.get("Health").and_then(|h| h.as_str()).unwrap_or("").to_string();
+    let suffix = match health.as_str() {
+        "healthy" => " (healthy)",
+        "unhealthy" => " (unhealthy)",
+        "starting" => " (health: starting)",
+        _ => return,
+    };
+    let st = c.get("Status").and_then(|s| s.as_str()).unwrap_or("");
+    if st.starts_with("Up") && !st.contains('(') {
+        let s = format!("{st}{suffix}");
+        c["Status"] = serde_json::Value::String(s);
+    }
+}
+
+/// Výstup `compose ps --format json` (pole, nebo objekt na řádek) -> tabulka jako Docker
+/// Compose, nebo JSON s doplněným stavem. None = výstup nerozumíme (vypíše se beze změny).
+pub fn render_compose_ps(stdout: &str, json: bool) -> Option<String> {
+    let t = stdout.trim();
+    let mut rows: Vec<serde_json::Value> = if t.is_empty() {
+        vec![]
+    } else if t.starts_with('[') {
+        serde_json::from_str::<Vec<serde_json::Value>>(t).ok()?
+    } else {
+        t.lines().filter(|l| !l.trim().is_empty()).map(serde_json::from_str).collect::<Result<_, _>>().ok()?
+    };
+    rows.iter_mut().for_each(with_health);
+    if json {
+        let mut s = String::new();
+        for r in &rows {
+            s.push_str(&serde_json::to_string(r).ok()?);
+            s.push('\n');
+        }
+        return Some(s);
+    }
+    let f = |r: &serde_json::Value, k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let mut text = String::from("NAME\tIMAGE\tCOMMAND\tSERVICE\tCREATED\tSTATUS\tPORTS\n");
+    for r in &rows {
+        let mut cols = ["Name", "Image", "Command", "Service", "RunningFor", "Status", "Ports"].map(|k| f(r, k));
+        // lokálně sestavený obraz bez `localhost/` (jako Docker)
+        if let Some(rest) = cols[1].strip_prefix("localhost/") {
+            cols[1] = rest.to_string();
+        }
+        text.push_str(&cols.join("\t"));
+        text.push('\n');
+    }
+    Some(crate::fast::tabwrite(&text, 10, 3))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +250,27 @@ mod tests {
         assert_eq!(&c[3..], &a(&["wls-buildx", "unix:///run/wls-podman/podman.sock"])[..]);
         assert!(buildx_cli(&a(&["build", "."]), &cli).is_none());
         assert!(buildx_cli(&a(&["buildx", "ls"]), &a(&["docker"])).is_none());
+    }
+
+    #[test]
+    fn compose_ps_with_health() {
+        let (args, json) = compose_ps(&a(&["compose", "-f", "x.yml", "-p", "ps", "ps", "-a"])).unwrap();
+        assert_eq!((args, json), (a(&["compose", "-f", "x.yml", "-p", "ps", "ps", "-a", "--format", "json"]), false));
+        assert!(compose_ps(&a(&["compose", "ps", "--format", "json"])).unwrap().1);
+        assert!(compose_ps(&a(&["compose", "ps", "-q"])).is_none());
+        assert!(compose_ps(&a(&["compose", "ps", "--format", "{{.Name}}"])).is_none());
+        assert!(compose_ps(&a(&["compose", "up", "-d"])).is_none());
+        assert!(compose_ps(&a(&["ps"])).is_none());
+
+        let out = r#"{"Command":"\"sleep 600\"","Health":"healthy","Image":"alpine:latest","Name":"p-web-1","Ports":"","RunningFor":"8 seconds ago","Service":"web","State":"running","Status":"Up 7 seconds"}
+{"Command":"\"sleep 1\"","Health":"","Image":"alpine:latest","Name":"p-db-1","Ports":"0.0.0.0:5432->5432/tcp","RunningFor":"9 seconds ago","Service":"db","State":"running","Status":"Up 8 seconds"}"#;
+        let t = render_compose_ps(out, false).unwrap();
+        let lines: Vec<&str> = t.lines().collect();
+        assert!(lines[0].starts_with("NAME      IMAGE           COMMAND       SERVICE   CREATED         STATUS"), "{t}");
+        assert!(lines[1].contains("Up 7 seconds (healthy)") && lines[2].contains("Up 8 seconds") && !lines[2].contains('('), "{t}");
+        assert!(render_compose_ps(out, true).unwrap().lines().next().unwrap().contains(r#""Status":"Up 7 seconds (healthy)""#));
+        assert_eq!(render_compose_ps("", false).unwrap().trim_end(), "NAME      IMAGE     COMMAND   SERVICE   CREATED   STATUS    PORTS");
+        assert!(render_compose_ps("nesmysl", false).is_none());
     }
 
     #[test]
