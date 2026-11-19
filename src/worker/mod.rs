@@ -12,6 +12,7 @@ mod engine_ops;
 mod events;
 mod fs_ops;
 mod memory;
+pub(crate) mod net_overview;
 mod notify;
 mod recreate_body;
 mod spec;
@@ -30,6 +31,7 @@ pub use container_fs::{CfMsg, CfOp};
 pub use detail::{start_stats, StatSample, StatsFeed, STATS_WINDOW};
 pub use distro_manage::{default_import_folder, DistroDisk, DistroOp};
 pub use engine_ops::api_port;
+pub use net_overview::{start_net_overview, start_ns_feed, NetFeed, NsFeed, NET_WINDOW};
 #[cfg(test)]
 pub use detail::recreate_for_test;
 #[cfg(test)]

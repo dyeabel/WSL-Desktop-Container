@@ -4,7 +4,7 @@ use super::*;
 use crate::app::{App, LogView};
 use crate::docker::{short_id, Container};
 use crate::inspect::{self, Detail, NetEdit};
-use crate::worker::{Cmd, RunSpec, StatSample, StatsFeed, Term, STATS_WINDOW};
+use crate::worker::{Cmd, NsFeed, RunSpec, StatSample, StatsFeed, Term, STATS_WINDOW};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +14,7 @@ pub enum Tab {
     Logs,
     Recreate,
     Files,
+    Network,
 }
 
 pub struct DetailView {
@@ -40,6 +41,9 @@ pub struct DetailView {
     gone: bool,
     /// záložka Soubory (vytvoří se při prvním otevření)
     pub cfiles: Option<super::container_files::CfState>,
+    /// záložka Síť: sběr portů dovnitř / ven (běží jen při otevřené záložce)
+    net: Option<NsFeed>,
+    cfg: std::sync::Arc<std::sync::RwLock<crate::config::Config>>,
 }
 
 /// Akce z okna – provedou se až po vykreslení (okno si půjčuje `app.detail`).
@@ -75,6 +79,8 @@ fn new_view(app: &App, ctx: &egui::Context, id: String, name: String, tab: Tab) 
         recreating: None,
         gone: false,
         cfiles: None,
+        net: None,
+        cfg: app.cfg.clone(),
     }
 }
 
@@ -99,7 +105,7 @@ fn state_key(c: &Container) -> String {
     format!("{}|{}|{}", c.state, h, c.name())
 }
 
-/// Pro ladění/screenshoty: `WLS_DEBUG_DETAIL=<název>[:overview|stats|logs|recreate|files]`.
+/// Pro ladění/screenshoty: `WLS_DEBUG_DETAIL=<název>[:overview|stats|logs|recreate|files|network]`.
 fn debug_open(app: &mut App, ctx: &egui::Context) {
     if DEBUG_DONE.load(Ordering::Relaxed) {
         return;
@@ -116,6 +122,7 @@ fn debug_open(app: &mut App, ctx: &egui::Context) {
         "logs" => Tab::Logs,
         "recreate" => Tab::Recreate,
         "files" => Tab::Files,
+        "network" => Tab::Network,
         _ => Tab::Overview,
     };
     let (id, name) = (c.id.clone(), c.name());
@@ -268,11 +275,15 @@ fn body(ui: &mut egui::Ui, dv: &mut DetailView, c: Option<&Container>, nets: &[S
             (Tab::Logs, t!("\u{EB7A} Logy", "\u{EB7A} Logs")),
             (Tab::Recreate, t!("\u{E3B4} Znovu vytvořit", "\u{E3B4} Recreate")),
             (Tab::Files, t!("\u{E260} Soubory", "\u{E260} Files")),
+            (Tab::Network, t!("\u{EB56} Síť", "\u{EB56} Network")),
         ] {
             ui.selectable_value(&mut dv.tab, t, label);
         }
     });
     ui.separator();
+    if dv.tab != Tab::Network {
+        dv.net = None; // sběr portů jen při otevřené záložce
+    }
     match dv.tab {
         Tab::Overview => match &dv.info {
             None => loading(ui),
@@ -282,6 +293,10 @@ fn body(ui: &mut egui::Ui, dv: &mut DetailView, c: Option<&Container>, nets: &[S
             }
         },
         Tab::Stats => stats(ui, &dv.stats, running),
+        Tab::Network => {
+            let feed = dv.net.get_or_insert_with(|| crate::worker::start_ns_feed(ui.ctx().clone(), dv.cfg.clone(), Some(dv.id.clone())));
+            super::net_overview::container_tab(ui, feed, &dv.id, c, running && !dv.gone);
+        }
         Tab::Logs => {
             ui.horizontal(|ui| {
                 ui.label(t!("Posledních řádků", "Last lines"));

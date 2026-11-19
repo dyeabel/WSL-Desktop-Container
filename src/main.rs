@@ -19,6 +19,7 @@ mod npipe;
 mod inspect;
 mod logbuf;
 mod memory;
+mod netinfo;
 #[allow(dead_code)] // používá docker shim, tady jen kvůli testům
 mod pathmap;
 mod portrelay;

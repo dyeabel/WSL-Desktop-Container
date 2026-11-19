@@ -12,6 +12,7 @@ pub mod files;
 pub mod images;
 pub mod logs;
 pub mod memory;
+pub mod net_overview;
 pub mod networks;
 pub mod settings;
 pub mod volumes;
