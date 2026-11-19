@@ -15,6 +15,7 @@ pub enum Tab {
     Recreate,
     Files,
     Network,
+    Limits,
 }
 
 pub struct DetailView {
@@ -43,6 +44,11 @@ pub struct DetailView {
     pub cfiles: Option<super::container_files::CfState>,
     /// záložka Síť: sběr portů dovnitř / ven (běží jen při otevřené záložce)
     net: Option<NsFeed>,
+    /// formulář limitů a limity, ze kterých vznikl (po změně inspectu se obnoví, když není upravený)
+    lform: Option<crate::limits::LimitForm>,
+    lbase: crate::limits::Limits,
+    /// počet CPU enginu (0 = neznámý)
+    ncpu: i64,
     cfg: std::sync::Arc<std::sync::RwLock<crate::config::Config>>,
 }
 
@@ -80,6 +86,9 @@ fn new_view(app: &App, ctx: &egui::Context, id: String, name: String, tab: Tab) 
         gone: false,
         cfiles: None,
         net: None,
+        lform: None,
+        lbase: Default::default(),
+        ncpu: app.snap.info.as_ref().map(|i| i.ncpu).unwrap_or(0),
         cfg: app.cfg.clone(),
     }
 }
@@ -95,6 +104,11 @@ pub fn on_inspect(app: &mut App, id: String, r: Result<Box<Detail>, String>) {
             dv.form = Some(d.to_run_spec());
             dv.nets = Some(d.net_edit(dv.podman));
         }
+        let pristine = dv.lform.as_ref().is_none_or(|f| *f == crate::limits::LimitForm::from_limits(&dv.lbase));
+        if pristine {
+            dv.lform = Some(crate::limits::LimitForm::from_limits(&d.limits));
+            dv.lbase = d.limits.clone();
+        }
     }
     dv.info = Some(r);
 }
@@ -105,7 +119,7 @@ fn state_key(c: &Container) -> String {
     format!("{}|{}|{}", c.state, h, c.name())
 }
 
-/// Pro ladění/screenshoty: `WLS_DEBUG_DETAIL=<název>[:overview|stats|logs|recreate|files|network]`.
+/// Pro ladění/screenshoty: `WLS_DEBUG_DETAIL=<název>[:overview|stats|logs|recreate|files|network|limits]`.
 fn debug_open(app: &mut App, ctx: &egui::Context) {
     if DEBUG_DONE.load(Ordering::Relaxed) {
         return;
@@ -123,6 +137,7 @@ fn debug_open(app: &mut App, ctx: &egui::Context) {
         "recreate" => Tab::Recreate,
         "files" => Tab::Files,
         "network" => Tab::Network,
+        "limits" => Tab::Limits,
         _ => Tab::Overview,
     };
     let (id, name) = (c.id.clone(), c.name());
@@ -276,6 +291,7 @@ fn body(ui: &mut egui::Ui, dv: &mut DetailView, c: Option<&Container>, nets: &[S
             (Tab::Recreate, t!("\u{E3B4} Znovu vytvořit", "\u{E3B4} Recreate")),
             (Tab::Files, t!("\u{E260} Soubory", "\u{E260} Files")),
             (Tab::Network, t!("\u{EB56} Síť", "\u{EB56} Network")),
+            (Tab::Limits, t!("\u{E628} Limity", "\u{E628} Limits")),
         ] {
             ui.selectable_value(&mut dv.tab, t, label);
         }
@@ -322,6 +338,14 @@ fn body(ui: &mut egui::Ui, dv: &mut DetailView, c: Option<&Container>, nets: &[S
             let cf = dv.cfiles.get_or_insert_with(|| super::container_files::CfState::new(dv.id.clone(), dv.name.clone(), None));
             super::container_files::view(ui, cf, running && !dv.gone);
         }
+        Tab::Limits => match &dv.info {
+            None => loading(ui),
+            Some(Err(e)) => error(ui, e),
+            Some(Ok(d)) => {
+                let d = d.clone();
+                egui::ScrollArea::vertical().id_salt("detail-limits").auto_shrink([false, false]).show(ui, |ui| limits_tab(ui, dv, &d, running, actions));
+            }
+        },
         Tab::Recreate => match &dv.info {
             None => loading(ui),
             Some(Err(e)) => error(ui, e),
@@ -738,5 +762,131 @@ fn networks(ui: &mut egui::Ui, d: &Detail, primary: &str, edit: &mut NetEdit) {
                 }
             }
         });
+    }
+}
+
+/// Záložka Limity: současné limity z inspectu a jejich živá změna (`docker update`).
+fn limits_tab(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, running: bool, actions: &mut Vec<Action>) {
+    use crate::limits::{self as lim, Change};
+    let l = &d.limits;
+    let last = dv.stats.samples.lock().ok().and_then(|g| g.back().copied()).filter(|_| running);
+    let unlimited = || t!("bez limitu", "unlimited").to_string();
+    section(ui, t!("Současné limity", "Current limits"));
+    grid(ui, "detail-limits-now", |ui| {
+        let mem = match (l.memory(), last) {
+            (Some(m), Some(s)) => tf!("{} · využito {} ({:.0} %)", "{} · used {} ({:.0} %)", fmt_bytes(m), fmt_bytes(s.mem), s.mem as f64 / m as f64 * 100.0),
+            (Some(m), None) => fmt_bytes(m),
+            (None, Some(s)) if s.mem_limit > 0 => tf!("{} (platí limit WSL {})", "{} (WSL limit {} applies)", unlimited(), fmt_bytes(s.mem_limit)),
+            (None, _) => unlimited(),
+        };
+        kv(ui, t!("Limit paměti", "Memory limit"), mem, false);
+        kv(ui, t!("Rezervace (měkký limit)", "Reservation (soft)"), l.reservation().map(fmt_bytes).unwrap_or_else(unlimited), false);
+        let swap = match (l.swap(), l.memory()) {
+            (Some(s), Some(m)) => tf!("{} celkem (swap {})", "{} in total (swap {})", fmt_bytes(s), fmt_bytes(s.saturating_sub(m))),
+            (Some(s), None) => fmt_bytes(s),
+            (None, Some(_)) if l.swap == 0 => t!("výchozí", "default").into(),
+            _ => unlimited(),
+        };
+        kv(ui, t!("Paměť + swap", "Memory + swap"), swap, false);
+        let cpu = match l.effective_cpus(dv.ncpu) {
+            Some(c) => {
+                let used = last.and_then(|s| s.cpu).map(|u| tf!(" · využito {:.0} % limitu", " · {:.0} % of the limit used", u / c)).unwrap_or_default();
+                format!("{} CPU{used}", lim::fmt_cpus(c))
+            }
+            None => unlimited(),
+        };
+        kv(ui, "CPU", cpu, false);
+        kv(ui, t!("Váha CPU (shares)", "CPU weight (shares)"), l.shares().map(|s| s.to_string()).unwrap_or_else(|| t!("výchozí", "default").into()), false);
+        kv(ui, t!("Jádra (cpuset)", "Cores (cpuset)"), if l.cpuset.is_empty() { t!("všechna", "all").to_string() } else { l.cpuset.clone() }, true);
+        kv(ui, t!("Procesy (PIDs)", "Processes (PIDs)"), l.pids().map(|p| p.to_string()).unwrap_or_else(unlimited), false);
+    });
+
+    section(ui, t!("Změnit limity", "Change limits"));
+    ui.label(muted(t!("Projeví se hned, bez restartu. Prázdné pole = bez limitu.", "Applied immediately, without a restart. Empty field = unlimited.")).small());
+    ui.add_space(6.0);
+    let form = dv.lform.get_or_insert_with(|| lim::LimitForm::from_limits(l));
+    let fw = 110.0;
+    let clear = |ui: &mut egui::Ui, s: &mut String| {
+        if !s.is_empty() && icon(ui, "\u{E4F6}", t!("Odebrat limit", "Remove limit")) {
+            s.clear();
+        }
+    };
+    let unl = t!("bez limitu", "unlimited");
+    egui::Grid::new("detail-limits-form").num_columns(3).spacing([12.0, 8.0]).show(ui, |ui| {
+        ui.label(t!("Limit paměti", "Memory limit"));
+        ui.add(field(&mut form.memory).hint_text(unl).desired_width(fw)).on_hover_text(t!("Např. 512m, 1g, 1.5g", "E.g. 512m, 1g, 1.5g"));
+        ui.horizontal(|ui| {
+            for (v, label) in lim::MEM_PRESETS {
+                if ui.small_button(label).clicked() {
+                    form.memory = v.into();
+                }
+            }
+            clear(ui, &mut form.memory);
+        });
+        ui.end_row();
+        ui.label(t!("Rezervace", "Reservation"));
+        ui.add(field(&mut form.reservation).hint_text(unl).desired_width(fw))
+            .on_hover_text(t!("Měkký limit: při nedostatku paměti jádro kontejneru tolik ponechá.", "Soft limit: under memory pressure the kernel keeps this much for the container."));
+        ui.label("");
+        ui.end_row();
+        ui.label(t!("Paměť + swap", "Memory + swap"));
+        ui.add(field(&mut form.swap).hint_text(t!("výchozí", "default")).desired_width(fw))
+            .on_hover_text(t!("Paměť a swap celkem (≥ limit paměti). Rovno limitu = bez swapu.", "Memory and swap in total (≥ memory limit). Equal to the limit = no swap."));
+        ui.horizontal(|ui| clear(ui, &mut form.swap));
+        ui.end_row();
+        ui.label("CPU");
+        ui.add(field(&mut form.cpus).hint_text(unl).desired_width(fw)).on_hover_text(t!("Počet jader, např. 0.5 nebo 2", "Number of cores, e.g. 0.5 or 2"));
+        ui.horizontal(|ui| {
+            for v in lim::CPU_PRESETS {
+                if ui.small_button(format!("{v} CPU")).clicked() {
+                    form.cpus = v.into();
+                }
+            }
+            clear(ui, &mut form.cpus);
+        });
+        ui.end_row();
+        ui.label(t!("Procesy", "Processes"));
+        ui.add(field(&mut form.pids).hint_text(unl).desired_width(fw)).on_hover_text(t!("Nejvyšší počet procesů (PIDs)", "Maximum number of processes (PIDs)"));
+        ui.horizontal(|ui| clear(ui, &mut form.pids));
+        ui.end_row();
+    });
+
+    let engine = if dv.podman { crate::engine::Engine::Podman } else { crate::engine::Engine::Docker };
+    let edited = *form != lim::LimitForm::from_limits(l);
+    let check = form.to_update(l).map_err(|e| e.join("\n")).and_then(|u| lim::update_body(&u, l, engine, dv.ncpu).map(|_| u));
+    ui.add_space(8.0);
+    if let (Err(e), true) = (&check, edited) {
+        ui.label(RichText::new(format!("\u{E4E0} {e}")).color(theme::red()));
+    }
+    let mut reset = false;
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let ok = !dv.gone && check.is_ok();
+            let clicked = ui.add_enabled_ui(ok, |ui| accent_button(ui, t!("\u{E182} Použít", "\u{E182} Apply")).clicked()).inner;
+            if let (true, Ok(u)) = (clicked, &check) {
+                let cmd = Cmd::UpdateLimits { id: d.id.clone(), name: d.name.clone(), update: *u };
+                // limit pod současným využitím -> jádro může procesy v kontejneru ukončit (OOM)
+                match (u.memory, last) {
+                    (Change::Set(m), Some(s)) if s.mem > m => actions.push(Action::Ask(
+                        t!("Limit pod současným využitím", "Limit below current usage").into(),
+                        tf!(
+                            "Kontejner teď používá {} paměti, nový limit je {}. Jádro může procesy v kontejneru ukončit (OOM). Pokračovat?",
+                            "The container uses {} of memory now, the new limit is {}. The kernel may kill processes in the container (OOM). Continue?",
+                            fmt_bytes(s.mem),
+                            fmt_bytes(m)
+                        ),
+                        cmd,
+                    )),
+                    _ => actions.push(Action::Send(cmd)),
+                }
+            }
+            if edited && ui.button(t!("Obnovit z kontejneru", "Reset from container")).on_hover_text(t!("Zahodit úpravy", "Discard changes")).clicked() {
+                reset = true;
+            }
+        });
+    });
+    if reset {
+        dv.lform = Some(lim::LimitForm::from_limits(l));
+        dv.lbase = l.clone();
     }
 }

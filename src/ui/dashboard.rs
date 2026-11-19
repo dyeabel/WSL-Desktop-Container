@@ -213,16 +213,44 @@ fn containers_perf(app: &mut App, ui: &mut egui::Ui) {
                         .unwrap_or_default();
                     two_line(ui, RichText::new(&r.name).strong(), muted(&sub).small());
                 });
+                // limity kontejneru (CPU limit na všechna jádra nic neomezuje)
+                let lim_cpus = Some(r.lim_cpus).filter(|c| *c > 0.0 && *c < ncpu - 0.005);
                 row.col(|ui| {
                     stack_v(ui, |ui| {
-                        ui.label(format!("{:.2} %", r.cpu));
-                        ui.add(egui::ProgressBar::new((r.cpu / (ncpu * 100.0)) as f32).desired_width(ui.available_width() - 12.0).desired_height(4.0).fill(theme::accent()));
+                        let pct = lim_cpus.and_then(|c| crate::limits::pct_of(r.cpu, c * 100.0));
+                        ui.horizontal(|ui| {
+                            match (pct, lim_cpus) {
+                                (Some(p), Some(c)) => {
+                                    ui.label(tf!("{:.0} % z {} CPU", "{:.0} % of {} CPU", p, crate::limits::fmt_cpus(c)))
+                                        .on_hover_text(tf!("{:.2} % jednoho jádra", "{:.2} % of one core", r.cpu));
+                                }
+                                _ => {
+                                    ui.label(format!("{:.2} %", r.cpu));
+                                }
+                            }
+                            near_limit(ui, pct);
+                        });
+                        let f = match lim_cpus {
+                            Some(c) => r.cpu / (c * 100.0),
+                            None => r.cpu / (ncpu * 100.0),
+                        };
+                        ui.add(egui::ProgressBar::new(f as f32).desired_width(ui.available_width() - 12.0).desired_height(4.0).fill(theme::accent()));
                     });
                 });
                 row.col(|ui| {
                     stack_v(ui, |ui| {
-                        ui.label(format!("{} / {}", fmt_bytes(r.mem), fmt_bytes(r.mem_limit)));
-                        let f = if r.mem_limit > 0 { r.mem as f32 / r.mem_limit as f32 } else { 0.0 };
+                        let limit = if r.lim_mem > 0 { r.lim_mem } else { r.mem_limit };
+                        let pct = (r.lim_mem > 0).then(|| crate::limits::pct_of(r.mem as f64, r.lim_mem as f64)).flatten();
+                        ui.horizontal(|ui| {
+                            if r.lim_mem > 0 {
+                                ui.label(format!("{} / {}", fmt_bytes(r.mem), fmt_bytes(r.lim_mem))).on_hover_text(t!("Limit kontejneru", "Container limit"));
+                            } else {
+                                ui.label(tf!("{} / {} (WSL)", "{} / {} (WSL)", fmt_bytes(r.mem), fmt_bytes(r.mem_limit)))
+                                    .on_hover_text(t!("Kontejner nemá limit – platí limit WSL", "No container limit – the WSL limit applies"));
+                            }
+                            near_limit(ui, pct);
+                        });
+                        let f = if limit > 0 { r.mem as f32 / limit as f32 } else { 0.0 };
                         ui.add(egui::ProgressBar::new(f).desired_width(ui.available_width() - 12.0).desired_height(4.0).fill(theme::accent()));
                     });
                 });
@@ -235,6 +263,14 @@ fn containers_perf(app: &mut App, ui: &mut egui::Ui) {
             });
         }
     });
+}
+
+/// Štítek „u limitu“ při využití nad 90 % limitu kontejneru.
+fn near_limit(ui: &mut egui::Ui, pct: Option<f64>) {
+    if let Some(p) = pct.filter(|p| *p >= crate::limits::NEAR_LIMIT_PCT) {
+        let c = if p >= 100.0 { theme::red() } else { theme::yellow() };
+        badge(ui, &tf!("\u{E4E0} {:.0} %", "\u{E4E0} {:.0} %", p), c).on_hover_text(t!("Využití blízko limitu kontejneru", "Usage close to the container limit"));
+    }
 }
 
 /// Výška dlaždic na přehledu (dvojice vedle sebe mají stejnou výšku).

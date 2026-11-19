@@ -235,6 +235,10 @@ pub struct StatRow {
     pub blk_write: u64,
     /// kumulovaný čas CPU v ns (pro výpočet z rozdílu mezi vzorky – Podman nevyplňuje precpu_stats)
     pub cpu_total: u64,
+    /// limit paměti kontejneru (0 = bez limitu – platí limit WSL v `mem_limit`)
+    pub lim_mem: u64,
+    /// limit CPU kontejneru v počtu jader (0 = bez limitu)
+    pub lim_cpus: f64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -838,6 +842,7 @@ impl Docker {
             blk_read: br,
             blk_write: bw,
             cpu_total: u("/cpu_stats/cpu_usage/total_usage"),
+            ..Default::default()
         })
     }
 

@@ -17,6 +17,7 @@ mod icon_art;
 mod notify;
 mod npipe;
 mod inspect;
+mod limits;
 mod logbuf;
 mod memory;
 mod netinfo;
