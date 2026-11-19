@@ -814,7 +814,7 @@ fn limits_tab(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, running: bool,
     let unl = t!("bez limitu", "unlimited");
     egui::Grid::new("detail-limits-form").num_columns(3).spacing([12.0, 8.0]).show(ui, |ui| {
         ui.label(t!("Limit paměti", "Memory limit"));
-        ui.add(field(&mut form.memory).hint_text(unl).desired_width(fw)).on_hover_text(t!("Např. 512m, 1g, 1.5g", "E.g. 512m, 1g, 1.5g"));
+        ui.add(field(&mut form.memory).hint_text(unl).desired_width(fw).min_size(egui::vec2(fw, 0.0))).on_hover_text(t!("Např. 512m, 1g, 1.5g", "E.g. 512m, 1g, 1.5g"));
         ui.horizontal(|ui| {
             for (v, label) in lim::MEM_PRESETS {
                 if ui.small_button(label).clicked() {
@@ -825,17 +825,17 @@ fn limits_tab(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, running: bool,
         });
         ui.end_row();
         ui.label(t!("Rezervace", "Reservation"));
-        ui.add(field(&mut form.reservation).hint_text(unl).desired_width(fw))
+        ui.add(field(&mut form.reservation).hint_text(unl).desired_width(fw).min_size(egui::vec2(fw, 0.0)))
             .on_hover_text(t!("Měkký limit: při nedostatku paměti jádro kontejneru tolik ponechá.", "Soft limit: under memory pressure the kernel keeps this much for the container."));
         ui.label("");
         ui.end_row();
         ui.label(t!("Paměť + swap", "Memory + swap"));
-        ui.add(field(&mut form.swap).hint_text(t!("výchozí", "default")).desired_width(fw))
+        ui.add(field(&mut form.swap).hint_text(t!("výchozí", "default")).desired_width(fw).min_size(egui::vec2(fw, 0.0)))
             .on_hover_text(t!("Paměť a swap celkem (≥ limit paměti). Rovno limitu = bez swapu.", "Memory and swap in total (≥ memory limit). Equal to the limit = no swap."));
         ui.horizontal(|ui| clear(ui, &mut form.swap));
         ui.end_row();
         ui.label("CPU");
-        ui.add(field(&mut form.cpus).hint_text(unl).desired_width(fw)).on_hover_text(t!("Počet jader, např. 0.5 nebo 2", "Number of cores, e.g. 0.5 or 2"));
+        ui.add(field(&mut form.cpus).hint_text(unl).desired_width(fw).min_size(egui::vec2(fw, 0.0))).on_hover_text(t!("Počet jader, např. 0.5 nebo 2", "Number of cores, e.g. 0.5 or 2"));
         ui.horizontal(|ui| {
             for v in lim::CPU_PRESETS {
                 if ui.small_button(format!("{v} CPU")).clicked() {
@@ -846,7 +846,7 @@ fn limits_tab(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, running: bool,
         });
         ui.end_row();
         ui.label(t!("Procesy", "Processes"));
-        ui.add(field(&mut form.pids).hint_text(unl).desired_width(fw)).on_hover_text(t!("Nejvyšší počet procesů (PIDs)", "Maximum number of processes (PIDs)"));
+        ui.add(field(&mut form.pids).hint_text(unl).desired_width(fw).min_size(egui::vec2(fw, 0.0))).on_hover_text(t!("Nejvyšší počet procesů (PIDs)", "Maximum number of processes (PIDs)"));
         ui.horizontal(|ui| clear(ui, &mut form.pids));
         ui.end_row();
     });
