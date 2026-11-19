@@ -39,9 +39,10 @@ if ($dirty -and -not $AllowDirty) {
 if ($Version) {
     Step "Verze $Version"
     if ($Version -notmatch '^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$') { throw "Neplatná verze: $Version" }
-    $toml = Get-Content Cargo.toml -Raw
+    $toml = Get-Content Cargo.toml -Raw -Encoding UTF8
     $toml = [regex]::Replace($toml, '(?m)^version\s*=\s*"[^"]+"', "version = `"$Version`"", 1)
-    [IO.File]::WriteAllText((Join-Path $root 'Cargo.toml'), $toml)
+    # UTF-8 bez BOM; bez -Encoding by Windows PowerShell četl jako ANSI a rozbil češtinu
+    [IO.File]::WriteAllText((Join-Path $root 'Cargo.toml'), $toml, (New-Object Text.UTF8Encoding $false))
     cargo update --workspace --offline *> $null
     git add Cargo.toml Cargo.lock
     git commit -q -m "Verze $Version"
