@@ -22,6 +22,8 @@ const INTENDED: Duration = Duration::from_secs(30);
 /// Pád chvíli podržet: přijde-li mezitím stop/kill/remove, nejde o pád (Podman posílá
 /// `remove` až po `die`), a smazání hned po skončení prozradí dočasný kontejner (`--rm`).
 const HOLD: Duration = Duration::from_millis(2500);
+/// Jak dlouho podržený pád čeká na načtení detailu (StoppedByUser, OOMKilled).
+const PREFETCH_WAIT: Duration = Duration::from_secs(15);
 const LOOP_WINDOW: Duration = Duration::from_secs(60);
 const LOOP_STARTS: usize = 3;
 /// Oznámení během tohoto okna se sloučí do jednoho.
@@ -76,6 +78,20 @@ pub struct Notifier {
     /// kontejnery se štítkem Testcontainers
     testcontainers: HashSet<String>,
     pending: Vec<Pending>,
+    /// detail se načítá (od kdy) – podržený pád počká na výsledek
+    prefetching: HashMap<String, Instant>,
+    /// engine hlásí OOMKilled (z detailu)
+    oom_killed: HashSet<String>,
+}
+
+/// Výsledek načtení detailu po `die`, který rozhoduje o záměru.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Probe {
+    /// Podman `State.StoppedByUser` – docker stop / compose down (Podman neposílá kill ani stop)
+    pub stopped_by_user: bool,
+    /// kontejner už neexistuje (rm -f, --rm)
+    pub gone: bool,
+    pub oom_killed: bool,
 }
 
 fn within(m: &HashMap<(String, Kind), Instant>, id: &str, k: Kind, now: Instant, d: Duration) -> bool {
@@ -169,6 +185,7 @@ impl Notifier {
                         r.quiet = Some(Quiet::Signal);
                     }
                     self.pending.push(Pending { due: now + HOLD, rec: r });
+                    self.prefetching.insert(id.clone(), now);
                     out.push(Out::Prefetch(id.clone()));
                     out.push(Out::TickLater);
                 }
@@ -199,14 +216,38 @@ impl Notifier {
     /// Vyřídí podržené pády: stop/kill mezitím = nic; smazání hned po skončení = dočasný
     /// kontejner (kód 137/143 se smazáním je `rm -f` – nic); běžící restartovací smyčka =
     /// započítat do ní.
+    /// Detail po `die` je načtený: Podman neposílá `kill`/`stop`, záměr se pozná až z něj.
+    pub fn prefetch_done(&mut self, id: &str, probe: Probe, now: Instant) {
+        self.prefetching.remove(id);
+        if probe.stopped_by_user {
+            self.mark_intended(id, now);
+        }
+        if probe.gone {
+            self.removed.insert(id.to_string(), now);
+        }
+        if probe.oom_killed {
+            self.oom_killed.insert(id.to_string());
+        }
+    }
+
     pub fn tick(&mut self, now: Instant, p: &Policy) -> Vec<Out> {
-        let (due, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending).into_iter().partition(|x| x.due <= now);
+        // na načítaný detail se čeká nejvýš PREFETCH_WAIT
+        let waiting = |pf: &HashMap<String, Instant>, id: &str| pf.get(id).is_some_and(|t| now.saturating_duration_since(*t) < PREFETCH_WAIT);
+        let (due, keep): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.pending).into_iter().partition(|x| x.due <= now && !waiting(&self.prefetching, &x.rec.id));
         self.pending = keep;
+        // pády čekající na detail vyřídí tick po jeho načtení (worker, `prefetch_done`)
         let mut out = vec![];
         for Pending { mut rec, .. } in due {
             let id = rec.id.clone();
+            self.prefetching.remove(&id);
             if Self::since(&self.intended, &id, now) {
                 continue;
+            }
+            // engine hlásí nedostatek paměti -> záznam typu OOM (Podman nemusí poslat událost oom)
+            if self.oom_killed.remove(&id) {
+                rec.kind = Kind::Oom;
+                rec.quiet = None;
             }
             if Self::since(&self.removed, &id, now) {
                 if matches!(rec.code, Some(137 | 143)) {
@@ -276,9 +317,22 @@ fn merged_texts(items: &[(u64, Record)]) -> (String, String) {
     (tf!("Problémy u {n} kontejnerů", "Problems with {n} containers"), body)
 }
 
-/// Načte stav kontejneru a konec jeho logu.
-fn fetch_detail(d: &Docker, id: &str) -> Detail {
-    let v: Option<serde_json::Value> = d.get(&format!("/containers/{id}/json")).ok();
+/// Rychlé zjištění po `die` (bez logu): existuje kontejner, zastavil ho uživatel, OOM?
+fn probe(d: &Docker, id: &str, v: Option<&serde_json::Value>) -> Probe {
+    let Some(v) = v else {
+        return Probe { gone: true, ..Default::default() };
+    };
+    // jen Podman (libpod API; verze v cestě je nutná) – Docker vrátí 404 a pozná se z událostí
+    let stopped_by_user = d
+        .get::<serde_json::Value>(&format!("/v4.0.0/libpod/containers/{id}/json"))
+        .ok()
+        .and_then(|l| l.pointer("/State/StoppedByUser").and_then(|b| b.as_bool()))
+        .unwrap_or(false);
+    Probe { stopped_by_user, gone: false, oom_killed: v.pointer("/State/OOMKilled").and_then(|x| x.as_bool()).unwrap_or(false) }
+}
+
+/// Stav kontejneru (z `inspect`, None = už neexistuje) a konec jeho logu.
+fn fetch_detail(d: &Docker, id: &str, v: Option<serde_json::Value>) -> Detail {
     let Some(v) = v else {
         return Detail { gone: true, ..Default::default() };
     };
@@ -325,10 +379,29 @@ impl Worker {
         self.process(outs);
     }
 
-    fn spawn_detail(&self, id: String) {
+    /// Načte detail kontejneru. Po pádu (`crash`) nejdřív rychle rozhodne, zda nešlo
+    /// o záměrné zastavení (StoppedByUser, smazaný kontejner) nebo OOM, a vyřídí podržený pád.
+    fn spawn_detail(&self, id: String, crash: bool) {
         let w = self.clone();
         thread::spawn(move || {
-            let d = fetch_detail(&w.docker(), &id);
+            let docker = w.docker();
+            let v: Option<serde_json::Value> = docker.get(&format!("/containers/{id}/json")).ok();
+            if crash {
+                let pr = probe(&docker, &id, v.as_ref());
+                let p = Policy::from_cfg(&w.cfg());
+                let outs = w
+                    .shared
+                    .notifier
+                    .lock()
+                    .map(|mut n| {
+                        let now = Instant::now();
+                        n.prefetch_done(&id, pr, now);
+                        n.tick(now, &p)
+                    })
+                    .unwrap_or_default();
+                w.process(outs);
+            }
+            let d = fetch_detail(&docker, &id, v);
             if let Ok(mut log) = w.shared.event_log.lock() {
                 log.detail_ready(&id, d);
             }
@@ -349,7 +422,7 @@ impl Worker {
         let Ok((seq, need_detail)) = res else { return };
         // u pádu se detail načítá už při `die` (Prefetch); u ostatních až teď
         if need_detail && kind != Kind::Crash {
-            self.spawn_detail(id);
+            self.spawn_detail(id, false);
         }
         eventlog::save_soon(&self.shared.event_log);
         self.ctx.request_repaint();
@@ -397,7 +470,7 @@ impl Worker {
         for o in outs {
             match o {
                 Out::Record(r) => self.record(r),
-                Out::Prefetch(id) => self.spawn_detail(id),
+                Out::Prefetch(id) => self.spawn_detail(id, true),
                 Out::Refresh => self.schedule_refresh(),
                 Out::TickLater => {
                     let w = self.clone();
@@ -464,7 +537,7 @@ mod tests {
     fn die(n: &mut Notifier, id: &str, code: i64, t: Instant) -> Vec<Record> {
         let p = pol();
         n.handle(&ev("die", id, &format!(r#","exitCode":"{code}""#)), t, &p);
-        records(n.tick(t + HOLD, &p))
+        records(n.tick(t + PREFETCH_WAIT, &p))
     }
 
     #[test]
@@ -474,7 +547,7 @@ mod tests {
         let p = pol();
         let o = n.handle(&ev("die", "a", r#","exitCode":"3""#), t, &p);
         assert_eq!(o, vec![Out::Prefetch("a".into()), Out::TickLater]);
-        let r = records(n.tick(t + HOLD, &p));
+        let r = records(n.tick(t + PREFETCH_WAIT, &p));
         assert_eq!(r.len(), 1);
         assert_eq!((r[0].kind, r[0].code, r[0].quiet), (Kind::Crash, Some(3), None));
         let r = die(&mut n, "a", 3, t + Duration::from_secs(10));
@@ -493,7 +566,7 @@ mod tests {
         // --rm: smazán hned po pádu
         n.handle(&ev("die", "b", r#","exitCode":"1""#), t, &p);
         n.handle(&ev("remove", "b", ""), t + Duration::from_millis(200), &p);
-        assert_eq!(records(n.tick(t + HOLD, &p))[0].quiet, Some(Quiet::Ephemeral));
+        assert_eq!(records(n.tick(t + PREFETCH_WAIT, &p))[0].quiet, Some(Quiet::Ephemeral));
         // Testcontainers podle štítku
         n.handle(&ev("create", "c", r#","org.testcontainers":"true""#), t, &p);
         assert_eq!(die(&mut n, "c", 1, t)[0].quiet, Some(Quiet::Testcontainers));
@@ -501,10 +574,10 @@ mod tests {
         let mut p2 = pol();
         p2.cn.muted = vec!["c-d".into()];
         n.handle(&ev("die", "d", r#","exitCode":"1""#), t, &p2);
-        assert_eq!(records(n.tick(t + HOLD, &p2))[0].quiet, Some(Quiet::Muted));
+        assert_eq!(records(n.tick(t + PREFETCH_WAIT, &p2))[0].quiet, Some(Quiet::Muted));
         p2.cn.crash = false;
         n.handle(&ev("die", "e", r#","exitCode":"1""#), t, &p2);
-        assert_eq!(records(n.tick(t + HOLD, &p2))[0].quiet, Some(Quiet::KindOff));
+        assert_eq!(records(n.tick(t + PREFETCH_WAIT, &p2))[0].quiet, Some(Quiet::KindOff));
     }
 
     #[test]
@@ -517,13 +590,13 @@ mod tests {
         // Podman rm -f: die 137, remove až potom
         n.handle(&ev("die", "b", r#","exitCode":"137""#), t, &p);
         n.handle(&ev("remove", "b", ""), t + Duration::from_millis(100), &p);
-        assert!(n.tick(t + HOLD, &p).is_empty());
+        assert!(n.tick(t + PREFETCH_WAIT, &p).is_empty());
         // 137 bez zásahu uživatele se oznámí
         assert_eq!(die(&mut n, "c", 137, t)[0].quiet, None);
         // ticho po vypnutí enginu
         n.quiet(t, Duration::from_secs(60));
         assert!(records(n.handle(&ev("die", "d", r#","exitCode":"2""#), t, &p)).is_empty());
-        assert!(n.tick(t + HOLD, &p).is_empty());
+        assert!(n.tick(t + PREFETCH_WAIT, &p).is_empty());
     }
 
     #[test]
@@ -553,6 +626,40 @@ mod tests {
         let t = Instant::now();
         let p = Policy { enabled: false, cn: ContainerNotify::default() };
         n.handle(&ev("die", "a", r#","exitCode":"1""#), t, &p);
-        assert_eq!(records(n.tick(t + HOLD, &p))[0].quiet, Some(Quiet::Disabled));
+        assert_eq!(records(n.tick(t + PREFETCH_WAIT, &p))[0].quiet, Some(Quiet::Disabled));
+    }
+
+    /// Podman neposílá `kill` ani `stop` – záměr a OOM se poznají z detailu po `die`.
+    #[test]
+    fn podman_stop_and_oom_from_probe() {
+        let mut n = Notifier::default();
+        let t = Instant::now();
+        let p = pol();
+        let die = |n: &mut Notifier, id: &str, code: &str| {
+            n.handle(&ev("die", id, &format!(r#","exitCode":"{code}""#)), t, &p);
+        };
+        // docker stop / compose down: StoppedByUser
+        die(&mut n, "stop", "137");
+        // před načtením detailu se nerozhoduje, ani po HOLD
+        assert!(n.tick(t + HOLD, &p).is_empty());
+        n.prefetch_done("stop", Probe { stopped_by_user: true, ..Default::default() }, t + HOLD);
+        assert!(n.tick(t + HOLD, &p).is_empty());
+        // rm -f: kontejner už neexistuje
+        die(&mut n, "rmf", "137");
+        n.prefetch_done("rmf", Probe { gone: true, ..Default::default() }, t);
+        assert!(n.tick(t + HOLD, &p).is_empty());
+        // OOMKilled -> záznam „nedostatek paměti“
+        die(&mut n, "oom", "137");
+        n.prefetch_done("oom", Probe { oom_killed: true, ..Default::default() }, t);
+        let r = records(n.tick(t + HOLD, &p));
+        assert_eq!((r[0].kind, r[0].quiet), (Kind::Oom, None));
+        // skutečný SIGKILL zvenku (ne uživatel, ne OOM) se hlásí
+        die(&mut n, "kill", "137");
+        n.prefetch_done("kill", Probe::default(), t);
+        let r = records(n.tick(t + HOLD, &p));
+        assert_eq!((r[0].kind, r[0].code, r[0].quiet), (Kind::Crash, Some(137), None));
+        // detail se nenačetl vůbec -> po PREFETCH_WAIT se rozhodne bez něj
+        die(&mut n, "slow", "1");
+        assert_eq!(records(n.tick(t + PREFETCH_WAIT, &p)).len(), 1);
     }
 }

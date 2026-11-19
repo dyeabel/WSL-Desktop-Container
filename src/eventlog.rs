@@ -226,8 +226,8 @@ pub fn exit_hint(code: i64) -> &'static str {
             "The application called abort itself – often a failed assertion or a library error; see the log."
         ),
         137 => t!(
-            "Násilné ukončení – nedostatek paměti (limit kontejneru nebo WSL), docker kill, nebo stop po vypršení timeoutu.",
-            "Forced termination – out of memory (container or WSL limit), docker kill, or stop after the timeout expired."
+            "Proces zabil signál SIGKILL – docker kill, jiný proces, nebo stop po vypršení timeoutu. Při nedostatku paměti by šlo o záznam „Nedostatek paměti“.",
+            "SIGKILL ended the process – docker kill, another process, or stop after the timeout expired. Running out of memory would show as an „Out of memory“ record."
         ),
         139 => t!(
             "Pád aplikace (neplatný přístup do paměti) – chyba v programu, nekompatibilní knihovna nebo architektura.",
@@ -255,7 +255,7 @@ fn known_meaning(code: i64) -> Option<&'static str> {
         134 => t!("SIGABRT – aplikace se sama ukončila (abort)", "SIGABRT – the application aborted"),
         135 => t!("SIGBUS – chyba přístupu do paměti", "SIGBUS – memory access error"),
         136 => t!("SIGFPE – aritmetická chyba", "SIGFPE – arithmetic error"),
-        137 => t!("SIGKILL – násilně ukončen (kill, nedostatek paměti)", "SIGKILL – killed (kill, out of memory)"),
+        137 => t!("SIGKILL – násilně ukončen", "SIGKILL – killed"),
         139 => t!("SIGSEGV – neplatný přístup do paměti", "SIGSEGV – segmentation fault"),
         141 => t!("SIGPIPE – zápis do zavřené roury", "SIGPIPE – write to a closed pipe"),
         143 => t!("SIGTERM – požadavek na ukončení", "SIGTERM – termination request"),
@@ -486,8 +486,8 @@ mod tests {
 
     #[test]
     fn every_exit_code_has_a_description() {
-        assert_eq!(exit_meaning(137), "SIGKILL – násilně ukončen (kill, nedostatek paměti)");
-        assert!(exit_hint(137).contains("paměti"));
+        assert_eq!(exit_meaning(137), "SIGKILL – násilně ukončen");
+        assert!(exit_hint(137).contains("docker kill"));
         // neznámý aplikační kód, neznámý signál, mimo rozsah
         assert!(exit_meaning(42).starts_with("chyba aplikace"));
         assert!(exit_hint(42).contains("logu"));

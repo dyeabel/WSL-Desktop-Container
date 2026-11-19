@@ -195,6 +195,8 @@ fn entry_row(app: &App, ui: &mut egui::Ui, e: &Entry, action: &mut Option<Action
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             let head = ui.horizontal(|ui| {
+                // popisky nesmí brát myš (označování textu) – celé záhlaví je jedno tlačítko
+                ui.style_mut().interaction.selectable_labels = false;
                 ui.label(muted(if open { "\u{E136}" } else { "\u{E13A}" }));
                 ui.label(muted(fmt_ago(e.last.max(e.ts))));
                 let c = if e.benign() { theme::grey() } else { kind_color(e.kind) };
@@ -224,7 +226,9 @@ fn entry_row(app: &App, ui: &mut egui::Ui, e: &Entry, action: &mut Option<Action
                 let why = e.quiet.map(|q| q.label()).unwrap_or("");
                 tf!("Neoznámeno: {why}", "Not notified: {why}")
             };
-            let resp = head.response.interact(egui::Sense::click()).on_hover_text(format!("{when}\n{notified}"));
+            // celý pruh záhlaví včetně okrajů karty (inner_margin 12 × 8)
+            let band = head.response.rect.expand2(egui::vec2(12.0, 8.0));
+            let resp = ui.interact(band, ui.id().with(("ev-head", e.seq)), egui::Sense::click()).on_hover_text(format!("{when}\n{notified}"));
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
@@ -302,6 +306,9 @@ fn detail(ui: &mut egui::Ui, e: &Entry) {
         }
         if d.oom_killed {
             row("OOM", t!("ano – ukončen kvůli nedostatku paměti", "yes – killed for running out of memory").into());
+        } else if e.code == Some(137) && !d.gone {
+            // SIGKILL se často plete s nedostatkem paměti – engine ho tady nehlásí
+            row("OOM", t!("ne – engine nedostatek paměti nehlásí", "no – the engine does not report running out of memory").into());
         }
         let policy = if d.restart_policy.is_empty() || d.restart_policy == "no" { String::new() } else { d.restart_policy.clone() };
         if !policy.is_empty() || d.restart_count > 0 {
