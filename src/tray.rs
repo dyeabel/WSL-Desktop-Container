@@ -302,7 +302,10 @@ pub fn init(
                 }
                 ctx.request_repaint();
             }
-            "quit" => std::process::exit(0),
+            "quit" => {
+                crate::portrelay::app().stop_all();
+                std::process::exit(0)
+            }
             _ => {}
         }
     }));

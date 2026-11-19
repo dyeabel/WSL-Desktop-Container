@@ -39,6 +39,8 @@ pub struct Config {
     pub security_hint_dismissed: bool,
     /// Pojmenovaná roura `\\.\pipe\wls_docker_engine` pro nástroje (relay běží jen s aplikací)
     pub npipe: bool,
+    /// Publikované porty kontejnerů i na `[::1]` (relay v aplikaci), aby `localhost` odpovídal hned
+    pub ipv6_localhost_relay: bool,
 }
 
 impl Default for Config {
@@ -61,6 +63,7 @@ impl Default for Config {
             tls: false,
             security_hint_dismissed: false,
             npipe: false,
+            ipv6_localhost_relay: true,
         }
     }
 }

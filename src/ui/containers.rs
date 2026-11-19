@@ -112,7 +112,13 @@ fn row(app: &mut App, r: &mut TableRow<'_>, c: &Container) {
         ui.label(crate::engine::short_image(&c.image)).on_hover_text(&c.image);
     });
     r.col(|ui| {
-        ui.label(c.ports_text());
+        let resp = ui.label(c.ports_text());
+        if let Some((tip, warn)) = localhost_hint(&crate::portrelay::container_ports(c)) {
+            if warn {
+                ui.label(RichText::new("\u{E4E0}").small().color(theme::yellow())).on_hover_text(&tip);
+            }
+            resp.on_hover_text(tip);
+        }
     });
     r.col(|ui| {
         ui.label(c.networks().join(", "));
@@ -421,6 +427,26 @@ pub fn run_dialog(app: &mut App, ctx: &egui::Context) {
     if submit || cancel || close {
         app.run_open = false;
     }
+}
+
+/// Nápověda k dostupnosti portů přes `localhost` (relay na `::1`, režim mirrored): text pro
+/// tooltip a zda některý port funguje jen na `127.0.0.1`. None = žádné relevantní porty.
+pub fn localhost_hint(ports: &[u16]) -> Option<(String, bool)> {
+    use crate::portrelay::Reach;
+    let st = crate::portrelay::app().status();
+    let mut warn = false;
+    let lines: Vec<String> = ports
+        .iter()
+        .filter_map(|p| st.reach(*p))
+        .map(|r| match r {
+            Reach::Localhost(t) => format!("\u{E184} {t}"),
+            Reach::Ipv4Only(t) => {
+                warn = true;
+                format!("\u{E4E0} {t}")
+            }
+        })
+        .collect();
+    (!lines.is_empty()).then(|| (lines.join("\n"), warn))
 }
 
 #[cfg(test)]
