@@ -278,7 +278,9 @@ pub const TILE_H: f32 = 236.0;
 /// Od této šířky jsou dlaždice dvě vedle sebe.
 pub const TWO_COL_MIN: f32 = 860.0;
 /// Jak dlouhou historii CPU držet (s).
-const CPU_WINDOW: f64 = 900.0;
+pub const CPU_WINDOW: f64 = 900.0;
+/// Body grafů dál od sebe se nespojí (aplikace neběžela / přehled nebyl otevřený).
+pub const CHART_GAP: f64 = 180.0;
 
 /// Dvě dlaždice vedle sebe (v úzkém okně pod sebou).
 pub fn two_tiles(ui: &mut egui::Ui, a: impl FnOnce(&mut egui::Ui), b: impl FnOnce(&mut egui::Ui)) {
@@ -317,7 +319,17 @@ fn tile_head(ui: &mut egui::Ui, title: &str, big: &str, sub: &str) {
     ui.add_space(4.0);
 }
 
+/// Doplní CPU z uložené historie před body, které už graf má (jednou po spuštění).
+fn cpu_preload(h: &mut std::collections::VecDeque<(f64, f64)>) {
+    let Some(pts) = crate::history::store().take_cpu_preload() else { return };
+    let first = h.front().map(|p| p.0).unwrap_or(f64::INFINITY);
+    for p in pts.into_iter().rev().filter(|p| p.0 < first) {
+        h.push_front(p);
+    }
+}
+
 fn cpu_tile(app: &mut App, ui: &mut egui::Ui) {
+    cpu_preload(&mut app.cpu_hist);
     card(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.set_min_height(TILE_H);
@@ -332,7 +344,7 @@ fn cpu_tile(app: &mut App, ui: &mut egui::Ui) {
         let pts: Vec<(f64, f64)> = app.cpu_hist.iter().copied().collect();
         let max = pts.iter().map(|p| p.1).fold(0.0, f64::max);
         let ymax = (max * 1.3).clamp(5.0, 100.0);
-        super::chart::line_chart(
+        super::chart::line_chart_gaps(
             ui,
             &[super::chart::Series { name: "CPU", color: theme::accent(), pts: &pts }],
             crate::memory::now_secs(),
@@ -340,6 +352,7 @@ fn cpu_tile(app: &mut App, ui: &mut egui::Ui) {
             ymax,
             |v| format!("{v:.0} %"),
             &[],
+            CHART_GAP,
         );
     });
 }

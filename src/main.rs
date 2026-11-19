@@ -13,6 +13,7 @@ mod dpapi;
 mod engine;
 mod error;
 mod fs;
+mod history;
 mod icon_art;
 mod notify;
 mod npipe;
@@ -77,5 +78,6 @@ fn main() -> eframe::Result<()> {
         Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
     );
     portrelay::app().stop_all();
+    history::flush_on_exit();
     r
 }

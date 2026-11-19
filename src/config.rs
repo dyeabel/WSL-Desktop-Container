@@ -43,6 +43,8 @@ pub struct Config {
     pub ipv6_localhost_relay: bool,
     /// Upozornění na prahové hodnoty paměti a disku
     pub alerts: AlertsConfig,
+    /// Ukládat historii zdrojů (paměť, CPU, provoz, disk) na disk, aby přežila restart aplikace
+    pub history_on_disk: bool,
 }
 
 /// Prahy upozornění (paměť WSL, místo na disku). Chybějící klíče doplní výchozí hodnoty.
@@ -127,6 +129,7 @@ impl Default for Config {
             npipe: false,
             ipv6_localhost_relay: true,
             alerts: AlertsConfig::default(),
+            history_on_disk: true,
         }
     }
 }

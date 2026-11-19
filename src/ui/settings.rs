@@ -409,6 +409,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
 
     super::alerts::settings_section(app, ui);
+    super::memory::history_settings(app, ui);
 
     section(ui, t!("Příkaz docker ve Windows", "The docker command in Windows"));
     card(ui, |ui| {

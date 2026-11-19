@@ -43,3 +43,31 @@ pub fn regen_certs(cfg: Config) -> Result<String, String> {
 pub fn free_memory(cfg: Config) -> Result<String, String> {
     worker(cfg).free_memory(false)
 }
+
+/// Jeden vzorek do historie zdrojů stejnou cestou jako aplikace: paměť a provoz eth0
+/// (`memory_sample`), statistiky kontejnerů (CPU z rozdílu jako při obnovení, úložiště enginu)
+/// a volitelně kontrola disku. `prev` = předchozí kumulované CPU kontejnerů.
+pub fn history_sample(cfg: Config, prev: &mut std::collections::HashMap<String, (std::time::Instant, u64)>, disk: bool) {
+    let w = worker(cfg.clone());
+    let d = w.docker();
+    let snap = d.snapshot();
+    let ncpu = snap.info.as_ref().map(|i| i.ncpu.max(1)).unwrap_or(1) as f64;
+    let mut rows: Vec<crate::docker::StatRow> = snap.containers.iter().filter(|c| c.running()).filter_map(|c| d.stats(&c.id, &c.name())).collect();
+    let now = std::time::Instant::now();
+    for r in &mut rows {
+        if let Some((t, total)) = prev.get(&r.id) {
+            let dt = now.duration_since(*t).as_nanos() as f64;
+            if dt > 0.0 && r.cpu_total >= *total {
+                r.cpu = (r.cpu_total - total) as f64 / dt * 100.0;
+            }
+        }
+    }
+    prev.clear();
+    prev.extend(rows.iter().map(|r| (r.id.clone(), (now, r.cpu_total))));
+    let df = d.df();
+    w.history_stats(&rows, df.as_ref(), ncpu);
+    w.memory_sample(Some(&rows));
+    if disk {
+        w.history_disk(&super::alerts::collect_disk(&cfg, Some(&d)));
+    }
+}

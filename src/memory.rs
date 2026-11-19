@@ -20,10 +20,11 @@ const PS_FALLBACK_SECS: u64 = 10;
 const ENGINE_PROCS: [&str; 10] =
     ["dockerd", "containerd", "docker-proxy", "podman", "conmon", "socat", "rootlessport", "aardvark-dns", "netavark", "catatonit"];
 
-/// Příkaz pro jedno volání `wsl -e sh -c …`: /proc/meminfo, oddělovač, RSS procesů.
-pub const SAMPLE_SCRIPT: &str = "cat /proc/meminfo; echo @@ps; ps -e -o comm=,rss= 2>/dev/null || true";
-/// Minimální vzorek – jen /proc/meminfo.
-pub const SAMPLE_SCRIPT_MIN: &str = "cat /proc/meminfo";
+/// Příkaz pro jedno volání `wsl -e sh -c …`: /proc/meminfo, oddělovač, RSS procesů
+/// a čítače rozhraní (provoz VM do historie).
+pub const SAMPLE_SCRIPT: &str = "cat /proc/meminfo; echo @@ps; ps -e -o comm=,rss= 2>/dev/null; echo @@net; cat /proc/net/dev 2>/dev/null; true";
+/// Minimální vzorek – /proc/meminfo a čítače rozhraní.
+pub const SAMPLE_SCRIPT_MIN: &str = "cat /proc/meminfo; echo @@net; cat /proc/net/dev 2>/dev/null; true";
 
 pub fn now_secs() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
@@ -95,10 +96,17 @@ pub fn engine_rss(ps: &str) -> u64 {
 
 /// Rozdělí výstup `SAMPLE_SCRIPT` na meminfo a (volitelně) RSS enginu.
 pub fn parse_sample(out: &str) -> Option<(MemInfo, Option<u64>)> {
+    let out = out.split_once("@@net").map_or(out, |(a, _)| a);
     match out.split_once("@@ps") {
         Some((mi, ps)) => Some((parse_meminfo(mi)?, Some(engine_rss(ps)))),
         None => Some((parse_meminfo(out)?, None)),
     }
+}
+
+/// Kumulované bajty eth0 VM (rx, tx) z části `@@net` výstupu vzorku.
+pub fn parse_net(out: &str) -> Option<(u64, u64)> {
+    let (_, dev) = out.split_once("@@net")?;
+    crate::netinfo::parse_proc_net_dev(dev).into_iter().find(|i| i.name == "eth0").map(|i| (i.rx, i.tx))
 }
 
 /// Velikost z .wslconfig (`8GB`, `4096MB`, `512 KB`, `2G`, bajty bez jednotky).
@@ -253,6 +261,19 @@ impl History {
         }
         self.points.push_back(p);
         self.trim(p.t);
+    }
+
+    /// Doplní body a uvolnění načtené z disku před ta, která už v historii jsou.
+    pub fn prefill(&mut self, points: Vec<MemPoint>, events: Vec<FreeEvent>, now: f64) {
+        let first = self.points.front().map(|p| p.t).unwrap_or(f64::INFINITY);
+        for p in points.into_iter().rev().filter(|p| p.t < first) {
+            self.points.push_front(p);
+        }
+        let first = self.events.front().map(|e| e.t).unwrap_or(f64::INFINITY);
+        for e in events.into_iter().rev().filter(|e| e.t < first) {
+            self.events.push_front(e);
+        }
+        self.trim(now);
     }
 
     pub fn add_event(&mut self, e: FreeEvent) {

@@ -549,6 +549,7 @@ impl Worker {
         thread::spawn(move || {
             let d = connected.then(|| w.docker());
             let input = collect_disk(&cfg, d.as_ref());
+            w.history_disk(&input);
             let c = w.cfg().alerts;
             let out = w.shared.alerts.lock().map(|mut a| a.check_disk(&c, &input, Instant::now())).unwrap_or_default();
             w.deliver(out);
