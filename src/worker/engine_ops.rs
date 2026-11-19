@@ -182,6 +182,85 @@ impl Worker {
         }
     }
 
+    /// Přepne primární distribuci: v ostatních distribucích uvolní TCP port API (engine
+    /// a kontejnery tam běží dál), přepne konfiguraci a nastaví API v nové distribuci.
+    pub(super) fn set_primary(&self, distro: &str, engine: Option<Engine>, log: &mut String) -> Result<String, String> {
+        let old = self.cfg();
+        let step = |log: &mut String, s: &str| log.push_str(&format!("\n=== {s} ===\n"));
+
+        step(log, &tf!("Enginy v distribuci {distro}", "Engines in {distro}"));
+        let out = wsl::run(distro, Some("root"), None, &["sh", "-c", crate::engine::DETECT_ENGINES])
+            .map_err(|e| tf!("Distribuci {distro} nelze spustit: {e}", "Cannot start {distro}: {e}"))?;
+        let installed = crate::engine::parse_engines(&out);
+        log.push_str(&if installed.is_empty() {
+            t!("žádný (Docker ani Podman)\n", "none (neither Docker nor Podman)\n").to_string()
+        } else {
+            installed.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ") + "\n"
+        });
+        let engine = pick_engine(engine, old.distro_engines.get(distro).copied(), &installed)?;
+
+        self.suppress_tracking();
+        step(log, t!("Uvolnění API v ostatních distribucích", "Releasing the API in other distributions"));
+        let mut others: Vec<String> = wsl::list().unwrap_or_default().into_iter().filter(|d| d.running() && d.name != distro).map(|d| d.name).collect();
+        // dosavadní primární i zastavenou – jinak by si port vzala při příštím startu
+        if old.distro != distro && !others.contains(&old.distro) {
+            others.push(old.distro.clone());
+        }
+        for o in &others {
+            match wsl::run(o, Some("root"), None, &["sh", "-c", crate::engine::API_RELEASE]) {
+                Ok(r) if r.trim().is_empty() => log.push_str(&tf!("{o}: API tu nebylo\n", "{o}: no API here\n")),
+                Ok(r) => log.push_str(&format!("{o}: {}\n", r.trim().replace('\n', ", "))),
+                Err(e) => log.push_str(&format!("{o}: {e}\n")),
+            }
+        }
+
+        self.kill_keepalive();
+        let mut cfg = old.clone();
+        cfg.distro_engines.insert(old.distro.clone(), old.engine);
+        cfg.distro = distro.to_string();
+        if let Some(e) = engine {
+            cfg.engine = e;
+            cfg.distro_engines.insert(distro.to_string(), e);
+        }
+        if let Ok(mut g) = self.cfg.write() {
+            g.distro = cfg.distro.clone();
+            g.engine = cfg.engine;
+            g.distro_engines = cfg.distro_engines.clone();
+            let _ = g.save();
+        }
+        self.shared.tcp_checked.store(false, Ordering::SeqCst);
+        self.shared.was_connected.store(false, Ordering::SeqCst);
+        self.send(Msg::ConfigChanged);
+        if cfg.keep_alive {
+            let _ = self.ensure_keepalive(distro);
+        }
+
+        let Some(e) = engine else {
+            return Ok(tf!(
+                "{distro} je primární distribuce – nainstaluj engine na stránce WSL engine",
+                "{distro} is the primary distribution – install an engine on the WSL engine page"
+            ));
+        };
+        step(log, &tf!("Nastavení API ({})", "Setting up the API ({})", e.name()));
+        let r = self.setup_api(&cfg);
+        self.commit_api_mode(&cfg, old.tls, r.is_ok());
+        match r {
+            Ok((o, _)) => {
+                log.push_str(&o);
+                Ok(tf!(
+                    "{distro} je primární distribuce ({}) – API na tcp://127.0.0.1:{}",
+                    "{distro} is the primary distribution ({}) – API on tcp://127.0.0.1:{}",
+                    e.name(),
+                    cfg.port
+                ))
+            }
+            Err(err) => {
+                log.push_str(&err);
+                Err(tf!("{distro}: API se nepodařilo nastavit – viz výstup", "{distro}: API setup failed – see output"))
+            }
+        }
+    }
+
     /// Spustí skript, který zpřístupní API enginu na TCP, a počká na odezvu.
     /// Vrací (výstup skriptu, API odpovídá).
     pub(super) fn setup_api(&self, cfg: &Config) -> Result<(String, bool), String> {
@@ -482,6 +561,19 @@ echo 1 > /proc/sys/vm/compact_memory 2>/dev/null || true
 echo "after: $(awk '/^Cached:/{print $2}' /proc/meminfo)""#;
 
 /// Port API pro režim: výchozí 2375 bez ověření, 2376 s TLS; vlastní port zůstává.
+/// Engine pro novou primární distribuci: vyžádaný (musí být nainstalovaný), jinak naposledy
+/// použitý, jinak jediný (první) nainstalovaný. Ok(None) = žádný engine v distribuci není.
+pub fn pick_engine(requested: Option<Engine>, remembered: Option<Engine>, installed: &[Engine]) -> Result<Option<Engine>, String> {
+    if let Some(e) = requested {
+        return if installed.contains(&e) {
+            Ok(Some(e))
+        } else {
+            Err(tf!("{} v distribuci není nainstalovaný", "{} is not installed in the distribution", e.name()))
+        };
+    }
+    Ok(remembered.filter(|e| installed.contains(e)).or_else(|| installed.first().copied()))
+}
+
 pub fn api_port(tls: bool, port: u16) -> u16 {
     match (tls, port) {
         (true, 2375) => 2376,
@@ -501,6 +593,18 @@ fn docker_host_is_tcp() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pick_engine_order() {
+        use crate::engine::Engine::{Docker, Podman};
+        use super::pick_engine;
+        assert_eq!(pick_engine(None, None, &[]), Ok(None));
+        assert_eq!(pick_engine(None, None, &[Podman]), Ok(Some(Podman)));
+        assert_eq!(pick_engine(None, Some(Podman), &[Docker, Podman]), Ok(Some(Podman)));
+        assert_eq!(pick_engine(None, Some(Podman), &[Docker]), Ok(Some(Docker)));
+        assert_eq!(pick_engine(Some(Docker), Some(Podman), &[Docker, Podman]), Ok(Some(Docker)));
+        assert!(pick_engine(Some(Podman), None, &[Docker]).is_err());
+    }
+
     #[test]
     fn api_port_follows_mode() {
         assert_eq!(super::api_port(true, 2375), 2376);

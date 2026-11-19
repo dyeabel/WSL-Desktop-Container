@@ -126,6 +126,8 @@ pub enum Cmd {
     EngineStop,
     EngineRestart,
     SetupEngine,
+    /// přepnout primární distribuci (API na portu aplikace); None = engine podle paměti / instalace
+    SetPrimary { distro: String, engine: Option<Engine> },
     /// nainstalovat engine (apt), případně zapnout systemd, a nastavit API (true = s TLS)
     InstallEngine(Engine, bool),
     /// seznam distribucí k instalaci (wsl --list --online)
@@ -587,6 +589,12 @@ impl Worker {
             Cmd::EngineStop => self.engine_stop(),
             Cmd::EngineRestart => self.engine_restart(),
             Cmd::SetupEngine => self.setup_api(&cfg).map(|(out, _)| out),
+            Cmd::SetPrimary { distro, engine } => {
+                let mut log = String::new();
+                let r = self.set_primary(&distro, engine, &mut log);
+                self.send(Msg::Output(tf!("Primární distribuce: {distro}", "Primary distribution: {distro}"), log));
+                r
+            }
             Cmd::UninstallEngine { engine, purge } => self.uninstall_engine(engine, purge),
             Cmd::ListOnline => {
                 self.send(Msg::OnlineDistros(wsl::list_online()));

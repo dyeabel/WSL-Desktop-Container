@@ -23,6 +23,49 @@ pub const PODMAN_TLS_SOCK: &str = "/run/wls-podman/podman.sock";
 pub const TLS_DIR: &str = "/etc/wls-desktop/tls";
 pub const DOCKER_OVERRIDE_PATH: &str = "/etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf";
 
+/// Uvolní TCP port API v distribuci, která přestává být primární: vypne TLS proxy,
+/// Podman API na TCP a `-H tcp://` u dockerd. Engine i kontejnery běží dál (unix socket);
+/// po návratu distribuce na místo primární vše znovu nastaví `setup_script`.
+pub const API_RELEASE: &str = r#"if [ ! -d /run/systemd/system ]; then exit 0; fi
+if [ -f /etc/systemd/system/wls-tls-proxy.service ]; then
+  systemctl disable --now wls-tls-proxy >/dev/null 2>&1 || true
+  systemctl reset-failed wls-tls-proxy >/dev/null 2>&1 || true
+  echo "TLS proxy vypnuta"
+fi
+F=/etc/systemd/system/wls-podman-api.service
+if [ -f $F ] && grep -q 'tcp://' $F; then
+  systemctl disable --now wls-podman-api >/dev/null 2>&1 || true
+  echo "Podman API na TCP vypnuto"
+fi
+O=/etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf
+if [ -f $O ] && grep -q -- '-H tcp://' $O; then
+  sed -i 's# -H tcp://[^ ]*##' $O
+  systemctl daemon-reload
+  if systemctl is-active -q docker; then systemctl restart docker; fi
+  echo "Docker API na TCP vypnuto"
+fi
+exit 0
+"#;
+
+/// Vypíše nainstalované enginy (`docker`, `podman`), každý na řádku.
+pub const DETECT_ENGINES: &str = "for b in dockerd podman; do command -v $b >/dev/null 2>&1 && echo ${b%d}; done; true";
+
+/// Výstup `DETECT_ENGINES` -> seznam enginů.
+pub fn parse_engines(out: &str) -> Vec<Engine> {
+    let mut v = vec![];
+    for l in out.lines().map(str::trim) {
+        let e = match l {
+            "docker" => Engine::Docker,
+            "podman" => Engine::Podman,
+            _ => continue,
+        };
+        if !v.contains(&e) {
+            v.push(e);
+        }
+    }
+    v
+}
+
 impl Engine {
     pub const ALL: [Engine; 2] = [Engine::Docker, Engine::Podman];
 
@@ -448,6 +491,13 @@ pub fn distro_prepare_script() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_engines_from_detect_output() {
+        assert_eq!(parse_engines("docker\npodman\n"), vec![Engine::Docker, Engine::Podman]);
+        assert_eq!(parse_engines("podman\r\n"), vec![Engine::Podman]);
+        assert!(parse_engines("").is_empty());
+    }
 
     #[test]
     fn qualify() {

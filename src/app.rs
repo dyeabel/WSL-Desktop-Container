@@ -588,10 +588,35 @@ impl App {
                                     });
                                 });
                                 // řádek 2: distribuce a kontejnery
+                                // klik = přepnutí primární distribuce
+                                let mut pick = None;
                                 ui.horizontal(|ui| {
                                     ui.add_space(20.0);
-                                    ui.label(RichText::new(&detail).small().color(theme::muted())).on_hover_text(&detail);
+                                    let btn = egui::Button::new(RichText::new(format!("{detail}  \u{E136}")).small().color(theme::muted())).frame(false);
+                                    egui::menu::menu_custom_button(ui, btn, |ui| {
+                                        ui.label(RichText::new(t!("Primární distribuce", "Primary distribution")).small().color(theme::muted()));
+                                        let remembered = self.cfg.read().map(|c| c.distro_engines.clone()).unwrap_or_default();
+                                        for d in &self.distros {
+                                            let cur = d.name == distro;
+                                            let e = if cur { Some(ename) } else { remembered.get(&d.name).map(|e| e.name()) };
+                                            let text = match e {
+                                                Some(e) => format!("{} · {e}", d.name),
+                                                None => d.name.clone(),
+                                            };
+                                            if ui.add(egui::Button::new(text).selected(cur).min_size(egui::vec2(180.0, 0.0))).clicked() {
+                                                ui.close_menu();
+                                                if !cur {
+                                                    pick = Some(d.name.clone());
+                                                }
+                                            }
+                                        }
+                                    })
+                                    .response
+                                    .on_hover_text(tf!("{detail}\nKlikni pro přepnutí primární distribuce", "{detail}\nClick to switch the primary distribution"));
                                 });
+                                if let Some(n) = pick {
+                                    ui::engine::ask_primary(self, &n, None);
+                                }
                                 ui.add_space(6.0);
                                 // řádek 3: stejně široká tlačítka
                                 let w = ui.available_width();

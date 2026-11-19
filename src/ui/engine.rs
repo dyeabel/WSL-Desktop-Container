@@ -75,6 +75,20 @@ pub fn install_dialog(app: &mut App, ctx: &egui::Context) {
 }
 
 /// Potvrzení „Zapnout TLS“ (tlačítko v nastavení i upozornění nahoře).
+/// Potvrzení přepnutí primární distribuce (API aplikace se přesune do `distro`).
+pub fn ask_primary(app: &mut App, distro: &str, engine: Option<crate::engine::Engine>) {
+    let (old, port) = app.cfg.read().map(|c| (c.distro.clone(), c.port)).unwrap_or_default();
+    let with = engine.map(|e| format!(" ({})", e.name())).unwrap_or_default();
+    app.ask(
+        tf!("Přepnout primární distribuci na {distro}{with}?", "Switch the primary distribution to {distro}{with}?"),
+        tf!(
+            "API aplikace (tcp://127.0.0.1:{port}), příkazy docker a všechny stránky budou pracovat s {distro}. V {old} se TCP API vypne, engine a kontejnery tam poběží dál (u Dockeru bez TLS se démon restartuje). Zpět přepneš stejně.",
+            "The app API (tcp://127.0.0.1:{port}), docker commands and all pages will work with {distro}. In {old} the TCP API is turned off; the engine and containers keep running there (Docker without TLS restarts its daemon). Switch back the same way."
+        ),
+        Cmd::SetPrimary { distro: distro.to_string(), engine },
+    );
+}
+
 fn ask_tls_on(app: &mut App) {
     app.ask(
         t!("Zabezpečit API pomocí TLS?", "Secure the API with TLS?"),
@@ -450,6 +464,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
     ui.add_space(6.0);
     let distros = app.distros.clone();
+    let (remembered, cur_engine) = app.cfg.read().map(|c| (c.distro_engines.clone(), c.engine)).unwrap_or_default();
     let cols = [
         ("", W::Px(14.0)),
         (t!("DISTRIBUCE", "DISTRIBUTION"), W::Fr(2.0)),
@@ -467,8 +482,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     ui.label(muted(t!("výchozí", "default")).small());
                 }
                 if d.name == distro {
-                    // štítek podle zvoleného enginu (Docker / Podman)
-                    ui.label(RichText::new(ename).small().color(theme::accent()));
+                    // primární distribuce + její engine (Docker / Podman)
+                    ui.label(RichText::new(tf!("primární · {ename}", "primary · {ename}")).small().color(theme::accent()));
+                } else if let Some(e) = remembered.get(&d.name) {
+                    ui.label(muted(e.name()).small());
                 }
             });
             r.col(|ui| {
@@ -491,13 +508,24 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 if !d.default && icon(ui, "\u{E46A}", t!("Nastavit jako výchozí", "Set as default")) {
                     app.send(Cmd::Wsl(WslCmd::SetDefault(d.name.clone())));
                 }
-                if d.name != distro && ui.small_button(t!("Použít pro Docker", "Use for Docker")).clicked() {
-                    let mut c = app.cfg.read().map(|c| c.clone()).unwrap_or_default();
-                    c.distro = d.name.clone();
-                    app.cfg_draft.distro = d.name.clone();
-                    app.save_config(c);
+                if d.name != distro
+                    && ui
+                        .small_button(t!("Nastavit jako primární", "Make primary"))
+                        .on_hover_text(t!("Aplikace a příkazy docker budou pracovat s touto distribucí", "The app and docker commands will work with this distribution"))
+                        .clicked()
+                {
+                    ask_primary(app, &d.name, None);
                 }
                 super::row_menu(ui, |ui| {
+                    for e in crate::engine::Engine::ALL {
+                        if (d.name != distro || e != cur_engine)
+                            && ui.button(tf!("\u{E46A} Primární s {}", "\u{E46A} Primary with {}", e.name())).clicked()
+                        {
+                            ui.close_menu();
+                            ask_primary(app, &d.name, Some(e));
+                        }
+                    }
+                    ui.separator();
                     if ui.button(t!("\u{EAF0} Exportovat…", "\u{EAF0} Export…")).clicked() {
                         ui.close_menu();
                         super::distros::open_export(app, &d.name);

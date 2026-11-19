@@ -9,6 +9,8 @@ pub struct Config {
     pub distro: String,
     /// kontejnerový engine v distribuci (Docker / Podman)
     pub engine: crate::engine::Engine,
+    /// naposledy použitý engine v jednotlivých distribucích (pro přepnutí primární distribuce)
+    pub distro_engines: std::collections::BTreeMap<String, crate::engine::Engine>,
     /// TCP port Docker API (dockerd -H tcp://127.0.0.1:<port>)
     pub port: u16,
     /// Interval automatického obnovení v sekundách
@@ -151,6 +153,7 @@ impl Default for Config {
         Self {
             distro: "Ubuntu".into(),
             engine: crate::engine::Engine::Docker,
+            distro_engines: Default::default(),
             port: 2375,
             refresh_secs: 3,
             background_refresh_secs: 15,

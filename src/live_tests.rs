@@ -1136,3 +1136,34 @@ fn live_stack_logs_attach_later() {
     assert!(b >= 5, "řádky nového kontejneru nedorazily");
     assert!(stopped);
 }
+
+/// Přepnutí primární distribuce tam a zpět (WLS_PRIMARY_A = výchozí Ubuntu, WLS_PRIMARY_B = Debian):
+/// API na stejném portu pokaždé obslouží engine zvolené distribuce, v té druhé se TCP API vypne.
+#[test]
+#[ignore]
+fn live_switch_primary() {
+    let a = std::env::var("WLS_PRIMARY_A").unwrap_or_else(|_| "Ubuntu".into());
+    let b = std::env::var("WLS_PRIMARY_B").unwrap_or_else(|_| "Debian".into());
+    let data = std::env::temp_dir().join(format!("wls-test-primary-{}", std::process::id()));
+    std::fs::create_dir_all(&data).unwrap();
+    // SAFETY (env): test běží samostatně
+    unsafe { std::env::set_var("WLS_DATA_DIR", &data) };
+    let mut cfg = crate::config::Config { distro: a.clone(), port: 2376, tls: true, keep_alive: false, ..Default::default() };
+    let engine_on_api = |port: u16| -> String {
+        let v: serde_json::Value = Docker::new(port).get("/version").expect("/version");
+        v["Components"][0]["Name"].as_str().unwrap_or("").to_string()
+    };
+    for target in [b.clone(), a.clone()] {
+        let (r, log, c) = crate::worker::testkit::set_primary(cfg.clone(), &target, None);
+        eprintln!("--- {target} ---\n{log}\n{r:?}");
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(c.distro, target);
+        crate::docker::configure_tls(c.tls).expect("tls");
+        let name = engine_on_api(c.port);
+        eprintln!("API: {name} ({})", c.engine.name());
+        // Docker se hlásí jako „Engine“, Podman jako „Podman Engine“
+        assert_eq!(name.contains("Podman"), c.engine == crate::engine::Engine::Podman, "{name} vs {:?}", c.engine);
+        cfg = c;
+    }
+    let _ = std::fs::remove_dir_all(&data);
+}
