@@ -77,7 +77,7 @@ pub fn install_dialog(app: &mut App, ctx: &egui::Context) {
 /// Potvrzení „Zapnout TLS“ (tlačítko v nastavení i upozornění nahoře).
 /// Potvrzení přepnutí primární distribuce (API aplikace se přesune do `distro`).
 pub fn ask_primary(app: &mut App, distro: &str, engine: Option<crate::engine::Engine>) {
-    let (old, port, sleep_old) = app.cfg.read().map(|c| (c.distro.clone(), c.port, c.sleep_previous_primary)).unwrap_or_default();
+    let (old, port, sleep_old) = app.cfg.read().map(|c| (c.distro.clone(), c.port, !c.keep_previous_primary)).unwrap_or_default();
     let with = engine.map(|e| format!(" ({})", e.name())).unwrap_or_default();
     app.ask(
         tf!("Přepnout primární distribuci na {distro}{with}?", "Switch the primary distribution to {distro}{with}?"),
@@ -470,7 +470,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         (t!("DISTRIBUCE", "DISTRIBUTION"), W::Fr(2.0)),
         (t!("STAV", "STATE"), W::Fr(1.0)),
         ("WSL", W::Px(40.0)),
-        (t!("AKCE", "ACTIONS"), W::Px(280.0)),
+        (t!("AKCE", "ACTIONS"), W::Px(340.0)),
     ];
     table(ui, "distros", &cols, |mut body| {
         for d in &distros {
@@ -495,7 +495,23 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 ui.label(&d.version);
             });
             r.col(|ui| {
-                if d.running() {
+                if d.running() && d.name != distro {
+                    // neprimární distribuce: uspat (engine v ní API stejně nemá)
+                    if ui
+                        .small_button(t!("\u{E330} Uspat", "\u{E330} Sleep"))
+                        .on_hover_text(t!("Ukončit distribuci (wsl --terminate) a uvolnit paměť", "Terminate the distribution (wsl --terminate) and free memory"))
+                        .clicked()
+                    {
+                        app.ask(
+                            tf!("Uspat {}?", "Put {} to sleep?", d.name),
+                            t!(
+                                "Distribuce se ukončí (wsl --terminate) a uvolní paměť. Kontejnery v ní se zastaví; ty s restart policy se spustí při dalším startu.",
+                                "The distribution is terminated (wsl --terminate) and frees memory. Its containers stop; those with a restart policy start again on the next start."
+                            ),
+                            Cmd::Wsl(WslCmd::Terminate(d.name.clone())),
+                        );
+                    }
+                } else if d.running() {
                     if icon(ui, "\u{E46C}", t!("Ukončit (wsl --terminate)", "Terminate (wsl --terminate)")) {
                         app.ask(tf!("Ukončit {}?", "Terminate {}?", d.name), t!("Všechny procesy v distribuci budou ukončeny.", "All processes in the distribution will be terminated."), Cmd::Wsl(WslCmd::Terminate(d.name.clone())));
                     }

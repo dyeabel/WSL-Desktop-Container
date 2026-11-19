@@ -280,20 +280,24 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
 
     section(ui, t!("Aplikace", "Application"));
-    let names: Vec<String> = app.distros.iter().map(|d| d.name.clone()).collect();
+    let mut open_engine = false;
     let mut add_distro_requested = false;
     card(ui, |ui| {
         ui.set_width(ui.available_width());
         let d = &mut app.cfg_draft;
         egui::Grid::new("appcfg").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
-            ui.label(t!("Distribuce s enginem", "Engine distribution"));
+            ui.label(t!("Primární distribuce", "Primary distribution"));
             let mut add = false;
             ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("distro").selected_text(d.distro.as_str()).show_ui(ui, |ui| {
-                    for n in &names {
-                        ui.selectable_value(&mut d.distro, n.clone(), n);
-                    }
-                });
+                // přepíná se na stránce WSL engine / v levém panelu (přesune i API)
+                ui.label(RichText::new(format!("{} · {}", d.distro, d.engine.name())).strong());
+                if ui
+                    .button(t!("\u{EB02} Změnit…", "\u{EB02} Change…"))
+                    .on_hover_text(t!("Přepnutí na stránce WSL engine (nebo klikem na distribuci v levém panelu)", "Switch on the WSL engine page (or click the distribution in the left panel)"))
+                    .clicked()
+                {
+                    open_engine = true;
+                }
                 if ui.button(t!("\u{E3D4} Přidat distribuci…", "\u{E3D4} Add distribution…")).clicked() {
                     add = true;
                 }
@@ -363,6 +367,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
     if add_distro_requested {
         open_add_distro(app);
+    }
+    if open_engine {
+        app.page = crate::app::Page::Engine;
     }
 
     section(ui, t!("Na pozadí a oznámení", "Background and notifications"));

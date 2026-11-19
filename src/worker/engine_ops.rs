@@ -240,7 +240,7 @@ impl Worker {
             g.distro = cfg.distro.clone();
             g.engine = cfg.engine;
             g.distro_engines = cfg.distro_engines.clone();
-            g.sleep_previous_primary = sleep_old;
+            g.keep_previous_primary = !sleep_old;
             let _ = g.save();
         }
         self.shared.tcp_checked.store(false, Ordering::SeqCst);
