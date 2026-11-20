@@ -20,6 +20,7 @@ mod icon_art;
 mod notify;
 mod npipe;
 mod inspect;
+mod k8s;
 mod limits;
 mod logbuf;
 mod memory;
