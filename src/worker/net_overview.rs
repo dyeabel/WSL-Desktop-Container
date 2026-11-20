@@ -153,7 +153,7 @@ impl Drop for NetFeed {
 }
 
 /// Skript pro distribuci: čítače rozhraní, IP adresa eth0, naslouchající sockety.
-const OVERVIEW_SCRIPT: &str = "cat /proc/net/dev; echo @@WLS@@; ip -4 -o addr show eth0 2>/dev/null; echo @@WLS@@; ss -ltnupH";
+const OVERVIEW_SCRIPT: &str = "cat /proc/net/dev; echo @@WSLCD@@; ip -4 -o addr show eth0 2>/dev/null; echo @@WSLCD@@; ss -ltnupH";
 
 /// Spustí sběr síťového přehledu (~každé 2 s, historie 15 min) ve vlastním vlákně.
 pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) -> NetFeed {

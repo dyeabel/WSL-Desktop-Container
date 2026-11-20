@@ -5,10 +5,10 @@ use super::{Msg, Worker};
 use crate::engine::Engine;
 use crate::wsl;
 
-/// Ukončí právě prováděné RUN kroky buildů Podmanu: potomky služby wls-podman-api
+/// Ukončí právě prováděné RUN kroky buildů Podmanu: potomky služby wslcd-podman-api
 /// s názvem `exe` (izolace buildah) / `buildah-oci-runtime` – kontejnery mají rodiče conmon, ne službu.
 const KILL_PODMAN_BUILD_STEPS: &str = r#"kt() { for c in $(pgrep -P "$1"); do kt "$c"; done; kill -KILL "$1" 2>/dev/null; }
-M=$(systemctl show -p MainPID --value wls-podman-api 2>/dev/null)
+M=$(systemctl show -p MainPID --value wslcd-podman-api 2>/dev/null)
 if [ -n "$M" ] && [ "$M" != 0 ]; then
   for c in $(pgrep -P "$M"); do
     case "$(cat /proc/$c/comm 2>/dev/null)" in exe|buildah-oci-run*) kt "$c" ;; esac

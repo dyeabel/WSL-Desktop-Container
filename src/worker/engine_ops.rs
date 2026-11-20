@@ -27,7 +27,7 @@ impl Worker {
     /// Ukončí udržovací proces – náš i případný z jiné instance aplikace.
     pub(super) fn kill_keepalive_all(&self, distro: &str) {
         self.kill_keepalive();
-        let _ = wsl::run(distro, Some("root"), None, &["sh", "-c", "pkill -f 'flock -n /tmp/.wls-desktop-keepalive.lock' || true"]);
+        let _ = wsl::run(distro, Some("root"), None, &["sh", "-c", "pkill -f 'flock -n /tmp/\\.w[a-z-]*-desktop-keepalive\\.lock' || true"]);
     }
 
     pub(super) fn kill_keepalive(&self) {
@@ -113,7 +113,7 @@ impl Worker {
         });
     }
 
-    /// Zkopíruje klientský certifikát, klíč a CA z distribuce do %APPDATA%\WLS_Desktop\tls.
+    /// Zkopíruje klientský certifikát, klíč a CA z distribuce do %APPDATA%\WSL_Container_Desktop\tls.
     fn fetch_client_certs(&self, distro: &str) -> Result<(), String> {
         let dir = crate::docker::tls_dir().ok_or("APPDATA")?;
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -207,7 +207,8 @@ impl Worker {
             others.push(old.distro.clone());
         }
         for o in &others {
-            match wsl::run(o, Some("root"), None, &["sh", "-c", crate::engine::API_RELEASE]) {
+            let script = format!("{}\n{}", crate::engine::LEGACY_CLEANUP, crate::engine::API_RELEASE);
+            match wsl::run(o, Some("root"), None, &["sh", "-c", &script]) {
                 Ok(r) if r.trim().is_empty() => log.push_str(&tf!("{o}: API tu nebylo\n", "{o}: no API here\n")),
                 Ok(r) => log.push_str(&format!("{o}: {}\n", r.trim().replace('\n', ", "))),
                 Err(e) => log.push_str(&format!("{o}: {e}\n")),

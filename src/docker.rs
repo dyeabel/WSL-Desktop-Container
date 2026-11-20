@@ -754,7 +754,7 @@ impl Docker {
                 Box::new(rustls::StreamOwned::new(conn, sock))
             }
         };
-        write!(io, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUser-Agent: wls-desktop\r\nConnection: close\r\n\r\n", self.port)
+        write!(io, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUser-Agent: wsl-container-desktop\r\nConnection: close\r\n\r\n", self.port)
             .and_then(|_| io.flush())
             .map_err(|e| e.to_string())?;
         let (status, body) = http_response(std::io::BufReader::new(io))?;

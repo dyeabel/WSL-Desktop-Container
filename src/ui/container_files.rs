@@ -148,12 +148,12 @@ pub fn on_msg(app: &mut App, view: u64, m: CfMsg) {
     }
 }
 
-/// Pro ladění/screenshoty: `WLS_DEBUG_CFILES=<název kontejneru>[:<cesta>]`.
+/// Pro ladění/screenshoty: `WSLCD_DEBUG_CFILES=<název kontejneru>[:<cesta>]`.
 fn debug_open(app: &mut App) {
     if DEBUG_DONE.load(Ordering::Relaxed) {
         return;
     }
-    let Ok(v) = std::env::var("WLS_DEBUG_CFILES") else {
+    let Ok(v) = std::env::var("WSLCD_DEBUG_CFILES") else {
         DEBUG_DONE.store(true, Ordering::Relaxed);
         return;
     };

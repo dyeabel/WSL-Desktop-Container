@@ -1,13 +1,13 @@
 [package]
-name = "wls-desktop"
+name = "wsl-container-desktop"
 version = "0.6.7"
 edition = "2021"
 description = "Desktop aplikace pro správu Dockeru běžícího ve WSL distribuci"
 
-default-run = "wls-desktop"
+default-run = "wsl-container-desktop"
 
 [[bin]]
-name = "wls-desktop"
+name = "wsl-container-desktop"
 path = "src/main.rs"
 
 # docker.exe pro Windows – předává příkazy Dockeru ve WSL

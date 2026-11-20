@@ -201,7 +201,7 @@ pub fn init(
     let c = cfg.read().map(|c| c.clone()).unwrap_or_default();
     let status = MenuItem::with_id("status", t!("Zjišťuji stav…", "Checking status…"), false, None);
     let containers = Submenu::with_id("containers", t!("Kontejnery", "Containers"), true);
-    let open = MenuItem::with_id("open", t!("Otevřít WLS Desktop", "Open WLS Desktop"), true, None);
+    let open = MenuItem::with_id("open", t!("Otevřít WSL Container Desktop", "Open WSL Container Desktop"), true, None);
     let start = MenuItem::with_id("start", t!("Spustit / probudit engine", "Start / wake engine"), true, None);
     let stop = MenuItem::with_id("stop", t!("Zastavit Docker", "Stop Docker"), true, None);
     let restart = MenuItem::with_id("restart", t!("Restartovat Docker", "Restart Docker"), true, None);
@@ -246,7 +246,7 @@ pub fn init(
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
-        .with_tooltip("WLS Desktop")
+        .with_tooltip("WSL Container Desktop")
         .with_icon(icon_off.clone())
         .build()
         .map_err(|e| e.to_string())?;
@@ -424,7 +424,7 @@ pub fn refresh() {
         }
         let text = st.text();
         h.status.set_text(&text);
-        let _ = h.tray.set_tooltip(Some(format!("WLS Desktop\n{text}")));
+        let _ = h.tray.set_tooltip(Some(format!("WSL Container Desktop\n{text}")));
         let _ = h.tray.set_icon(Some(if st.connected { h.icon_on.clone() } else { h.icon_off.clone() }));
         h.start.set_enabled(!st.connected);
         if !st.engine.is_empty() {
@@ -459,7 +459,7 @@ pub fn sync_checks(close: bool, min: bool) {
 pub fn retranslate() {
     TRAY.with(|t| {
         if let Some(h) = t.borrow_mut().as_mut() {
-            h.open.set_text(t!("Otevřít WLS Desktop", "Open WLS Desktop"));
+            h.open.set_text(t!("Otevřít WSL Container Desktop", "Open WSL Container Desktop"));
             h.start.set_text(t!("Spustit / probudit engine", "Start / wake engine"));
             h.sleep.set_text(t!("Uspat distribuci (uvolnit RAM)", "Put distribution to sleep (free RAM)"));
             h.free_mem.set_text(t!("Uvolnit paměť WSL (cache)", "Free WSL memory (cache)"));

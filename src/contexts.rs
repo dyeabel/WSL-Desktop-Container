@@ -1,6 +1,6 @@
-//! Docker kontexty mapované na cíle WLS (distribuce + engine + port + TLS).
+//! Docker kontexty mapované na cíle WSL Container Desktop (distribuce + engine + port + TLS).
 //!
-//! Uložené v `%APPDATA%\WLS_Desktop\contexts.json` (pro testy `WLS_CONTEXTS_FILE`).
+//! Uložené v `%APPDATA%\WSL_Container_Desktop\contexts.json` (pro testy `WSLCD_CONTEXTS_FILE`).
 //! Implicitní kontext `default` = aktuální nastavení aplikace (config.json) a v souboru
 //! se neukládá. „Aktuální“ kontext je v contexts.json (`current`), ne v nastavení aplikace.
 //!
@@ -58,9 +58,9 @@ pub struct Store {
     pub contexts: Vec<Context>,
 }
 
-/// Cesta k contexts.json (`WLS_CONTEXTS_FILE` má přednost – pro testy).
+/// Cesta k contexts.json (`WSLCD_CONTEXTS_FILE` má přednost – pro testy).
 pub fn path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("WLS_CONTEXTS_FILE").filter(|p| !p.is_empty()) {
+    if let Some(p) = std::env::var_os("WSLCD_CONTEXTS_FILE").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p));
     }
     // stejná složka jako konfigurace (v portable režimu vedle EXE)
@@ -221,7 +221,7 @@ pub fn parse_docker_endpoint(v: &str) -> Result<u16, String> {
                 port = Some(p.trim_end_matches('/').parse::<u16>().map_err(|_| format!("invalid port in {val:?}"))?);
             }
             "skip-tls-verify" => {}
-            other => return Err(format!("unsupported --docker option {other:?} (WLS contexts use --tls and the app's certificates)")),
+            other => return Err(format!("unsupported --docker option {other:?} (WSL Container Desktop contexts use --tls and the app's certificates)")),
         }
     }
     port.ok_or_else(|| "--docker needs host=tcp://127.0.0.1:PORT".into())
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn json_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("wls-ctx-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("wslcd-ctx-test-{}", std::process::id()));
         let p = dir.join("contexts.json");
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(Store::load_from(&p).unwrap(), Store::default());

@@ -77,7 +77,7 @@ mod live {
     use super::*;
 
     /// `cargo test live_container_limits -- --ignored --nocapture`
-    /// Pracuje jen s vlastním kontejnerem `wls-test-limits`.
+    /// Pracuje jen s vlastním kontejnerem `wslcd-test-limits`.
     #[test]
     #[ignore]
     fn live_container_limits() {
@@ -88,7 +88,7 @@ mod live {
         assert!(d.ping(), "API na {} neodpovídá", cfg.port);
         let ver: Value = d.get("/version").unwrap();
         let engine = if ver.to_string().contains("Podman") { Engine::Podman } else { Engine::Docker };
-        let name = "wls-test-limits";
+        let name = "wslcd-test-limits";
         let _ = d.container_action(name, "remove");
         let body = serde_json::json!({"Image": "docker.io/library/alpine:3.20", "Cmd": ["sleep", "600"]});
         let url = format!("/containers/create?name={name}");

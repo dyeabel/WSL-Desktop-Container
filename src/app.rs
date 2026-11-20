@@ -123,13 +123,14 @@ pub struct App {
     pub shim: Arc<Mutex<Option<crate::shim_install::Status>>>,
     pub shim_checking: Arc<AtomicBool>,
     shim_msg: Arc<Mutex<Option<Result<String, String>>>>,
-    logo: egui::TextureHandle,
     /// první snímek (kvůli „spustit schované“)
     first_frame: bool,
     /// spouštění s Windows (načte se při prvním zobrazení Nastavení)
     pub autostart: Option<bool>,
     /// vybraná záložka stránky Nastavení
     pub settings_tab: ui::settings::Tab,
+    /// okno „Na pozadí“ (běžící a dokončené akce a příkazy ve WSL)
+    pub activity_open: bool,
     theme_checked: std::time::Instant,
     was_minimized: bool,
     /// okno bylo v minulém snímku schované (po zobrazení se hned obnoví data)
@@ -146,11 +147,11 @@ impl App {
             }
             let _ = cfg.save();
         }
-        // WLS_THEME=dark|light|system přepíše motiv (ladění, screenshoty)
-        theme::apply(&cc.egui_ctx, &std::env::var("WLS_THEME").unwrap_or_else(|_| cfg.theme.clone()));
+        // WSLCD_THEME=dark|light|system přepíše motiv (ladění, screenshoty)
+        theme::apply(&cc.egui_ctx, &std::env::var("WSLCD_THEME").unwrap_or_else(|_| cfg.theme.clone()));
         crate::i18n::set_language(&cfg.language);
-        // pro ladění/screenshoty: WLS_LANG=en|cs přepíše jazyk (bez uložení do konfigurace)
-        if let Ok(l) = std::env::var("WLS_LANG") {
+        // pro ladění/screenshoty: WSLCD_LANG=en|cs přepíše jazyk (bez uložení do konfigurace)
+        if let Ok(l) = std::env::var("WSLCD_LANG") {
             crate::i18n::set_language(&l);
         }
         if cfg.tls {
@@ -183,13 +184,8 @@ impl App {
         if let Err(e) = crate::tray::init(cc.egui_ctx.clone(), tx.clone(), shared.clone(), cfg.clone()) {
             startup_toasts.push(Toast { ok: false, text: tf!("Ikonu v oznamovací oblasti nelze vytvořit: {e}", "Cannot create the tray icon: {e}"), until: 0.0 });
         }
-        let logo = cc.egui_ctx.load_texture(
-            "logo",
-            egui::ColorImage::from_rgba_unmultiplied([64, 64], &crate::icon_art::render(64, None)),
-            egui::TextureOptions::LINEAR,
-        );
-        // pro ladění/screenshoty: WLS_START_PAGE=files|containers|…
-        let page = match std::env::var("WLS_START_PAGE").unwrap_or_default().as_str() {
+        // pro ladění/screenshoty: WSLCD_START_PAGE=files|containers|…
+        let page = match std::env::var("WSLCD_START_PAGE").unwrap_or_default().as_str() {
             "containers" => Page::Containers,
             "images" => Page::Images,
             "volumes" => Page::Volumes,
@@ -201,10 +197,10 @@ impl App {
             "settings" => Page::Settings,
             _ => Page::Dashboard,
         };
-        // pro screenshoty: WLS_DEBUG_MEMORY=1 otevře přehled a posune na sekci Paměť WSL
-        let page = if std::env::var_os("WLS_DEBUG_MEMORY").is_some() { Page::Dashboard } else { page };
-        // pro ladění/screenshoty: WLS_DEBUG_NETWORK=1|ports|map otevře síťový přehled
-        let page = if std::env::var_os("WLS_DEBUG_NETWORK").is_some() { Page::Networks } else { page };
+        // pro screenshoty: WSLCD_DEBUG_MEMORY=1 otevře přehled a posune na sekci Paměť WSL
+        let page = if std::env::var_os("WSLCD_DEBUG_MEMORY").is_some() { Page::Dashboard } else { page };
+        // pro ladění/screenshoty: WSLCD_DEBUG_NETWORK=1|ports|map otevře síťový přehled
+        let page = if std::env::var_os("WSLCD_DEBUG_NETWORK").is_some() { Page::Networks } else { page };
         Self {
             cpu_hist: Default::default(),
             cfg,
@@ -220,8 +216,8 @@ impl App {
             tcp_configured: None,
             page,
             toasts: Vec::new(),
-            // pro ladění vzhledu dialogu: WLS_DEBUG_DIALOG=1
-            confirm: std::env::var("WLS_DEBUG_DIALOG").ok().map(|_| Confirm {
+            // pro ladění vzhledu dialogu: WSLCD_DEBUG_DIALOG=1
+            confirm: std::env::var("WSLCD_DEBUG_DIALOG").ok().map(|_| Confirm {
                 title: t!("Odstranit nginx:alpine?", "Remove nginx:alpine?").into(),
                 text: t!("Image bude odstraněn (pokud ho nepoužívá žádný kontejner).", "The image will be removed (if no container uses it).").into(),
                 cmd: Cmd::Refresh,
@@ -259,10 +255,11 @@ impl App {
             shim: Arc::new(Mutex::new(None)),
             shim_checking: Arc::new(AtomicBool::new(false)),
             shim_msg: Arc::new(Mutex::new(None)),
-            logo,
             first_frame: true,
             autostart: None,
             settings_tab: Default::default(),
+            // pro screenshoty: WSLCD_DEBUG_ACTIVITY=1 otevře okno „Na pozadí“
+            activity_open: std::env::var_os("WSLCD_DEBUG_ACTIVITY").is_some(),
             theme_checked: std::time::Instant::now(),
             was_minimized: false,
             was_hidden: false,
@@ -272,8 +269,8 @@ impl App {
 
     fn with_toasts(mut self, t: Vec<Toast>) -> Self {
         self.toasts.extend(t);
-        // pro ladění: WLS_DEBUG_HUB=nginx předvyplní hledání a vybere image
-        if let Ok(q) = std::env::var("WLS_DEBUG_HUB") {
+        // pro ladění: WSLCD_DEBUG_HUB=nginx předvyplní hledání a vybere image
+        if let Ok(q) = std::env::var("WSLCD_DEBUG_HUB") {
             self.hub.query = q.clone();
             self.hub.open = true;
             ui::images::select_repo(&mut self, &q, !q.contains('/'));
@@ -284,7 +281,7 @@ impl App {
     /// Zavření / minimalizace do tray a synchronizace stavu traye.
     /// Motiv „podle Windows“: jednou za pár sekund zkontrolovat, jestli se nezměnil.
     fn follow_system_theme(&mut self, ctx: &egui::Context) {
-        if self.cfg.read().map(|c| c.theme != "system").unwrap_or(true) || std::env::var("WLS_THEME").is_ok() {
+        if self.cfg.read().map(|c| c.theme != "system").unwrap_or(true) || std::env::var("WSLCD_THEME").is_ok() {
             return;
         }
         if self.theme_checked.elapsed() < std::time::Duration::from_secs(3) {
@@ -563,6 +560,7 @@ impl App {
                     .show_inside(ui, |ui| {
                         let (c, _) = self.engine_status();
                         let ename = self.cfg.read().map(|c| c.engine.name()).unwrap_or("Engine");
+                        let port = self.cfg.read().map(|c| c.port).unwrap_or(0);
                         let distro = self.distro();
                         let connected = self.snap.connected;
                         let distro_running = self.current_distro().map(|d| d.running()).unwrap_or(false);
@@ -631,8 +629,18 @@ impl App {
                                         }
                                     })
                                     .response
-                                    .on_hover_text(tf!("{detail}\nKlikni pro přepnutí primární distribuce", "{detail}\nClick to switch the primary distribution"));
+                                    .on_hover_text(tf!(
+                                        "{detail}\nAPI: tcp://127.0.0.1:{port}\nKlikni pro přepnutí primární distribuce",
+                                        "{detail}\nAPI: tcp://127.0.0.1:{port}\nClick to switch the primary distribution"
+                                    ));
                                 });
+                                // chyba API při běžícím enginu (dřív ve stavové liště)
+                                if let Some(e) = self.snap.error.as_ref().filter(|_| connected) {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(20.0);
+                                        ui.label(RichText::new(format!("\u{E4E0} {e}")).small().color(theme::red())).on_hover_text(e);
+                                    });
+                                }
                                 if let Some(n) = pick {
                                     ui::engine::ask_primary(self, &n, None);
                                 }
@@ -679,13 +687,17 @@ impl App {
                         for p in Page::BOTTOM {
                             self.nav_button(ui, p);
                         }
+                        // verze aplikace (dřív ve stavové liště) a přehled činností na pozadí
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).small().color(theme::muted()))
+                                .on_hover_text(format!("WSL Container Desktop {}", env!("CARGO_PKG_VERSION")));
+                            ui::activity::indicator(self, ui);
+                        });
                     });
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.add(egui::Image::new(&self.logo).fit_to_exact_size(egui::vec2(26.0, 26.0)));
-                    ui.label(RichText::new("WLS Desktop").size(18.0).strong());
-                });
-                ui.add_space(14.0);
+                // název a ikona aplikace jsou v záhlaví okna; panel začíná rovnou navigací
+                ui.add_space(4.0);
                 for p in Page::MAIN {
                     self.nav_button(ui, p);
                 }
@@ -730,31 +742,6 @@ impl App {
                 ui::files::reload(self);
             }
         }
-    }
-
-    fn status_bar(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("status")
-            .frame(egui::Frame::new().fill(theme::sidebar()).inner_margin(egui::Margin::symmetric(12, 5)))
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let (c, t) = self.engine_status();
-                    ui::dot(ui, c);
-                    ui.label(RichText::new(t).small());
-                    if let Some(e) = &self.snap.error {
-                        if self.snap.connected {
-                            ui.label(RichText::new(format!("· {e}")).small().color(theme::red()));
-                        }
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let port = self.cfg.read().map(|c| c.port).unwrap_or(0);
-                        ui.label(RichText::new(format!("tcp://127.0.0.1:{port}")).small().color(theme::muted()));
-                        if self.shared.busy.load(Ordering::Relaxed) > 0 {
-                            ui.spinner();
-                            ui.label(RichText::new(t!("Pracuji…", "Working…")).small());
-                        }
-                    });
-                });
-            });
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
@@ -897,7 +884,6 @@ impl eframe::App for App {
             self.send(Cmd::Refresh);
         }
         self.sidebar(ctx);
-        self.status_bar(ctx);
         egui::CentralPanel::default()
             // vpravo bez okraje: posuvník je u okraje okna, odsazení 28 px má až obsah
             .frame(egui::Frame::new().fill(theme::bg()).inner_margin(egui::Margin { left: 28, right: 0, top: 20, bottom: 12 }))
@@ -922,6 +908,7 @@ impl eframe::App for App {
                 });
             });
         self.dialogs(ctx);
+        ui::activity::window(self, ctx);
         self.toasts(ctx);
         if self.logs.is_some() || self.detail.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(300));

@@ -165,7 +165,7 @@ const SAFE_CHMOD: &str = r#"if [ -L "$2" ]; then echo "symlink – nezměněno: 
 const SAFE_WRITE: &str = r#"f="$1"
 if [ -L "$f" ]; then echo "symlink – neuloženo: $f" >&2; exit 3; fi
 d=$(dirname -- "$f")
-t=$(mktemp "$d/.wls-edit.XXXXXX") || exit 1
+t=$(mktemp "$d/.wslcd-edit.XXXXXX") || exit 1
 if ! cat > "$t"; then rm -f -- "$t"; exit 1; fi
 if [ -e "$f" ]; then chmod --reference="$f" -- "$t" 2>/dev/null; chown --reference="$f" -- "$t" 2>/dev/null; else chmod 644 -- "$t"; fi
 mv -fT -- "$t" "$f""#;

@@ -25,8 +25,8 @@ pub struct ComposeState {
 impl Default for ComposeState {
     fn default() -> Self {
         Self {
-            // pro ladění/screenshoty: WLS_DEBUG_COMPOSE_NEW=<id šablony> otevře dialog nového stacku
-            new: std::env::var("WLS_DEBUG_COMPOSE_NEW").ok().map(|id| NewStack::from_id(&id)),
+            // pro ladění/screenshoty: WSLCD_DEBUG_COMPOSE_NEW=<id šablony> otevře dialog nového stacku
+            new: std::env::var("WSLCD_DEBUG_COMPOSE_NEW").ok().map(|id| NewStack::from_id(&id)),
             editor: None,
             scale: None,
         }

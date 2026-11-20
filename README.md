@@ -1,7 +1,13 @@
-# WLS Desktop
+<p align="center">
+  <img src="assets/icon.png" width="160" alt="WSL Container Desktop icon">
+</p>
 
-**A lightweight, native control panel for Docker and Podman running in WSL 2.**
-One executable – no Docker Desktop, no hidden helper distributions, the engine runs in a distribution you control.
+<h1 align="center">WSL Container Desktop</h1>
+
+<p align="center">
+  <b>A lightweight, native control panel for Docker and Podman running in WSL 2.</b><br>
+  One executable – no Docker Desktop, no hidden helper distributions, the engine runs in a distribution you control.
+</p>
 
 ## Why it exists
 
@@ -14,7 +20,7 @@ paid subscription.
 WSL 2 already ships a full Linux kernel, so a container engine can run directly in a
 distribution you already have, with nothing in between. What has been missing is everything
 around it: a GUI, a `docker` command that just works from PowerShell, notifications, and the
-plumbing between Windows and WSL. **WLS Desktop provides exactly that and nothing more.**
+plumbing between Windows and WSL. **WSL Container Desktop provides exactly that and nothing more.**
 
 ## What it does
 
@@ -115,7 +121,7 @@ The ⓘ icon in a container row opens a resizable window with tabs:
   volumes, network, restart policy, command). The new container is created through the API from the
   original configuration (`Config` + `HostConfig`) with only the edited fields changed, so user,
   capabilities, security options, read-only rootfs, limits, labels, entrypoint, healthcheck and
-  log options are kept. The old container is stopped and renamed to `<name>-wls-old`, the new one
+  log options are kept. The old container is stopped and renamed to `<name>-wslcd-old`, the new one
   is started; on success the old one is removed, on failure the new
   one is removed and the old one renamed back and started again. **All networks** are kept
   (primary network selectable, aliases, optionally the current / static IP and MAC) and
@@ -204,7 +210,7 @@ Oracle, Rocky), zypper (openSUSE, SLES) and pacman (Arch). Progress is shown in 
 
 With *Settings → Restart the containers that were running last time* enabled, the app keeps
 track of running containers (per distribution and engine, in
-`%APPDATA%\WLS_Desktop\last_running.json`) and starts them again once the engine comes up –
+`%APPDATA%\WSL_Container_Desktop\last_running.json`) and starts them again once the engine comes up –
 e.g. after a WSL restart or a reboot. Stopping the engine, putting the distribution to sleep or
 shutting WSL down from the app does not overwrite the list. A restart policy such as
 `unless-stopped` on the container is the engine-native alternative.
@@ -313,7 +319,7 @@ The engine is selected per distribution on the *WSL engine* page.
   the known package variants are installed (docker-ce, docker.io, moby-engine, docker, podman, …).
   `docker-compose` is kept when Docker is still installed. Optionally deletes the data as well
   (`/var/lib/docker…` or `/var/lib/containers`).
-- **Podman** runs as the rootful service `wls-podman-api`
+- **Podman** runs as the rootful service `wslcd-podman-api`
   (`podman system service tcp://127.0.0.1:<port>`). The app talks to it through the same
   Docker-compatible API. CLI commands (running a container, compose, console, logs, the shim)
   are translated to `podman --url tcp://127.0.0.1:<port> …`, so they see the same containers.
@@ -321,7 +327,7 @@ The engine is selected per distribution on the *WSL engine* page.
   compose provider. Setting up one engine disables the other so they don't fight over the port.
 - **`host.docker.internal`** resolves inside containers like in Docker Desktop. Podman provides it
   itself (its bridge gateway); for Docker the API setup starts a small DNS forwarder
-  (`dnsmasq`, service `wls-dns`) on `172.17.0.1` and runs `dockerd --dns 172.17.0.1`:
+  (`dnsmasq`, service `wslcd-dns`) on `172.17.0.1` and runs `dockerd --dns 172.17.0.1`:
   `host.docker.internal` and `gateway.docker.internal` resolve to `172.17.0.1`, everything else
   goes to the distribution's DNS. This works for `docker run`, compose and API clients alike.
   It is skipped when `daemon.json` sets `dns` or `bip`. The address is the WSL distribution, so
@@ -339,13 +345,13 @@ by default (checkbox *Secure the API with TLS*); existing setups show a one-time
 *WSL engine → Install & setup → API security → Turn TLS on* switches to mutual TLS:
 
 - the engine listens only on a unix socket inside the distribution (Docker `/var/run/docker.sock`,
-  Podman `/run/wls-podman/podman.sock`); access is granted to the group `docker` / `wls-api`,
+  Podman `/run/wslcd-podman/podman.sock`); access is granted to the group `docker` / `wslcd-api`,
   which the default user of the distribution is added to;
 - a CA, a server certificate (`127.0.0.1`, `localhost`) and a client certificate (EC P-256) are
-  generated in `/etc/wls-desktop/tls`; the client certificate, key and CA are copied to
-  `%APPDATA%\WLS_Desktop\tls` – the key encrypted with DPAPI (`key.pem.dpapi`); a plain
+  generated in `/etc/wsl-container-desktop/tls`; the client certificate, key and CA are copied to
+  `%APPDATA%\WSL_Container_Desktop\tls` – the key encrypted with DPAPI (`key.pem.dpapi`); a plain
   `key.pem` for `DOCKER_CERT_PATH` is written only when *DOCKER_HOST* is set for external tools;
-- the systemd service `wls-tls-proxy` (`socat`, installed if missing) listens on
+- the systemd service `wslcd-tls-proxy` (`socat`, installed if missing) listens on
   `127.0.0.1:2376` and accepts only clients presenting the client certificate; it starts and
   stops together with the engine;
 - the app connects over HTTPS with the client certificate (rustls); the CLI inside WSL and the
@@ -371,17 +377,17 @@ says so.
 The project also builds a small `docker.exe` (`src/shim/docker.rs`) that forwards commands to
 the engine inside WSL: `docker ps` on Windows runs as
 `wsl.exe -d <distro> --cd <current folder> -e docker ps` (or `podman --url … ps` for Podman).
-The distribution and engine come from the WLS Desktop settings. Windows paths in arguments are
+The distribution and engine come from the WSL Container Desktop settings. Windows paths in arguments are
 translated (`-v D:\data:/data`, `--mount source=C:\x`, `-f C:\p\compose.yml`, `.\data`,
 `\\wsl.localhost\Debian\…`) and the exit code of the command is returned. When named
 `docker-compose.exe` it behaves like `docker compose`.
 
 Install it from *WSL engine → Install & setup* (or *Settings*): it is copied to
-`%LOCALAPPDATA%\WLS_Desktop\bin` and that folder is added to the user PATH (no admin rights).
+`%LOCALAPPDATA%\WSL_Container_Desktop\bin` and that folder is added to the user PATH (no admin rights).
 The check reads PATH from the registry (machine, then user – what a new terminal sees) and warns
-only about another `docker` that comes *before* ours. Other copies of the WLS Desktop shim – older
+only about another `docker` that comes *before* ours. Other copies of the WSL Container Desktop shim – older
 portable versions in PATH, a repeated entry, a PATH entry of a moved package, leftovers in
-`%LOCALAPPDATA%\WLS_Desktop\bin` after switching to portable – are listed with *Remove
+`%LOCALAPPDATA%\WSL_Container_Desktop\bin` after switching to portable – are listed with *Remove
 duplicates*: PATH keeps the current folder once, other package folders are only removed from
 PATH (never deleted), copies in the default install folder are deleted.
 
@@ -389,7 +395,7 @@ To behave as close to the Docker CLI as possible:
 
 - **Environment variables from Windows** are forwarded via `WSLENV` – only what the command
   needs: `-e VAR` / `--env VAR` without a value, variables used in compose files
-  (`${VAR}`, `$VAR`), plus anything listed in `WLS_FORWARD_ENV=A,B`. `DOCKER_HOST`, `PATH`
+  (`${VAR}`, `$VAR`), plus anything listed in `WSLCD_FORWARD_ENV=A,B`. `DOCKER_HOST`, `PATH`
   and similar are never forwarded.
 - **Paths in BuildKit options** are translated too: `--secret src=…`, `--output dest=…`,
   `--build-context x=…`, `--cache-from` / `--cache-to`, `--ssh`, `save -o …`. Values of `-e`,
@@ -406,10 +412,10 @@ To behave as close to the Docker CLI as possible:
 `image inspect`, `logs` without `-f`, `version --format`, `info --format` – are answered directly
 from the engine API (also over TLS) in ~50 ms instead of ~250 ms via `wsl.exe`. Output mimics the Docker
 CLI. Anything else (unknown flag, template function, API error) silently falls back to
-`wsl.exe`. `WLS_SHIM_FAST=0` disables the fast path.
+`wsl.exe`. `WSLCD_SHIM_FAST=0` disables the fast path.
 
-Debugging: `WLS_SHIM_DEBUG=1` prints the executed command (and whether the fast path was used); `WLS_ENGINE=podman|docker`,
-`WLS_PORT` and `WLS_DISTRO` override the settings.
+Debugging: `WSLCD_SHIM_DEBUG=1` prints the executed command (and whether the fast path was used); `WSLCD_ENGINE=podman|docker`,
+`WSLCD_PORT` and `WSLCD_DISTRO` override the settings.
 
 **Path translation** covers volume and mount flags, file flags (`--env-file`, `--label-file`,
 `--cidfile`, `--iidfile`, `--metadata-file`, `--device`, `--security-opt seccomp=`, `--log-opt
@@ -417,7 +423,7 @@ path=`), `cp` (only the host side), `build -f`, BuildKit options, `compose -f/--
 --project-directory`, `load -i`, `save`/`export -o`, `import <file>` and the global `--config`;
 the list of deliberately untranslated flags is at the top of `src/pathmap.rs`.
 
-**Contexts:** `docker context ls|show|use|create|rm|inspect` manage WLS targets (distribution +
+**Contexts:** `docker context ls|show|use|create|rm|inspect` manage WSL Container Desktop targets (distribution +
 engine + port + TLS) stored in `contexts.json` next to the app configuration; `default` is the
 app's current setting (its endpoint shows `DOCKER_HOST` when that variable is set, like the Docker
 CLI, which also warns when `DOCKER_HOST` overrides a selected context).
@@ -438,7 +444,7 @@ would also return the base image); published ports show the host address
 (`0.0.0.0:8080->80/tcp`), which Podman's API leaves out; `docker version` – plain or with
 `--format`, including `.Client.*` fields – reports the compatible API version (1.41), not
 Podman's own version, and the client version of the matching Docker release (`20.10.0` for
-API 1.41), so version checks in scripts pass; the WLS Desktop version appears only in the plain
+API 1.41), so version checks in scripts pass; the WSL Container Desktop version appears only in the plain
 output header;
 `docker events` reads the compatible API stream, so the default line, `--format json` and simple
 templates (`{{.Action}} {{.Actor.Attributes.name}}`) have Docker's schema, including
@@ -452,8 +458,8 @@ into Podman. `buildx build` stays on Buildah unless a custom builder is selected
 The Podman setup also configures the distribution like Docker: short image names are looked up
 on Docker Hub (`unqualified-search-registries = ["docker.io"]`, so `postgres:16-alpine` works),
 Podman aliases that point elsewhere are redirected to Docker Hub (`hello-world`, `fedora`,
-`centos`, …; `/etc/containers/registries.conf.d/zz-wls-desktop.conf`), and `/var/run/docker.sock`
-links to the Podman API (`/etc/tmpfiles.d/wls-docker-sock.conf`) for tools and
+`centos`, …; `/etc/containers/registries.conf.d/zz-wsl-container-desktop.conf`), and `/var/run/docker.sock`
+links to the Podman API (`/etc/tmpfiles.d/wslcd-docker-sock.conf`) for tools and
 Docker-outside-of-Docker containers. Switching to Docker removes the link. The TLS proxy accepts
 up to 256 concurrent connections with a listen backlog of 128 (Testcontainers, parallel CI).
 
@@ -464,9 +470,9 @@ console window when it is not available.
 
 - **Engine API over TCP:** without TLS the engine listens besides its socket on
   `tcp://127.0.0.1:2375` (no authentication). For Docker this is a systemd override
-  `/etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf`, for Podman the unit
-  `/etc/systemd/system/wls-podman-api.service`. With TLS the engine stays on its unix socket and
-  only the `wls-tls-proxy` listens on `127.0.0.1:2376` (see *API security*). WSL forwards the port
+  `/etc/systemd/system/docker.service.d/10-wsl-container-desktop-tcp.conf`, for Podman the unit
+  `/etc/systemd/system/wslcd-podman-api.service`. With TLS the engine stays on its unix socket and
+  only the `wslcd-tls-proxy` listens on `127.0.0.1:2376` (see *API security*). WSL forwards the port
   to `127.0.0.1` on Windows automatically; the app adds `[::1]` (see *Network overview and ports*).
 - **Live updates:** a background thread reads the engine event stream (`/events`) and triggers a
   debounced refresh; the same events drive the Windows notifications.
@@ -484,19 +490,32 @@ console window when it is not available.
   keeps running after the app is closed, so the engine stays up. **Sleep** stops it and shuts
   the distribution down.
 
-The app configuration is stored in `%APPDATA%\WLS_Desktop\config.json` (in portable mode in
+The app configuration is stored in `%APPDATA%\WSL_Container_Desktop\config.json` (in portable mode in
 `data\` next to the EXE).
+
+*Renamed from WLS Desktop:* on first start the data folder `%APPDATA%\WLS_Desktop` is renamed to
+`%APPDATA%\WSL_Container_Desktop`, the *Start with Windows* entry is moved to the new name and
+path, and a leftover `docker` command in `%LOCALAPPDATA%\WLS_Desktop\bin` is offered for removal
+under *Remove duplicates*. Inside the distributions the services are now `wslcd-*`
+(`wslcd-podman-api`, `wslcd-tls-proxy`, `wslcd-dns`, group `wslcd-api`) and the certificates live
+in `/etc/wsl-container-desktop/tls`; any API setup, primary switch or uninstall removes the old
+`wls-*` services, files and group first (new certificates are generated). The `WSLCD_*`
+environment variables used for debugging and tests are unchanged.
 
 ## Building
 
 Requirements: Rust (MSVC toolchain) and Visual Studio Build Tools with C++ (including the
 Windows SDK – `rc.exe` is used to embed the icon).
 
+The icon is made from `assets/icon.jpg`: `python scripts/make_icon.py` (Pillow) writes
+`assets/icon.png` (README) and the prepared sizes in `assets/icon/*.rgba`, which `src/icon_art.rs`
+embeds for the EXE, window, tray (with a status dot) and notifications.
+
 ```bash
 cargo build --release
 ```
 
-Output: `target\release\wls-desktop.exe` (~8 MB, no runtime dependencies) and
+Output: `target\release\wsl-container-desktop.exe` (~8 MB, no runtime dependencies) and
 `target\release\docker.exe` (the shim).
 
 ### Portable package
@@ -505,10 +524,10 @@ Output: `target\release\wls-desktop.exe` (~8 MB, no runtime dependencies) and
 powershell -ExecutionPolicy Bypass -File scripts\package.ps1
 ```
 
-creates `dist\WLS-Desktop-<version>-win-x64.zip` (+ `.sha256`) with both EXEs, the README and
-`PORTABLE.txt`. When `PORTABLE.txt` lies next to `wls-desktop.exe`, the app runs in **portable
+creates `dist\WSL-Container-Desktop-<version>-win-x64.zip` (+ `.sha256`) with both EXEs, the README and
+`PORTABLE.txt`. When `PORTABLE.txt` lies next to `wsl-container-desktop.exe`, the app runs in **portable
 mode**: settings, certificates and other data go to `data\` next to the EXE instead of
-`%APPDATA%\WLS_Desktop`, and *docker command in PATH* adds the app folder itself to PATH. Delete
+`%APPDATA%\WSL_Container_Desktop`, and *docker command in PATH* adds the app folder itself to PATH. Delete
 the file to switch to the normal mode. On the first start the default WSL distribution is
 preselected.
 
@@ -527,7 +546,7 @@ powershell -ExecutionPolicy Bypass -File scripts\release.ps1 -Version 1.0.0 -Tag
    Actions (`.github/workflows/release.yml`: clippy, tests, package) publish a GitHub release with
    the ZIP and its SHA-256. Every push to `main` builds the ZIP as a workflow artifact;
 6. cleans up (`scripts\cleanup.ps1`, skipped with `-NoCleanup`): stale intermediate build
-   results of the app in `target\` (incremental sessions and old `build\wls-desktop\<hash>`
+   results of the app in `target\` (incremental sessions and old `build\wsl-container-desktop\<hash>`
    folders that every version bump leaves behind), the whole debug profile when `target\` still
    exceeds 10 GB, and packages older than the last 3 versions in `dist\`. It can also be run on
    its own (`-KeepDist`, `-MaxGB`).
@@ -537,15 +556,15 @@ Besides the portable ZIP, `package.ps1` builds `…-winget.zip` without `PORTABL
 
 ### Code signing
 
-`scripts/sign.ps1` signs `wls-desktop.exe` and `docker.exe` with Authenticode (SHA-256, RFC 3161
+`scripts/sign.ps1` signs `wsl-container-desktop.exe` and `docker.exe` with Authenticode (SHA-256, RFC 3161
 timestamp); `package.ps1 -Sign` / `release.ps1 -Sign` call it before packaging. The signing method
 is chosen by environment variables:
 
 | Method | Variables | Notes |
 |---|---|---|
-| **Azure Artifact Signing** (formerly Trusted Signing) | `WLS_SIGN_DLIB` (x64 `Azure.CodeSigning.Dlib.dll`), `WLS_SIGN_METADATA` (`metadata.json` with endpoint, account, certificate profile) + `AZURE_*` credentials or `az login` | recommended; ~10 USD / month; individuals only in the USA / Canada, organizations also in the EU; client tools: `winget install -e --id Microsoft.Azure.ArtifactSigningClientTools` |
-| Certificate in the Windows store (USB token, HSM, cloud HSM such as DigiCert KeyLocker or SSL.com eSigner) | `WLS_SIGN_THUMBPRINT` | classic OV / EV certificate; since 2023 private keys must be on an HSM |
-| PFX file | `WLS_SIGN_PFX`, `WLS_SIGN_PFX_PASSWORD` | older certificates or testing (`-AllowUntrusted` accepts a self-signed test certificate) |
+| **Azure Artifact Signing** (formerly Trusted Signing) | `WSLCD_SIGN_DLIB` (x64 `Azure.CodeSigning.Dlib.dll`), `WSLCD_SIGN_METADATA` (`metadata.json` with endpoint, account, certificate profile) + `AZURE_*` credentials or `az login` | recommended; ~10 USD / month; individuals only in the USA / Canada, organizations also in the EU; client tools: `winget install -e --id Microsoft.Azure.ArtifactSigningClientTools` |
+| Certificate in the Windows store (USB token, HSM, cloud HSM such as DigiCert KeyLocker or SSL.com eSigner) | `WSLCD_SIGN_THUMBPRINT` | classic OV / EV certificate; since 2023 private keys must be on an HSM |
+| PFX file | `WSLCD_SIGN_PFX`, `WSLCD_SIGN_PFX_PASSWORD` | older certificates or testing (`-AllowUntrusted` accepts a self-signed test certificate) |
 
 The ZIP itself cannot carry an Authenticode signature – the signed EXEs inside it and the published
 SHA-256 are what users verify (`Get-AuthenticodeSignature`, `Get-FileHash`). In GitHub Actions the
@@ -557,9 +576,9 @@ and an OSI license required).
 
 ### winget
 
-`scripts/winget.ps1` generates the manifests (`dist\winget\manifests\d\dyeabel\WLSDesktop\<version>\`:
+`scripts/winget.ps1` generates the manifests (`dist\winget\manifests\d\dyeabel\WSLContainerDesktop\<version>\`:
 version, installer and en-US locale, schema 1.10) for the `-winget.zip` release asset – installer
-type `zip` with the nested portable `wls-desktop.exe` and the command alias `wls-desktop` – and
+type `zip` with the nested portable `wsl-container-desktop.exe` and the command alias `wsl-container-desktop` – and
 checks them with `winget validate`. CI attaches the manifest to the workflow artifacts. Publishing
 to the community repository means a pull request to `microsoft/winget-pkgs` (e.g.
 `wingetcreate submit <folder>`); it requires a **public** download URL, i.e. a public repository
@@ -572,21 +591,21 @@ cargo test
 ```
 
 **Docker end-to-end test** – `cargo test live_docker_e2e -- --ignored --nocapture` creates a fresh
-distribution `WLS-Test-Docker`, installs Docker from the distribution packages the same way the
+distribution `WSLCD-Test-Docker`, installs Docker from the distribution packages the same way the
 app does and goes through the plain and the TLS API, containers, events, build, compose,
 *Recreate* and the `docker.exe` shim, then unregisters the distribution (~3 minutes; port 2385,
 `iptables: false` so the shared WSL network of other engines is not touched, app data in a
-temporary `WLS_DATA_DIR`; `WLS_E2E_KEEP=1` keeps the distribution for debugging). In GitHub
+temporary `WSLCD_DATA_DIR`; `WSLCD_E2E_KEEP=1` keeps the distribution for debugging). In GitHub
 Actions it runs via the manually started workflow `e2e` on a self-hosted Windows runner with the
 labels `self-hosted, windows, wsl` (running under a normal user account – WSL distributions are
 per user); see `.github/workflows/e2e.yml` for the requirements.
 
-Integration tests against a real WSL distribution and engine (distribution from `WLS_DISTRO`,
-default `Ubuntu`; the Podman test expects an API on `WLS_PODMAN_PORT`, default 2376).
-`live_add_distro` installs and removes a temporary Debian (`WLS-Test-Debian`),
+Integration tests against a real WSL distribution and engine (distribution from `WSLCD_DISTRO`,
+default `Ubuntu`; the Podman test expects an API on `WSLCD_PODMAN_PORT`, default 2376).
+`live_add_distro` installs and removes a temporary Debian (`WSLCD-Test-Debian`),
 `live_pkg_helpers` checks install / detect / remove in throwaway Fedora, openSUSE and Arch
-containers (needs the Podman API on `WLS_PORT`, default 2375). `live_events_stream`,
-`live_build_image` and `live_container_detail` work with throwaway `wls-test-*` containers and
+containers (needs the Podman API on `WSLCD_PORT`, default 2375). `live_events_stream`,
+`live_build_image` and `live_container_detail` work with throwaway `wslcd-test-*` containers and
 images, `live_tls_proxy` runs a temporary Podman socket with the TLS proxy on port 2377 and checks
 that only a client with the certificate gets through, `live_autostart_roundtrip` writes and
 removes the Run registry value:
@@ -598,20 +617,20 @@ cargo test -- --ignored --test-threads=1
 `live_net` (`cargo test live_net -- --ignored --nocapture`) checks the network overview (traffic,
 ports, in / out connections) against the engine from the app configuration.
 
-For debugging and screenshots: `WLS_START_PAGE` selects the start page (`containers`, `images`,
+For debugging and screenshots: `WSLCD_START_PAGE` selects the start page (`containers`, `images`,
 `volumes`, `networks`, `compose`, `files`, `engine`, `settings`; Overview otherwise),
-`WLS_DEBUG_DIALOG=1` shows a sample confirmation dialog, `WLS_DEBUG_HUB=<image>` opens the Docker
-Hub dialog, `WLS_DEBUG_EXPAND=1` expands the engine setup section, `WLS_DEBUG_BUILD=1` opens the
+`WSLCD_DEBUG_DIALOG=1` shows a sample confirmation dialog, `WSLCD_DEBUG_HUB=<image>` opens the Docker
+Hub dialog, `WSLCD_DEBUG_EXPAND=1` expands the engine setup section, `WSLCD_DEBUG_BUILD=1` opens the
 build dialog,
-`WLS_DEBUG_DETAIL=<container>[:overview|stats|logs|recreate|files|network|limits]` opens the
-container detail, `WLS_DEBUG_CFILES=<container>[:<path>]` the container file browser,
-`WLS_DEBUG_LOGS=<container>[:search=<text>]` / `WLS_DEBUG_STACK_LOGS=<stack>[:search=<text>]` the
-log window, `WLS_DEBUG_MEMORY=1` scrolls the Overview to *WSL memory*,
-`WLS_DEBUG_NETWORK=1|ports|map` opens the *Networks* page on the Traffic / Ports / Networks tab,
-`WLS_DEBUG_COMPOSE_NEW=<template>` the new-stack dialog, `WLS_DEBUG_RESTORE=1` the volume restore
-dialog, `WLS_DEBUG_REMOVE_DISTRO=<name>` / `WLS_DEBUG_IMPORT=1` the distribution dialogs.
-`WLS_LANG=en|cs` and `WLS_THEME=dark|light|system` override the language and theme without
-saving them; `WLS_DATA_DIR` moves the app data folder (used by the tests).
+`WSLCD_DEBUG_DETAIL=<container>[:overview|stats|logs|recreate|files|network|limits]` opens the
+container detail, `WSLCD_DEBUG_CFILES=<container>[:<path>]` the container file browser,
+`WSLCD_DEBUG_LOGS=<container>[:search=<text>]` / `WSLCD_DEBUG_STACK_LOGS=<stack>[:search=<text>]` the
+log window, `WSLCD_DEBUG_MEMORY=1` scrolls the Overview to *WSL memory*,
+`WSLCD_DEBUG_NETWORK=1|ports|map` opens the *Networks* page on the Traffic / Ports / Networks tab,
+`WSLCD_DEBUG_COMPOSE_NEW=<template>` the new-stack dialog, `WSLCD_DEBUG_RESTORE=1` the volume restore
+dialog, `WSLCD_DEBUG_REMOVE_DISTRO=<name>` / `WSLCD_DEBUG_IMPORT=1` the distribution dialogs.
+`WSLCD_LANG=en|cs` and `WSLCD_THEME=dark|light|system` override the language and theme without
+saving them; `WSLCD_DATA_DIR` moves the app data folder (used by the tests).
 
 ## UI conventions
 

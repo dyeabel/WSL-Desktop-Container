@@ -1,6 +1,6 @@
 //! Klientská TLS konfigurace pro API enginu (sdílí aplikace i `docker.exe` shim).
 //!
-//! Certifikáty jsou ve `%APPDATA%\WLS_Desktop\tls` (ca.pem, cert.pem; klíč key.pem.dpapi šifrovaný DPAPI).
+//! Certifikáty jsou ve `%APPDATA%\WSL_Container_Desktop\tls` (ca.pem, cert.pem; klíč key.pem.dpapi šifrovaný DPAPI).
 
 /// Složka s klientskými certifikáty (Docker konvence: ca.pem, cert.pem, key.pem) –
 /// stejná se dá použít jako DOCKER_CERT_PATH.

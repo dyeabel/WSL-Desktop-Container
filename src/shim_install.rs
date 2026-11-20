@@ -1,5 +1,5 @@
 //! Instalace `docker.exe` shimu do uživatelského PATH
-//! (%LOCALAPPDATA%\WLS_Desktop\bin, bez administrátorských práv).
+//! (%LOCALAPPDATA%\WSL_Container_Desktop\bin, bez administrátorských práv).
 
 use std::path::PathBuf;
 
@@ -12,7 +12,7 @@ pub struct Status {
     /// jiný docker, který má v PATH přednost (je před naší složkou; když naše složka
     /// v PATH není, každý nalezený)
     pub other_docker: Vec<OtherDocker>,
-    /// jiné kopie shimu WLS Desktop (v PATH nebo zbylé po dřívější instalaci)
+    /// jiné kopie shimu WSL Container Desktop (v PATH nebo zbylé po dřívější instalaci)
     pub duplicates: Vec<Dup>,
     /// shim je k dispozici vedle aplikace (zdroj pro instalaci)
     pub source_ok: bool,
@@ -37,7 +37,7 @@ pub enum Action {
     Check,
     Install,
     Uninstall,
-    /// odebrat jiné kopie shimu WLS Desktop z PATH / disku
+    /// odebrat jiné kopie shimu WSL Container Desktop z PATH / disku
     RemoveDuplicates,
     /// odebrat složku s cizím dockerem z uživatelského PATH
     RemoveFromPath(String),
@@ -97,7 +97,7 @@ pub fn set_docker_host(target: Option<(u16, bool)>) -> Result<String, String> {
 }
 
 /// Kam patří docker.exe v PATH: v portable režimu přímo složka aplikace (nic se nekopíruje),
-/// jinak %LOCALAPPDATA%\WLS_Desktop\bin.
+/// jinak %LOCALAPPDATA%\WSL_Container_Desktop\bin.
 pub fn bin_dir() -> PathBuf {
     if let Some(d) = crate::config::portable_dir() {
         return d;
@@ -174,34 +174,35 @@ pub fn status() -> Status {
         .map(|x| x.trim().to_ascii_lowercase())
         .filter(|x| !x.is_empty())
         .collect();
-    // kopie shimu WLS Desktop patří mezi duplicity, ne mezi „jiné dockery“
+    // kopie shimu WSL Container Desktop patří mezi duplicity, ne mezi „jiné dockery“
     let user_entries: Vec<String> = user_path.split(';').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
     let other_docker = shadowing(&entries, &d, &exts, |p| p.is_file() && !is_wls_shim(p))
         .into_iter()
         .map(|(file, dir)| OtherDocker { user: user_entries.iter().any(|u| norm(u) == norm(&dir)), file, dir })
         .collect();
-    let duplicates = duplicates(&user_entries, &d, &legacy_dir().display().to_string(), legacy_files(), wls_dir);
+    let duplicates = with_old_name_dir(duplicates(&user_entries, &d, &legacy_dir().display().to_string(), legacy_files(), wls_dir));
     let docker_host = powershell("[Environment]::GetEnvironmentVariable('DOCKER_HOST','User')")
         .ok()
         .filter(|s| !s.trim().is_empty());
     Status { installed, in_path, other_docker, duplicates, source_ok: source().is_some(), docker_host }
 }
 
-/// Značka v binárce shimu (User-Agent rychlé cesty) – pozná kopii shimu WLS Desktop.
+/// Značka v binárce shimu (User-Agent rychlé cesty) – pozná kopii shimu WSL Container Desktop.
 const SHIM_MARK: &[u8] = b"wls-docker-shim";
 
 fn is_wls_shim(p: &std::path::Path) -> bool {
     std::fs::read(p).is_ok_and(|b| b.windows(SHIM_MARK.len()).any(|w| w == SHIM_MARK))
 }
 
-/// Složka, která podle jména patřila WLS Desktop, ale `docker.exe` v ní už není (přesunutý
+/// Složka, která podle jména patřila WSL Container Desktop, ale `docker.exe` v ní už není (přesunutý
 /// nebo smazaný balíček) – položka PATH je zbytečná.
 fn stale_wls_dir(dir: &std::path::Path) -> bool {
     let n = dir.display().to_string().to_ascii_lowercase();
-    ["wls-desktop", "wls_desktop", "wlsdesktop"].iter().any(|k| n.contains(k)) && !dir.join("docker.exe").is_file()
+    ["wls-desktop", "wls_desktop", "wlsdesktop", "wsl-container-desktop", "wsl_container_desktop", "wslcontainerdesktop"].iter().any(|k| n.contains(k))
+        && !dir.join("docker.exe").is_file()
 }
 
-/// Složka s kopií shimu WLS Desktop, nebo po ní zbylá položka PATH.
+/// Složka s kopií shimu WSL Container Desktop, nebo po ní zbylá položka PATH.
 fn wls_dir(dir: &std::path::Path) -> bool {
     is_wls_shim(&dir.join("docker.exe")) || stale_wls_dir(dir)
 }
@@ -212,12 +213,35 @@ fn legacy_files() -> bool {
     is_wls_shim(&d.join("docker.exe")) || d.join("docker-compose.exe").is_file()
 }
 
-/// Výchozí instalační složka (mimo portable režim): %LOCALAPPDATA%\WLS_Desktop\bin.
+/// Výchozí instalační složka (mimo portable režim): %LOCALAPPDATA%\WSL_Container_Desktop\bin.
 fn legacy_dir() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("WLS_Desktop").join("bin")
+    local_appdata().join(crate::config::DATA_DIR).join("bin")
 }
 
-/// Jiná kopie shimu WLS Desktop než ta aktuální.
+fn local_appdata() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir)
+}
+
+/// Instalační složka z doby před přejmenováním (%LOCALAPPDATA%\WLS_Desktop\bin): kopie
+/// shimu v ní je duplicita – z PATH se odebere a soubory se smažou.
+fn old_name_dir() -> PathBuf {
+    local_appdata().join(crate::config::LEGACY_DATA_DIR).join("bin")
+}
+
+/// Doplní složku z doby před přejmenováním mezi duplicity (soubory smazat).
+fn with_old_name_dir(mut dups: Vec<Dup>) -> Vec<Dup> {
+    let old = old_name_dir();
+    let has_files = is_wls_shim(&old.join("docker.exe")) || old.join("docker-compose.exe").is_file();
+    let n = norm(&old.display().to_string());
+    match dups.iter_mut().find(|d| norm(&d.path) == n) {
+        Some(d) => d.delete_files = has_files,
+        None if has_files => dups.push(Dup { path: old.display().to_string(), in_path: false, delete_files: true }),
+        None => {}
+    }
+    dups
+}
+
+/// Jiná kopie shimu WSL Container Desktop než ta aktuální.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Dup {
     pub path: String,
@@ -264,7 +288,7 @@ fn remove_duplicates_for(ours: &str) -> Result<String, String> {
     let ours = ours.to_string();
     let (_, user_path) = registry_path();
     let entries: Vec<String> = user_path.split(';').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
-    let dups = duplicates(&entries, &ours, &legacy_dir().display().to_string(), legacy_files(), wls_dir);
+    let dups = with_old_name_dir(duplicates(&entries, &ours, &legacy_dir().display().to_string(), legacy_files(), wls_dir));
     if dups.is_empty() {
         return Ok(t!("Žádné duplicity nenalezeny", "No duplicates found").into());
     }
@@ -294,7 +318,7 @@ fn remove_duplicates_for(ours: &str) -> Result<String, String> {
                 failed.push(f.display().to_string());
             }
         }
-        // prázdnou složku bin uklidit (nadřazená WLS_Desktop může obsahovat další data)
+        // prázdnou složku bin uklidit (nadřazená složka aplikace může obsahovat další data)
         let _ = std::fs::remove_dir(dir);
     }
     let n = dups.len();
@@ -429,9 +453,9 @@ mod tests {
     #[test]
     fn moved_package_leaves_stale_entry() {
         // balíček přesunutý z podsložky o úroveň výš: stará položka PATH už neexistuje
-        let gone = std::env::temp_dir().join("wls-test-nonexistent").join("WLS-Desktop-0.5.0-win-x64");
+        let gone = std::env::temp_dir().join("wslcd-test-nonexistent").join("WLS-Desktop-0.5.0-win-x64");
         assert!(stale_wls_dir(&gone));
-        assert!(!stale_wls_dir(&std::env::temp_dir().join("wls-test-nonexistent").join("tools")));
+        assert!(!stale_wls_dir(&std::env::temp_dir().join("wslcd-test-nonexistent").join("tools")));
         assert!(!stale_wls_dir(&std::env::temp_dir()));
         // existující, ale prázdná složka balíčku (soubory přesunuté jinam)
         let empty = std::env::temp_dir().join(format!("wls-desktop-empty-{}", std::process::id()));

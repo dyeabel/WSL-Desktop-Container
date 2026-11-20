@@ -171,7 +171,7 @@ impl Worker {
     }
 
     /// Znovu vytvoří kontejner s novými parametry. Starý se zastaví a přejmenuje na
-    /// `<název>-wls-old`; když nový naběhne, starý se smaže, jinak se nový odstraní
+    /// `<název>-wslcd-old`; když nový naběhne, starý se smaže, jinak se nový odstraní
     /// a starý se vrátí (přejmenuje zpět a případně znovu spustí).
     pub(super) fn recreate(&self, id: String, mut spec: RunSpec, net: NetEdit) -> Result<String, String> {
         let d = self.docker();
@@ -183,7 +183,7 @@ impl Worker {
             spec.name = old_name.clone();
         }
         let new_name = spec.name.trim().to_string();
-        let backup = format!("{old_name}-wls-old");
+        let backup = format!("{old_name}-wslcd-old");
         if find_by_name(&d, &backup)?.is_some() {
             return Err(tf!(
                 "Kontejner {backup} už existuje (zbytek po předchozím pokusu?) – odstraň ho nebo přejmenuj.",

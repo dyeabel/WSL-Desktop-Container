@@ -94,10 +94,10 @@ fn ask_tls_on(app: &mut App) {
         t!("Zabezpečit API pomocí TLS?", "Secure the API with TLS?"),
         t!(
             "Engine bude poslouchat jen na unix socketu v distribuci a na 127.0.0.1:2376 bude TLS proxy (socat), která pustí jen klienta s certifikátem. \
-             Vytvoří se CA a certifikáty, klientský se uloží do %APPDATA%\\WLS_Desktop\\tls. Příkaz docker ve Windows i CLI ve WSL půjdou přes socket. \
+             Vytvoří se CA a certifikáty, klientský se uloží do %APPDATA%\\WSL_Container_Desktop\\tls. Příkaz docker ve Windows i CLI ve WSL půjdou přes socket. \
              Engine se restartuje.",
             "The engine will listen only on a unix socket in the distribution and a TLS proxy (socat) on 127.0.0.1:2376 will accept only clients with a certificate. \
-             A CA and certificates are created; the client one is saved to %APPDATA%\\WLS_Desktop\\tls. The docker command in Windows and the CLI in WSL will use the socket. \
+             A CA and certificates are created; the client one is saved to %APPDATA%\\WSL_Container_Desktop\\tls. The docker command in Windows and the CLI in WSL will use the socket. \
              The engine will restart."
         ),
         Cmd::SetTls(true),
@@ -212,8 +212,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         // instalace a nastavení (sbalené, pokud je vše v pořádku)
         ui.add_space(6.0);
         ui.separator();
-        // pro ladění/screenshoty: WLS_DEBUG_EXPAND=1
-        let open_default = app.tcp_configured == Some(false) || std::env::var("WLS_DEBUG_EXPAND").is_ok();
+        // pro ladění/screenshoty: WSLCD_DEBUG_EXPAND=1
+        let open_default = app.tcp_configured == Some(false) || std::env::var("WSLCD_DEBUG_EXPAND").is_ok();
         egui::CollapsingHeader::new(RichText::new(t!("Instalace a nastavení enginu", "Engine installation and setup")).strong())
             .id_salt(("engine-setup", app.tcp_configured == Some(false)))
             .default_open(open_default)
@@ -269,7 +269,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
                 if engine == crate::engine::Engine::Podman {
-                    ui.label(muted(t!("Podman běží jako služba wls-podman-api; CLI v aplikaci i docker shim volají podman --url na stejné API. Pro compose se při instalaci přidá docker-compose jako provider.", "Podman runs as the wls-podman-api service; the in-app CLI and the docker shim call podman --url against the same API. For compose, docker-compose is added as the provider during installation.")).small());
+                    ui.label(muted(t!("Podman běží jako služba wslcd-podman-api; CLI v aplikaci i docker shim volají podman --url na stejné API. Pro compose se při instalaci přidá docker-compose jako provider.", "Podman runs as the wslcd-podman-api service; the in-app CLI and the docker shim call podman --url against the same API. For compose, docker-compose is added as the provider during installation.")).small());
                 }
 
                 // příkaz docker ve Windows (shim v PATH)
@@ -371,8 +371,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     (crate::npipe::State::Running, _) => {
                         ui.label(
                             RichText::new(tf!(
-                                "\u{E184} Roura {} běží – jen dokud běží WLS Desktop (ukončením aplikace přestane fungovat).",
-                                "\u{E184} Pipe {} is running – only while WLS Desktop runs (quitting the app stops it).",
+                                "\u{E184} Roura {} běží – jen dokud běží WSL Container Desktop (ukončením aplikace přestane fungovat).",
+                                "\u{E184} Pipe {} is running – only while WSL Container Desktop runs (quitting the app stops it).",
                                 crate::npipe::PIPE_NAME
                             ))
                             .color(theme::green())

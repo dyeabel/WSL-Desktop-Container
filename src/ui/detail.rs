@@ -119,12 +119,12 @@ fn state_key(c: &Container) -> String {
     format!("{}|{}|{}", c.state, h, c.name())
 }
 
-/// Pro ladění/screenshoty: `WLS_DEBUG_DETAIL=<název>[:overview|stats|logs|recreate|files|network|limits]`.
+/// Pro ladění/screenshoty: `WSLCD_DEBUG_DETAIL=<název>[:overview|stats|logs|recreate|files|network|limits]`.
 fn debug_open(app: &mut App, ctx: &egui::Context) {
     if DEBUG_DONE.load(Ordering::Relaxed) {
         return;
     }
-    let Ok(v) = std::env::var("WLS_DEBUG_DETAIL") else {
+    let Ok(v) = std::env::var("WSLCD_DEBUG_DETAIL") else {
         DEBUG_DONE.store(true, Ordering::Relaxed);
         return;
     };
@@ -573,9 +573,9 @@ fn chart(ui: &mut egui::Ui, pts: &[(f64, f64)], now: f64, ymax: f64, color: egui
 fn recreate(ui: &mut egui::Ui, dv: &mut DetailView, d: &Detail, nets: &[String], actions: &mut Vec<Action>) {
     let name = d.name.clone();
     ui.label(muted(tf!(
-        "Kontejner se zastaví a přejmenuje na {name}-wls-old a spustí se nový s nastavením níže. \
+        "Kontejner se zastaví a přejmenuje na {name}-wslcd-old a spustí se nový s nastavením níže. \
          Když nový naběhne, původní se smaže; když ne, nový se odstraní a původní se vrátí (a znovu spustí, pokud běžel).",
-        "The container is stopped and renamed to {name}-wls-old, then a new one is started with the settings below. \
+        "The container is stopped and renamed to {name}-wslcd-old, then a new one is started with the settings below. \
          If the new one starts, the original is deleted; otherwise the new one is removed and the original restored (and restarted if it was running)."
     )));
     let warn = |ui: &mut egui::Ui, text: String| {

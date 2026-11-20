@@ -99,12 +99,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ui.columns(2, |c| {
             let (l, r) = c.split_at_mut(1);
             cpu_tile(app, &mut l[0]);
-            pick = disk_tile(app, &mut r[0]);
+            pick = disk_tile(app, &mut r[0], true);
         });
     } else {
         cpu_tile(app, ui);
         ui.add_space(8.0);
-        pick = disk_tile(app, ui);
+        pick = disk_tile(app, ui, false);
     }
     cleanup_apply(app, pick);
 
@@ -360,12 +360,15 @@ fn cpu_tile(app: &mut App, ui: &mut egui::Ui) {
 }
 
 /// Dlaždice Disk: úložiště enginu proti disku distribuce; vrací výběr z nabídky Uklidit.
-fn disk_tile(app: &mut App, ui: &mut egui::Ui) -> Option<u8> {
+/// `side_by_side` = vedle dlaždice CPU (stejná výška); pod ní jen tak vysoká, jak je obsah.
+fn disk_tile(app: &mut App, ui: &mut egui::Ui, side_by_side: bool) -> Option<u8> {
     let disk = app.shared.alerts.lock().ok().and_then(|a| a.disk.clone());
     let mut pick = None;
     card(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.set_min_height(TILE_H);
+        if side_by_side {
+            ui.set_min_height(TILE_H);
+        }
         ui.horizontal(|ui| {
             ui.label(muted(t!("Disk", "Disk")));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

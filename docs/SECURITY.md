@@ -1,4 +1,4 @@
-# WLS Desktop – Security Review
+# WSL Container Desktop – Security Review
 
 Independent review of the source at `main` (commit `1a3b55e`; `df36249` landed during the
 review and only touches `src/ui/images.rs` layout). The source was read directly. Live checks
@@ -7,7 +7,7 @@ plain-HTTP mode). No source, engine, service, registry or configuration was chan
 
 ## 1. Summary
 
-WLS Desktop is careful in the small things. Commands are built as argv vectors, shell scripts
+WSL Container Desktop is careful in the small things. Commands are built as argv vectors, shell scripts
 take values through `env VAR=…` and `"$1"`, file operations use `--`, toasts escape XML and the
 TLS material is sound (P-256, correct EKU and SAN, `umask 077`, a dedicated rustls root store).
 The weak point is the trust boundary around the engine API. By default it is an
@@ -22,7 +22,7 @@ key lands in a folder that every Linux uid can read through `/mnt/c`.
 ## 2. Threat model
 
 **Assets**
-- Root in the WSL distro: the engine is rootful, and the `docker`/`wls-api` groups are root-equivalent.
+- Root in the WSL distro: the engine is rootful, and the `docker`/`wslcd-api` groups are root-equivalent.
 - The Windows user account. WSL interop is enabled (`/proc/sys/fs/binfmt_misc/WSLInterop` = enabled),
   so any Linux uid can start Windows programs as the Windows user. Verified: `wsl -u nobody -e whoami.exe`
   returns the Windows account.
@@ -154,8 +154,8 @@ this machine. It is documented wt behaviour.
 - Escape every argument passed after `nt`: `a.replace(';', "\\;")`.
 - Strip control characters and `;` from `--title`.
 - Better, pass untrusted values through the environment instead of argv:
-  `wsl.exe -d D -e sh -c 'cd -- "$WLS_DIR" && exec "${SHELL:-sh}"'`
-  with `WLS_DIR` set on the `Command` and `WSLENV=WLS_DIR/u`. The command line is then constant.
+  `wsl.exe -d D -e sh -c 'cd -- "$WSLCD_DIR" && exec "${SHELL:-sh}"'`
+  with `WSLCD_DIR` set on the `Command` and `WSLENV=WSLCD_DIR/u`. The command line is then constant.
 
 ### F-04: `cmd.exe /c start` fallback injection (Medium)
 
@@ -246,7 +246,7 @@ fields above differ from their defaults. Re-attach anonymous volumes by name.
 **Description.** Certificates are generated only when files are missing, or when `REGEN=1`
 (`src/engine.rs:238`). `REGEN` is never set anywhere in `src/`. The server and client
 certificates expire after 825 days (`:247,:250`). Nothing checks expiry, rotates or revokes them,
-so the API simply stops working one day. `ca-key.pem` stays in `/etc/wls-desktop/tls`
+so the API simply stops working one day. `ca-key.pem` stays in `/etc/wsl-container-desktop/tls`
 indefinitely. socat runs with `fork` and no `max-children` (`:262`), so any local process can
 open unlimited TLS handshakes or children.
 
@@ -349,9 +349,9 @@ Direct dependencies from `cargo tree --depth 1` are all current major lines:
 
 ### F-14: Single instance through `FindWindowW` title (Low)
 
-**Description.** `activate_existing` calls `FindWindowW(NULL, "WLS Desktop")` and, if any
+**Description.** `activate_existing` calls `FindWindowW(NULL, "WSL Container Desktop")` and, if any
 top-level window has that exact title, shows it and exits (`src/tray.rs:83-87,128-136`,
-`src/main.rs:28`). Any process, or simply an Explorer window on a folder named `WLS Desktop`,
+`src/main.rs:28`). Any process, or simply an Explorer window on a folder named `WSL Container Desktop`,
 blocks the app from starting and gets `SetForegroundWindow`. Two simultaneous launches both pass
 the check.
 
@@ -387,7 +387,7 @@ repository whose compose file references `${GITHUB_TOKEN}` or `${AWS_SECRET_ACCE
 those into containers.
 
 **Fix.** Document the behaviour. Optionally, print the forwarded names to stderr by default (not
-only with `WLS_SHIM_DEBUG`) and ignore `#` comments.
+only with `WSLCD_SHIM_DEBUG`) and ignore `#` comments.
 
 ### F-17: UNC path for another distro mapped onto the configured distro (Info)
 
@@ -413,7 +413,7 @@ script. `[Environment]::SetEnvironmentVariable('Path',…,'User')` also rewrites
 
 ### F-19: Keep-alive lock in `/tmp` (Info)
 
-**Description.** `flock -n /tmp/.wls-desktop-keepalive.lock` (`src/wsl.rs:270`) runs as the
+**Description.** `flock -n /tmp/.wsl-container-desktop-keepalive.lock` (`src/wsl.rs:270`) runs as the
 default user. Any uid can pre-create the file and hold the lock, so keep-alive exits at once and
 WSL idles the engine out. This is denial of service only.
 
@@ -435,7 +435,7 @@ WSL idles the engine out. This is denial of service only.
   - Leaf certificates have `CA:FALSE`, `digitalSignature` and the correct EKU: `serverAuth` with SAN `IP:127.0.0.1,DNS:localhost`, and `clientAuth`.
   - Keys are written under `umask 077` in a `chmod 700` directory (`src/engine.rs:236-251`).
   - socat binds `127.0.0.1` with `verify=1` and `cafile`, and is `BindsTo` the engine unit.
-  - In TLS mode nothing listens on TCP unauthenticated: Docker runs with only `-H fd://`, and Podman listens on a unix socket in a `750 root:wls-api` directory.
+  - In TLS mode nothing listens on TCP unauthenticated: Docker runs with only `-H fd://`, and Podman listens on a unix socket in a `750 root:wslcd-api` directory.
   - The rustls client trusts only the generated CA, not webpki roots, uses `with_safe_default_protocol_versions` and presents the client certificate (`src/docker.rs:415-434`).
 - **The `daemon.json` editor** rejects `hosts`, which keeps the user from reopening TCP by accident (`src/worker/engine_ops.rs:339-348`).
 - **Windows integration.**
@@ -466,8 +466,8 @@ WSL idles the engine out. This is denial of service only.
 
 - Live checks used only read-only probes:
   - `ss -ltnp` showed `127.0.0.1:2375` listening.
-  - `systemctl cat wls-podman-api` showed a plain TCP unit.
-  - `wls-tls-proxy` is inactive and `/etc/wls-desktop` is absent, so TLS mode is not enabled here.
+  - `systemctl cat wslcd-podman-api` showed a plain TCP unit.
+  - `wslcd-tls-proxy` is inactive and `/etc/wsl-container-desktop` is absent, so TLS mode is not enabled here.
   - `/_ping` succeeded from Windows and as `nobody`, and `/version` succeeded with a foreign `Host` header.
   - `OPTIONS` returned 405.
   - `nobody` could read `%APPDATA%\WLS_Desktop` through `/mnt/c`.

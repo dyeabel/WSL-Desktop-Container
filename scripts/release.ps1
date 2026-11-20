@@ -1,4 +1,4 @@
-﻿# Produkční build WLS Desktop: kontroly, testy, release build a portable balíček.
+﻿# Produkční build WSL Container Desktop: kontroly, testy, release build a portable balíček.
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\release.ps1                 # build + balíček z aktuální verze
 #   powershell -ExecutionPolicy Bypass -File scripts\release.ps1 -Version 0.3.0  # nastaví verzi v Cargo.toml (commit)
@@ -8,14 +8,14 @@
 #   1. čistý pracovní strom (žádné necommitnuté změny) – balíček odpovídá commitu
 #   2. volitelně nová verze v Cargo.toml (+ commit „Verze X.Y.Z“)
 #   3. cargo clippy (varování = chyba) a cargo test
-#   4. cargo build --release a scripts\package.ps1 -> dist\WLS-Desktop-<verze>-win-x64.zip (portable)
-#      a -winget.zip (+ .sha256); s -Sign se EXE podepíšou (scripts\sign.ps1, proměnné WLS_SIGN_*)
+#   4. cargo build --release a scripts\package.ps1 -> dist\WSL-Container-Desktop-<verze>-win-x64.zip (portable)
+#      a -winget.zip (+ .sha256); s -Sign se EXE podepíšou (scripts\sign.ps1, proměnné WSLCD_SIGN_*)
 #   5. volitelně git tag vX.Y.Z – po `git push origin vX.Y.Z` vytvoří GitHub Actions release se ZIPem
 #   6. úklid (scripts\cleanup.ps1): staré mezivýsledky v target\ a balíčky starších verzí v dist\;
 #      -NoCleanup ho přeskočí
 #
 # Živé testy (cargo test -- --ignored) se nespouští – potřebují WSL distribuci s enginem;
-# přepínač -LiveTests je spustí (WLS_DISTRO určuje distribuci).
+# přepínač -LiveTests je spustí (WSLCD_DISTRO určuje distribuci).
 param(
     [string]$Version,
     [switch]$Tag,
@@ -73,7 +73,7 @@ Check 'package.ps1'
 
 if ($Tag) {
     Step "Tag v$ver"
-    git tag -a "v$ver" -m "WLS Desktop $ver"
+    git tag -a "v$ver" -m "WSL Container Desktop $ver"
     Check 'git tag'
     Write-Host "Vytvořen tag v$ver – vydání: git push origin main v$ver"
 }
@@ -83,4 +83,4 @@ if (-not $NoCleanup) {
     & (Join-Path $PSScriptRoot 'cleanup.ps1') -Since $start
 }
 
-Write-Host "`nHotovo: dist\WLS-Desktop-$ver-win-x64.zip" -ForegroundColor Green
+Write-Host "`nHotovo: dist\WSL-Container-Desktop-$ver-win-x64.zip" -ForegroundColor Green

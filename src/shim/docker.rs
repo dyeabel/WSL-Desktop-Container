@@ -1,19 +1,19 @@
 //! `docker.exe` pro Windows – předává příkazy Dockeru běžícímu ve WSL.
 //!
 //! `docker ps` ve Windows = `wsl.exe -d <distribuce> --cd <aktuální složka> -e docker ps`.
-//! Distribuce se bere z konfigurace WLS Desktop (případně z proměnné WLS_DISTRO).
+//! Distribuce se bere z konfigurace WSL Container Desktop (případně z proměnné WSLCD_DISTRO).
 //! Windows cesty v argumentech se přeloží (C:\x -> /mnt/c/x). Pokud se binárka
 //! jmenuje `docker-compose.exe`, chová se jako `docker compose`.
 //!
 //! Jednoduché příkazy jen pro čtení (`ps`, `images`, `volume ls`, `network ls`, `inspect`,
 //! `logs` bez `-f`, `version --format`, `info --format`) odpoví rychlá cesta (`fast.rs`) přímo z API enginu
 //! bez spouštění wsl.exe; cokoli jiného (nebo chyba API) jde přes wsl.exe.
-//! WLS_SHIM_FAST=0 rychlou cestu vypne.
+//! WSLCD_SHIM_FAST=0 rychlou cestu vypne.
 //!
-//! Docker kontexty (`docker context …`, `--context`, `DOCKER_CONTEXT`) vybírají cíl WLS –
+//! Docker kontexty (`docker context …`, `--context`, `DOCKER_CONTEXT`) vybírají cíl WSL Container Desktop –
 //! distribuci, engine, port a TLS (viz `contexts.rs`, `ctxcmd.rs`).
 //!
-//! WLS_SHIM_DEBUG=1 vypíše na stderr, co se spouští (včetně vybraného kontextu).
+//! WSLCD_SHIM_DEBUG=1 vypíše na stderr, co se spouští (včetně vybraného kontextu).
 
 #[path = "../config.rs"]
 #[allow(dead_code)]
@@ -62,25 +62,25 @@ fn main() -> ExitCode {
     }
 
     let mut cfg = config::Config::load();
-    // přepisy pro ladění / skripty: WLS_ENGINE=podman|docker, WLS_PORT=2376
-    match std::env::var("WLS_ENGINE").unwrap_or_default().to_ascii_lowercase().as_str() {
+    // přepisy pro ladění / skripty: WSLCD_ENGINE=podman|docker, WSLCD_PORT=2376
+    match std::env::var("WSLCD_ENGINE").unwrap_or_default().to_ascii_lowercase().as_str() {
         "podman" => cfg.engine = engine::Engine::Podman,
         "docker" => cfg.engine = engine::Engine::Docker,
         _ => {}
     }
-    if let Some(p) = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()) {
+    if let Some(p) = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()) {
         cfg.port = p;
     }
-    let distro = std::env::var("WLS_DISTRO").ok().filter(|d| !d.is_empty()).unwrap_or(cfg.distro.clone());
+    let distro = std::env::var("WSLCD_DISTRO").ok().filter(|d| !d.is_empty()).unwrap_or(cfg.distro.clone());
     let default_target = contexts::Target { distro, engine: cfg.engine, port: cfg.port, tls: cfg.tls };
-    let debug = std::env::var("WLS_SHIM_DEBUG").is_ok();
+    let debug = std::env::var("WSLCD_SHIM_DEBUG").is_ok();
     let env_ctx = std::env::var("DOCKER_CONTEXT").ok();
     let store_path = contexts::path();
 
     // docker context … – vyřídí shim sám
     if args.first().map(|a| a == "context").unwrap_or(false) {
         let Some(store_path) = store_path else {
-            eprintln!("wls-docker: APPDATA is not set, cannot store contexts");
+            eprintln!("wslcd-docker: APPDATA is not set, cannot store contexts");
             return ExitCode::from(1);
         };
         let env = ctxcmd::CtxEnv { store_path, default: default_target, env_ctx: env_ctx.clone(), docker_host: std::env::var("DOCKER_HOST").ok(), distros: &contexts::wsl_distros };
@@ -94,7 +94,7 @@ fn main() -> ExitCode {
     let store = match store_path.as_deref().map(contexts::Store::load_from) {
         Some(Ok(s)) => s,
         Some(Err(e)) => {
-            eprintln!("wls-docker: cannot read contexts: {e}");
+            eprintln!("wslcd-docker: cannot read contexts: {e}");
             return ExitCode::from(1);
         }
         None => contexts::Store::default(),
@@ -109,7 +109,7 @@ fn main() -> ExitCode {
     };
     if debug {
         eprintln!(
-            "[wls-docker] context: {ctx_name} (distro {}, {}, port {}{})",
+            "[wslcd-docker] context: {ctx_name} (distro {}, {}, port {}{})",
             target.distro,
             target.engine.name(),
             target.port,
@@ -118,7 +118,7 @@ fn main() -> ExitCode {
     }
 
     // rychlá cesta: odpověď přímo z API, bez wsl.exe
-    if exe_name != "docker-compose" && std::env::var("WLS_SHIM_FAST").map(|v| v != "0").unwrap_or(true) {
+    if exe_name != "docker-compose" && std::env::var("WSLCD_SHIM_FAST").map(|v| v != "0").unwrap_or(true) {
         // Podman: `docker events` z API ve schématu Dockeru (podman events má vlastní)
         if target.engine == engine::Engine::Podman {
             if let Some(t) = fast::try_podman_version(&args, target.port, target.tls, &ctx_name) {
@@ -138,7 +138,7 @@ fn main() -> ExitCode {
         match fast::try_run(&args, target.port, target.tls) {
             Ok(out) => {
                 if debug {
-                    eprintln!("[wls-docker] fast path: GET {} ({} ms)", out.paths.join(", GET "), t.elapsed().as_millis());
+                    eprintln!("[wslcd-docker] fast path: GET {} ({} ms)", out.paths.join(", GET "), t.elapsed().as_millis());
                 }
                 // zavřená roura (`| head`) není chyba
                 for (stream, data) in &out.chunks {
@@ -154,20 +154,20 @@ fn main() -> ExitCode {
             }
             Err(why) => {
                 if debug {
-                    eprintln!("[wls-docker] fast path not used: {why}");
+                    eprintln!("[wslcd-docker] fast path not used: {why}");
                 }
             }
         }
     } else if debug {
-        eprintln!("[wls-docker] fast path disabled");
+        eprintln!("[wslcd-docker] fast path disabled");
     }
 
     // síťové cesty WSL nevidí – srozumitelné varování místo záhadné chyby
     for p in pathmap::unreachable_paths(&args) {
-        eprintln!("wls-docker: varování: síťovou cestu {p} WSL nevidí – zkopíruj data na lokální disk nebo do WSL");
+        eprintln!("wslcd-docker: varování: síťovou cestu {p} WSL nevidí – zkopíruj data na lokální disk nebo do WSL");
     }
 
-    // proměnné prostředí, které příkaz potřebuje (-e VAR, ${VAR} v compose, WLS_FORWARD_ENV)
+    // proměnné prostředí, které příkaz potřebuje (-e VAR, ${VAR} v compose, WSLCD_FORWARD_ENV)
     let cwd_win = std::env::current_dir().ok();
     let is_compose = args.iter().find(|a| !a.starts_with('-')).map(|a| a == "compose").unwrap_or(false);
     let (wslenv, forwarded) = envfwd::build_wslenv(
@@ -209,9 +209,9 @@ fn main() -> ExitCode {
 
     if debug {
         let shown: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
-        eprintln!("[wls-docker] wsl.exe {}", shown.join(" "));
+        eprintln!("[wslcd-docker] wsl.exe {}", shown.join(" "));
         if !forwarded.is_empty() {
-            eprintln!("[wls-docker] předávám proměnné: {}", forwarded.join(", "));
+            eprintln!("[wslcd-docker] předávám proměnné: {}", forwarded.join(", "));
         }
     }
 
@@ -227,7 +227,7 @@ fn main() -> ExitCode {
                 ExitCode::from(o.status.code().unwrap_or(1).clamp(0, 255) as u8)
             }
             Err(e) => {
-                eprintln!("wls-docker: nelze spustit wsl.exe: {e}");
+                eprintln!("wslcd-docker: nelze spustit wsl.exe: {e}");
                 ExitCode::from(127)
             }
         };
@@ -236,7 +236,7 @@ fn main() -> ExitCode {
     match cmd.status() {
         Ok(st) => ExitCode::from(st.code().unwrap_or(1).clamp(0, 255) as u8),
         Err(e) => {
-            eprintln!("wls-docker: nelze spustit wsl.exe: {e}");
+            eprintln!("wslcd-docker: nelze spustit wsl.exe: {e}");
             ExitCode::from(127)
         }
     }

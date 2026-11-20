@@ -198,13 +198,13 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-/// Pro ladění/screenshoty: `WLS_DEBUG_LOGS=<kontejner>[:search=<text>]`,
-/// `WLS_DEBUG_STACK_LOGS=<projekt>[:search=<text>]`.
+/// Pro ladění/screenshoty: `WSLCD_DEBUG_LOGS=<kontejner>[:search=<text>]`,
+/// `WSLCD_DEBUG_STACK_LOGS=<projekt>[:search=<text>]`.
 fn debug_open(app: &mut App) {
     if DEBUG_DONE.load(Ordering::Relaxed) {
         return;
     }
-    let (single, stack) = (std::env::var("WLS_DEBUG_LOGS").ok(), std::env::var("WLS_DEBUG_STACK_LOGS").ok());
+    let (single, stack) = (std::env::var("WSLCD_DEBUG_LOGS").ok(), std::env::var("WSLCD_DEBUG_STACK_LOGS").ok());
     let Some(v) = single.clone().or(stack.clone()) else {
         DEBUG_DONE.store(true, Ordering::Relaxed);
         return;

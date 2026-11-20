@@ -2,6 +2,7 @@
 
 #[macro_use]
 mod i18n;
+mod activity;
 mod app;
 mod apitls;
 mod autostart;
@@ -44,7 +45,7 @@ mod live_tests;
 fn single_instance() -> bool {
     use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
     use windows_sys::Win32::System::Threading::CreateMutexW;
-    let name: Vec<u16> = "Local\\WLS-Desktop-single-instance".encode_utf16().chain(std::iter::once(0)).collect();
+    let name: Vec<u16> = "Local\\WSL-Container-Desktop-single-instance".encode_utf16().chain(std::iter::once(0)).collect();
     let h = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
     !(h.is_null() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS)
 }
@@ -58,7 +59,7 @@ fn main() -> eframe::Result<()> {
     // jen jedna instance: pojmenovaný mutex (okno se dá podvrhnout, F-14); když už běží
     // (třeba schovaná v tray), jen zobrazíme její okno
     if !single_instance() {
-        tray::activate_existing("WLS Desktop");
+        tray::activate_existing("WSL Container Desktop");
         return Ok(());
     }
     std::thread::spawn(|| {
@@ -67,14 +68,14 @@ fn main() -> eframe::Result<()> {
     });
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("WLS Desktop")
+            .with_title("WSL Container Desktop")
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([900.0, 560.0])
             .with_icon(theme::app_icon()),
         ..Default::default()
     };
     let r = eframe::run_native(
-        "WLS Desktop",
+        "WSL Container Desktop",
         options,
         Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
     );

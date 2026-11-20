@@ -423,7 +423,7 @@ pub fn run_dialog(app: &mut App, ctx: &egui::Context) {
         app.send(Cmd::Run(app.run.clone()));
         app.run = RunSpec { restart: "no".into(), ..Default::default() };
     }
-    if std::env::var("WLS_DEBUG_LOG").is_ok() {
+    if std::env::var("WSLCD_DEBUG_LOG").is_ok() {
         eprintln!("[run_dialog] submit={submit} cancel={cancel} close={close}");
     }
     if submit || cancel || close {

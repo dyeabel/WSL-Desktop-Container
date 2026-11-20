@@ -35,8 +35,8 @@ pub struct BuildState {
 impl Default for BuildState {
     fn default() -> Self {
         Self {
-            // pro ladění/screenshoty: WLS_DEBUG_BUILD=1 otevře dialog po startu
-            dialog: std::env::var("WLS_DEBUG_BUILD").is_ok(),
+            // pro ladění/screenshoty: WSLCD_DEBUG_BUILD=1 otevře dialog po startu
+            dialog: std::env::var("WSLCD_DEBUG_BUILD").is_ok(),
             spec: BuildSpec::default(),
             running: false,
             log: None,

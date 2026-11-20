@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Nastavení aplikace, ukládá se do %APPDATA%\WLS_Desktop\config.json
+/// Nastavení aplikace, ukládá se do %APPDATA%\WSL_Container_Desktop\config.json
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
@@ -41,7 +41,7 @@ pub struct Config {
     pub container_notify: ContainerNotify,
     /// Každých 10 min uvolnit cache Linuxu ve WSL (když je nad 1 GB), aby VmmemWSL vracel paměť Windows
     pub auto_free_memory: bool,
-    /// API enginu jen přes TLS s klientským certifikátem (port 2376, certifikáty v %APPDATA%\WLS_Desktop\tls)
+    /// API enginu jen přes TLS s klientským certifikátem (port 2376, certifikáty v %APPDATA%\WSL_Container_Desktop\tls)
     pub tls: bool,
     /// Upozornění „API bez ověření“ na stránce WSL engine bylo zavřeno
     pub security_hint_dismissed: bool,
@@ -193,22 +193,42 @@ pub fn portable_dir() -> Option<PathBuf> {
 }
 
 /// Složka s daty aplikace (konfigurace, certifikáty, seznam kontejnerů…):
-/// v portable režimu `<složka aplikace>\data`, jinak `%APPDATA%\WLS_Desktop`.
+/// v portable režimu `<složka aplikace>\data`, jinak `%APPDATA%\WSL_Container_Desktop`
+/// (dřívější `%APPDATA%\WLS_Desktop` se při prvním použití přejmenuje).
 pub fn data_dir() -> Option<PathBuf> {
-    // WLS_DATA_DIR: oddělená datová složka (testy, zkušební instance) – nic se nezapíše
+    // WSLCD_DATA_DIR: oddělená datová složka (testy, zkušební instance) – nic se nezapíše
     // do skutečné konfigurace a uživatelské proměnné prostředí (DOCKER_HOST) se nemění
-    if let Some(d) = std::env::var_os("WLS_DATA_DIR").filter(|d| !d.is_empty()) {
+    if let Some(d) = std::env::var_os("WSLCD_DATA_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(d));
     }
     if let Some(d) = portable_dir() {
         return Some(d.join("data"));
     }
-    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("WLS_Desktop"))
+    let base = PathBuf::from(std::env::var_os("APPDATA")?);
+    Some(migrate_dir(&base.join(LEGACY_DATA_DIR), &base.join(DATA_DIR)))
 }
 
-/// Běží aplikace s oddělenou datovou složkou (`WLS_DATA_DIR`)? Pak se nemění nic mimo ni.
+/// Složka dat v %APPDATA% (a %LOCALAPPDATA% pro příkaz docker).
+pub const DATA_DIR: &str = "WSL_Container_Desktop";
+/// Složka z doby před přejmenováním (WLS Desktop).
+pub const LEGACY_DATA_DIR: &str = "WLS_Desktop";
+
+/// Přejmenuje starou složku na novou, pokud nová ještě není; vrací složku, kterou použít
+/// (když přejmenování selže – soubor drží jiný proces –, zůstane se u staré).
+pub fn migrate_dir(old: &std::path::Path, new: &std::path::Path) -> PathBuf {
+    if new.exists() || !old.exists() {
+        return new.to_path_buf();
+    }
+    match std::fs::rename(old, new) {
+        Ok(()) => new.to_path_buf(),
+        Err(_) if new.exists() => new.to_path_buf(),
+        Err(_) => old.to_path_buf(),
+    }
+}
+
+/// Běží aplikace s oddělenou datovou složkou (`WSLCD_DATA_DIR`)? Pak se nemění nic mimo ni.
 pub fn isolated() -> bool {
-    std::env::var_os("WLS_DATA_DIR").is_some_and(|d| !d.is_empty())
+    std::env::var_os("WSLCD_DATA_DIR").is_some_and(|d| !d.is_empty())
 }
 
 fn path() -> Option<PathBuf> {
@@ -235,5 +255,23 @@ impl Config {
         }
         let s = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         std::fs::write(p, s).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod migrate_tests {
+    #[test]
+    fn data_dir_is_moved_once() {
+        let base = std::env::temp_dir().join(format!("wslcd-migrate-{}", std::process::id()));
+        let (old, new) = (base.join("WLS_Desktop"), base.join("WSL_Container_Desktop"));
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("config.json"), "{}").unwrap();
+        assert_eq!(super::migrate_dir(&old, &new), new);
+        assert!(new.join("config.json").is_file() && !old.exists());
+        // další volání nic nemění, nová složka má přednost
+        std::fs::create_dir_all(&old).unwrap();
+        assert_eq!(super::migrate_dir(&old, &new), new);
+        assert!(old.exists());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

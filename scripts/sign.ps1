@@ -9,30 +9,30 @@
 #    (winget install -e --id Microsoft.Azure.ArtifactSigningClientTools) nebo NuGet balíček
 #    Microsoft.ArtifactSigning.Client, .NET 8 Runtime a přihlášení přes DefaultAzureCredential
 #    (AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET, nebo az login).
-#      -Dlib <cesta k Azure.CodeSigning.Dlib.dll (x64)>   | WLS_SIGN_DLIB
-#      -Metadata <metadata.json>                           | WLS_SIGN_METADATA
+#      -Dlib <cesta k Azure.CodeSigning.Dlib.dll (x64)>   | WSLCD_SIGN_DLIB
+#      -Metadata <metadata.json>                           | WSLCD_SIGN_METADATA
 #    metadata.json: {"Endpoint":"https://weu.codesigning.azure.net","CodeSigningAccountName":"…","CertificateProfileName":"…"}
 #
 # 2) Certifikát v úložišti Windows (USB token / HSM / cloudové HSM s KSP, např. DigiCert KeyLocker,
 #    SSL.com eSigner) podle otisku:
-#      -Thumbprint <SHA1 otisk>                            | WLS_SIGN_THUMBPRINT
+#      -Thumbprint <SHA1 otisk>                            | WSLCD_SIGN_THUMBPRINT
 #
 # 3) Soubor PFX (jen starší certifikáty nebo testovací – od 6/2023 vydávají veřejné CA klíče
 #    jen na HSM):
-#      -Pfx <soubor.pfx> -PfxPassword <heslo>             | WLS_SIGN_PFX, WLS_SIGN_PFX_PASSWORD
+#      -Pfx <soubor.pfx> -PfxPassword <heslo>             | WSLCD_SIGN_PFX, WSLCD_SIGN_PFX_PASSWORD
 #
 # -AllowUntrusted: po podpisu stačí, že podpis existuje (testovací self-signed certifikát);
 # jinak se vyžaduje platný důvěryhodný podpis.
 param(
     [Parameter(Mandatory = $true)][string[]]$Files,
-    [string]$Dlib = $env:WLS_SIGN_DLIB,
-    [string]$Metadata = $env:WLS_SIGN_METADATA,
-    [string]$Thumbprint = $env:WLS_SIGN_THUMBPRINT,
-    [string]$Pfx = $env:WLS_SIGN_PFX,
-    [string]$PfxPassword = $env:WLS_SIGN_PFX_PASSWORD,
+    [string]$Dlib = $env:WSLCD_SIGN_DLIB,
+    [string]$Metadata = $env:WSLCD_SIGN_METADATA,
+    [string]$Thumbprint = $env:WSLCD_SIGN_THUMBPRINT,
+    [string]$Pfx = $env:WSLCD_SIGN_PFX,
+    [string]$PfxPassword = $env:WSLCD_SIGN_PFX_PASSWORD,
     [string]$TimestampUrl,
-    [string]$Description = 'WLS Desktop',
-    [string]$Url = 'https://github.com/dyeabel/WLS-Desktop-Container',
+    [string]$Description = 'WSL Container Desktop',
+    [string]$Url = 'https://github.com/dyeabel/WSL-Container-Desktop-Container',
     [switch]$AllowUntrusted
 )
 # signtool píše na stderr – úspěch se kontroluje přes $LASTEXITCODE
@@ -69,7 +69,7 @@ if ($Dlib -and $Metadata) {
     $method = @('/f', $Pfx)
     if ($PfxPassword) { $method += @('/p', $PfxPassword) }
 } else {
-    throw 'Není nastavený způsob podpisu (WLS_SIGN_DLIB+WLS_SIGN_METADATA, WLS_SIGN_THUMBPRINT nebo WLS_SIGN_PFX).'
+    throw 'Není nastavený způsob podpisu (WSLCD_SIGN_DLIB+WSLCD_SIGN_METADATA, WSLCD_SIGN_THUMBPRINT nebo WSLCD_SIGN_PFX).'
 }
 
 Write-Host "Podpis: $mode, razítko $TimestampUrl"

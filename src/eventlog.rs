@@ -539,7 +539,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_prune() {
-        let dir = std::env::temp_dir().join(format!("wls-evlog-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("wslcd-evlog-{}", std::process::id()));
         let p = dir.join(FILE);
         let now = now_unix();
         let mut l = EventLog::load_from(Some(p.clone()));

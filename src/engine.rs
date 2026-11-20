@@ -15,29 +15,52 @@ pub enum Engine {
 }
 
 /// systemd jednotka Podman API vytvořená aplikací
-pub const PODMAN_UNIT: &str = "wls-podman-api";
-pub const PODMAN_UNIT_PATH: &str = "/etc/systemd/system/wls-podman-api.service";
-/// unix socket Podman API v režimu TLS (skupina `wls-api`)
-pub const PODMAN_TLS_SOCK: &str = "/run/wls-podman/podman.sock";
+pub const PODMAN_UNIT: &str = "wslcd-podman-api";
+pub const PODMAN_UNIT_PATH: &str = "/etc/systemd/system/wslcd-podman-api.service";
+/// unix socket Podman API v režimu TLS (skupina `wslcd-api`)
+pub const PODMAN_TLS_SOCK: &str = "/run/wslcd-podman/podman.sock";
 /// certifikáty v distribuci (CA, server, klient)
-pub const TLS_DIR: &str = "/etc/wls-desktop/tls";
-pub const DOCKER_OVERRIDE_PATH: &str = "/etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf";
+pub const TLS_DIR: &str = "/etc/wsl-container-desktop/tls";
+pub const DOCKER_OVERRIDE_PATH: &str = "/etc/systemd/system/docker.service.d/10-wsl-container-desktop-tcp.conf";
+
+/// Odstraní v distribuci pozůstatky z doby před přejmenováním aplikace (WLS Desktop):
+/// služby `wls-*`, konfigurační soubory a certifikáty v `/etc/wls-desktop`, skupinu `wls-api`.
+/// Dockeru se po odebrání starého přepisu (`-H tcp://…`) restartuje démon, aby uvolnil port.
+pub const LEGACY_CLEANUP: &str = r#"L=0; R=0
+for u in wls-tls-proxy wls-podman-api wls-dns; do
+  if [ -f /etc/systemd/system/$u.service ]; then
+    systemctl disable --now $u >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/$u.service
+    L=1
+  fi
+done
+if [ -f /etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf ]; then
+  rm -f /etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf
+  L=1; R=1
+fi
+rm -f /etc/tmpfiles.d/wls-docker-sock.conf /etc/containers/registries.conf.d/zz-wls-desktop.conf /etc/containers/containers.conf.d/50-wls-desktop.conf
+rm -rf /etc/wls-desktop /run/wls-podman
+if getent group wls-api >/dev/null 2>&1; then groupdel wls-api >/dev/null 2>&1 || true; fi
+for f in /etc/sudoers.d/wls-*; do [ -f "$f" ] && mv -f "$f" "/etc/sudoers.d/wslcd-${f#/etc/sudoers.d/wls-}"; done
+if [ "$L" = "1" ]; then systemctl daemon-reload >/dev/null 2>&1 || true; echo "Odstraneny pozustatky WLS Desktop"; fi
+if [ "$R" = "1" ] && systemctl is-active -q docker 2>/dev/null; then systemctl restart docker >/dev/null 2>&1 || true; fi
+"#;
 
 /// Uvolní TCP port API v distribuci, která přestává být primární: vypne TLS proxy,
 /// Podman API na TCP a `-H tcp://` u dockerd. Engine i kontejnery běží dál (unix socket);
 /// po návratu distribuce na místo primární vše znovu nastaví `setup_script`.
 pub const API_RELEASE: &str = r#"if [ ! -d /run/systemd/system ]; then exit 0; fi
-if [ -f /etc/systemd/system/wls-tls-proxy.service ]; then
-  systemctl disable --now wls-tls-proxy >/dev/null 2>&1 || true
-  systemctl reset-failed wls-tls-proxy >/dev/null 2>&1 || true
+if [ -f /etc/systemd/system/wslcd-tls-proxy.service ]; then
+  systemctl disable --now wslcd-tls-proxy >/dev/null 2>&1 || true
+  systemctl reset-failed wslcd-tls-proxy >/dev/null 2>&1 || true
   echo "TLS proxy vypnuta"
 fi
-F=/etc/systemd/system/wls-podman-api.service
+F=/etc/systemd/system/wslcd-podman-api.service
 if [ -f $F ] && grep -q 'tcp://' $F; then
-  systemctl disable --now wls-podman-api >/dev/null 2>&1 || true
+  systemctl disable --now wslcd-podman-api >/dev/null 2>&1 || true
   echo "Podman API na TCP vypnuto"
 fi
-O=/etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf
+O=/etc/systemd/system/docker.service.d/10-wsl-container-desktop-tcp.conf
 if [ -f $O ] && grep -q -- '-H tcp://' $O; then
   sed -i 's# -H tcp://[^ ]*##' $O
   systemctl daemon-reload
@@ -117,7 +140,7 @@ impl Engine {
     /// U = výchozí uživatel distribuce (dostane přístup k unix socketu enginu).
     pub fn setup_script(self) -> String {
         format!(
-            "{PKG}\n{TLS_FUNCS}\n{}",
+            "{PKG}\n{TLS_FUNCS}\n{LEGACY_CLEANUP}\n{}",
             match self {
                 Engine::Docker => DOCKER_SETUP,
                 Engine::Podman => PODMAN_SETUP,
@@ -141,7 +164,7 @@ impl Engine {
             Engine::Docker => DOCKER_UNINSTALL,
             Engine::Podman => PODMAN_UNINSTALL,
         };
-        format!("{PKG}{body}")
+        format!("{PKG}{LEGACY_CLEANUP}{body}")
     }
 
     /// Kde engine drží data (pro text v dialogu).
@@ -157,11 +180,11 @@ impl Engine {
 /// docker.io z Debianu/Ubuntu, moby-engine z Fedory, docker z openSUSE/Arch).
 const DOCKER_UNINSTALL: &str = r#"echo "Zastavuji Docker…"
 systemctl disable --now docker.socket docker containerd >/dev/null 2>&1 || true
-rm -f /etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf
-systemctl disable --now wls-tls-proxy >/dev/null 2>&1 || true
-rm -f /etc/systemd/system/wls-tls-proxy.service
-systemctl disable --now wls-dns >/dev/null 2>&1 || true
-rm -f /etc/systemd/system/wls-dns.service
+rm -f /etc/systemd/system/docker.service.d/10-wsl-container-desktop-tcp.conf
+systemctl disable --now wslcd-tls-proxy >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/wslcd-tls-proxy.service
+systemctl disable --now wslcd-dns >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/wslcd-dns.service
 rmdir /etc/systemd/system/docker.service.d 2>/dev/null || true
 systemctl daemon-reload 2>/dev/null || true
 PKGS=$(pkg_installed docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
@@ -174,10 +197,10 @@ echo "Docker odinstalován"
 "#;
 
 const PODMAN_UNINSTALL: &str = r#"echo "Zastavuji Podman API…"
-systemctl disable --now wls-podman-api podman-restart >/dev/null 2>&1 || true
-rm -f /etc/systemd/system/wls-podman-api.service
-systemctl disable --now wls-tls-proxy >/dev/null 2>&1 || true
-rm -f /etc/systemd/system/wls-tls-proxy.service
+systemctl disable --now wslcd-podman-api podman-restart >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/wslcd-podman-api.service
+systemctl disable --now wslcd-tls-proxy >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/wslcd-tls-proxy.service
 systemctl daemon-reload 2>/dev/null || true
 if [ "$PURGE" = "1" ]; then podman system reset -f >/dev/null 2>&1 || true; fi
 PKGS=$(pkg_installed podman podman-docker)
@@ -194,9 +217,9 @@ const DOCKER_SETUP: &str = concat!(
 D=$(command -v dockerd || true)
 if [ -z "$D" ]; then echo "dockerd nenalezen - pouzij Nainstalovat engine (nebo: curl -fsSL https://get.docker.com | sh)." >&2; exit 2; fi
 # Podman API by blokovalo port
-systemctl disable --now wls-podman-api >/dev/null 2>&1 || true
+systemctl disable --now wslcd-podman-api >/dev/null 2>&1 || true
 # odkaz /run/docker.sock na Podman (z jeho nastavení) by překážel docker.socket
-rm -f /etc/tmpfiles.d/wls-docker-sock.conf
+rm -f /etc/tmpfiles.d/wslcd-docker-sock.conf
 if [ -L /run/docker.sock ]; then rm -f /run/docker.sock; fi
 EXTRA=""
 if systemctl cat containerd.service >/dev/null 2>&1; then EXTRA="--containerd=/run/containerd/containerd.sock"; fi
@@ -204,7 +227,7 @@ if systemctl cat containerd.service >/dev/null 2>&1; then EXTRA="--containerd=/r
 # 172.17.0.1 (dnsmasq) – odpoví host.docker.internal a ostatní dotazy předá DNS distribuce
 if [ -f /etc/docker/daemon.json ] && grep -qE '"(dns|bip)"' /etc/docker/daemon.json; then
   echo "VAROVANI: daemon.json nastavuje dns nebo bip - host.docker.internal se nenastavi." >&2
-  systemctl disable --now wls-dns >/dev/null 2>&1 || true
+  systemctl disable --now wslcd-dns >/dev/null 2>&1 || true
 else
   M=$(command -v dnsmasq || true)
   if [ -z "$M" ]; then
@@ -212,9 +235,9 @@ else
     M=$(command -v dnsmasq || true)
   fi
   if [ -n "$M" ]; then
-    cat > /etc/systemd/system/wls-dns.service <<EOF
+    cat > /etc/systemd/system/wslcd-dns.service <<EOF
 [Unit]
-Description=DNS pro kontejnery Dockeru (host.docker.internal, WLS Desktop)
+Description=DNS pro kontejnery Dockeru (host.docker.internal, WSL Container Desktop)
 Before=docker.service
 
 [Service]
@@ -226,8 +249,8 @@ RestartSec=1
 WantedBy=docker.service
 EOF
     systemctl daemon-reload
-    systemctl enable wls-dns >/dev/null 2>&1 || true
-    systemctl restart wls-dns || echo "VAROVANI: wls-dns (DNS pro kontejnery) nenabehla - viz journalctl -u wls-dns" >&2
+    systemctl enable wslcd-dns >/dev/null 2>&1 || true
+    systemctl restart wslcd-dns || echo "VAROVANI: wslcd-dns (DNS pro kontejnery) nenabehla - viz journalctl -u wslcd-dns" >&2
     EXTRA="$EXTRA --dns 172.17.0.1"
     echo "host.docker.internal -> 172.17.0.1 (DNS pro kontejnery)"
   else
@@ -237,10 +260,10 @@ fi
 mkdir -p /etc/systemd/system/docker.service.d
 if [ "$TLS" = "1" ]; then
   # API jen na unix socketu, TCP obslouží TLS proxy
-  printf '[Service]\nExecStart=\nExecStart=%s -H fd:// %s\n' "$D" "$EXTRA" > /etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf
+  printf '[Service]\nExecStart=\nExecStart=%s -H fd:// %s\n' "$D" "$EXTRA" > /etc/systemd/system/docker.service.d/10-wsl-container-desktop-tcp.conf
   if [ -n "$U" ] && id "$U" >/dev/null 2>&1; then groupadd -f docker; usermod -aG docker "$U"; fi
 else
-  printf '[Service]\nExecStart=\nExecStart=%s -H fd:// -H tcp://127.0.0.1:%s %s\n' "$D" "$PORT" "$EXTRA" > /etc/systemd/system/docker.service.d/10-wls-desktop-tcp.conf
+  printf '[Service]\nExecStart=\nExecStart=%s -H fd:// -H tcp://127.0.0.1:%s %s\n' "$D" "$PORT" "$EXTRA" > /etc/systemd/system/docker.service.d/10-wsl-container-desktop-tcp.conf
 fi
 if [ -f /etc/docker/daemon.json ] && grep -q '"hosts"' /etc/docker/daemon.json; then echo "VAROVANI: /etc/docker/daemon.json obsahuje 'hosts' - koliduje s -H, odstran ho." >&2; fi
 systemctl daemon-reload
@@ -264,21 +287,21 @@ if [ -z "$P" ]; then echo "podman nenalezen - pouzij Nainstalovat engine (nebo: 
 # Docker by blokoval port
 systemctl disable --now docker.socket docker >/dev/null 2>&1 || true
 if [ "$TLS" = "1" ]; then
-  # API jen na unix socketu (skupina wls-api), TCP obslouží TLS proxy
-  groupadd -f wls-api
-  if [ -n "$U" ] && id "$U" >/dev/null 2>&1; then usermod -aG wls-api "$U"; fi
-  SOCK=/run/wls-podman/podman.sock
+  # API jen na unix socketu (skupina wslcd-api), TCP obslouží TLS proxy
+  groupadd -f wslcd-api
+  if [ -n "$U" ] && id "$U" >/dev/null 2>&1; then usermod -aG wslcd-api "$U"; fi
+  SOCK=/run/wslcd-podman/podman.sock
   LISTEN="unix://$SOCK"
-  PRE="ExecStartPre=/bin/sh -c 'mkdir -p /run/wls-podman && chgrp wls-api /run/wls-podman && chmod 750 /run/wls-podman && rm -f $SOCK'"
-  POST="ExecStartPost=/bin/sh -c 'for i in \$\$(seq 100); do [ -S $SOCK ] && break; sleep 0.1; done; chgrp wls-api $SOCK; chmod 660 $SOCK'"
+  PRE="ExecStartPre=/bin/sh -c 'mkdir -p /run/wslcd-podman && chgrp wslcd-api /run/wslcd-podman && chmod 750 /run/wslcd-podman && rm -f $SOCK'"
+  POST="ExecStartPost=/bin/sh -c 'for i in \$\$(seq 100); do [ -S $SOCK ] && break; sleep 0.1; done; chgrp wslcd-api $SOCK; chmod 660 $SOCK'"
 else
   LISTEN="tcp://127.0.0.1:$PORT"
   PRE=""
   POST=""
 fi
-cat > /etc/systemd/system/wls-podman-api.service <<EOF
+cat > /etc/systemd/system/wslcd-podman-api.service <<EOF
 [Unit]
-Description=Podman API pro WLS Desktop ($LISTEN)
+Description=Podman API pro WSL Container Desktop ($LISTEN)
 After=network-online.target
 
 [Service]
@@ -292,12 +315,12 @@ WantedBy=multi-user.target
 EOF
 # `podman compose` bez hlášky „Executing external compose provider…“ u každého příkazu
 mkdir -p /etc/containers/containers.conf.d
-printf '# WLS Desktop\n[engine]\ncompose_warning_logs = false\n' > /etc/containers/containers.conf.d/50-wls-desktop.conf
+printf '# WSL Container Desktop\n[engine]\ncompose_warning_logs = false\n' > /etc/containers/containers.conf.d/50-wsl-container-desktop.conf
 # krátká jména obrazů jako u Dockeru: hledat na Docker Hubu (`postgres:16-alpine`); aliasy
 # z shortnames.conf, které míří jinam, přesměrovat na Docker Hub (`hello-world` = quay.io/podman/hello)
 mkdir -p /etc/containers/registries.conf.d
-cat > /etc/containers/registries.conf.d/zz-wls-desktop.conf <<'WLSREG'
-# WLS Desktop: kratka jmena obrazu jako Docker (Docker Hub)
+cat > /etc/containers/registries.conf.d/zz-wsl-container-desktop.conf <<'WLSREG'
+# WSL Container Desktop: kratka jmena obrazu jako Docker (Docker Hub)
 unqualified-search-registries = ["docker.io"]
 short-name-mode = "permissive"
 
@@ -313,20 +336,20 @@ short-name-mode = "permissive"
 WLSREG
 # /var/run/docker.sock -> API Podmanu (nástroje, `-v /var/run/docker.sock:…`, Docker-outside-of-Docker)
 if [ "$TLS" = "1" ]; then
-  DSOCK=/run/wls-podman/podman.sock
+  DSOCK=/run/wslcd-podman/podman.sock
 else
   systemctl enable --now podman.socket >/dev/null 2>&1 || true
   DSOCK=/run/podman/podman.sock
 fi
-printf '# WLS Desktop: Docker socket -> Podman API\nL+ /run/docker.sock - - - - %s\n' "$DSOCK" > /etc/tmpfiles.d/wls-docker-sock.conf
-systemd-tmpfiles --create /etc/tmpfiles.d/wls-docker-sock.conf >/dev/null 2>&1 || ln -sfn "$DSOCK" /run/docker.sock
+printf '# WSL Container Desktop: Docker socket -> Podman API\nL+ /run/docker.sock - - - - %s\n' "$DSOCK" > /etc/tmpfiles.d/wslcd-docker-sock.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/wslcd-docker-sock.conf >/dev/null 2>&1 || ln -sfn "$DSOCK" /run/docker.sock
 # kontejnery s restart policy po startu (podman nemá stále běžícího démona)
 systemctl enable podman-restart.service >/dev/null 2>&1 || true
 systemctl daemon-reload
-systemctl enable wls-podman-api >/dev/null 2>&1 || true
-systemctl restart wls-podman-api
+systemctl enable wslcd-podman-api >/dev/null 2>&1 || true
+systemctl restart wslcd-podman-api
 if [ "$TLS" = "1" ]; then
-  tls_proxy /run/wls-podman/podman.sock wls-podman-api.service
+  tls_proxy /run/wslcd-podman/podman.sock wslcd-podman-api.service
   echo "Podman API nastaveno na tcp://127.0.0.1:$PORT (TLS, vyzaduje klientsky certifikat)"
 else
   no_tls_proxy
@@ -337,14 +360,14 @@ fi
 
 /// TLS proxy před unix socketem enginu: `tls_proxy <socket> <jednotka enginu>` vytvoří
 /// (jen pokud chybí, nebo REGEN=1) CA, serverový a klientský certifikát v TLS_DIR a službu
-/// `wls-tls-proxy` (socat), která na 127.0.0.1:$PORT přijme jen spojení s klientským
+/// `wslcd-tls-proxy` (socat), která na 127.0.0.1:$PORT přijme jen spojení s klientským
 /// certifikátem od té CA. Proxy je svázaná s jednotkou enginu (startuje a zastavuje se s ní).
 const TLS_FUNCS: &str = r#"tls_proxy() {
   command -v socat >/dev/null || pkg_install socat
   command -v openssl >/dev/null || pkg_install openssl
-  # WLS_TLS_DIR / WLS_TLS_UNIT jen pro testy (jiná složka a služba)
-  T=${WLS_TLS_DIR:-/etc/wls-desktop/tls}
-  PU=${WLS_TLS_UNIT:-wls-tls-proxy}
+  # WSLCD_TLS_DIR / WSLCD_TLS_UNIT jen pro testy (jiná složka a služba)
+  T=${WSLCD_TLS_DIR:-/etc/wsl-container-desktop/tls}
+  PU=${WSLCD_TLS_UNIT:-wslcd-tls-proxy}
   mkdir -p $T
   chmod 700 $T
   # certifikáty, které do 30 dnů vyprší, se vytvoří znovu
@@ -356,12 +379,12 @@ const TLS_FUNCS: &str = r#"tls_proxy() {
       rm -f ./*.pem ./*.srl ./*.csr ./*.ext
       umask 077
       EC="-newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes"
-      openssl req -x509 $EC -keyout ca-key.pem -out ca.pem -days 3650 -subj "/CN=WLS Desktop CA" \
+      openssl req -x509 $EC -keyout ca-key.pem -out ca.pem -days 3650 -subj "/CN=WSL Container Desktop CA" \
         -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
       openssl req $EC -keyout server-key.pem -out server.csr -subj "/CN=localhost" 2>/dev/null
       printf 'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1,DNS:localhost\n' > server.ext
       openssl x509 -req -in server.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out server.pem -days 825 -extfile server.ext 2>/dev/null
-      openssl req $EC -keyout key.pem -out client.csr -subj "/CN=wls-desktop-client" 2>/dev/null
+      openssl req $EC -keyout key.pem -out client.csr -subj "/CN=wsl-container-desktop-client" 2>/dev/null
       printf 'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n' > client.ext
       openssl x509 -req -in client.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out cert.pem -days 825 -extfile client.ext 2>/dev/null
       rm -f ./*.csr ./*.ext ./*.srl
@@ -371,7 +394,7 @@ const TLS_FUNCS: &str = r#"tls_proxy() {
   S=$(command -v socat)
   cat > /etc/systemd/system/$PU.service <<EOF
 [Unit]
-Description=TLS proxy pro API enginu (WLS Desktop, tcp://127.0.0.1:$PORT)
+Description=TLS proxy pro API enginu (WSL Container Desktop, tcp://127.0.0.1:$PORT)
 BindsTo=$2
 After=$2
 
@@ -388,9 +411,9 @@ EOF
   systemctl restart $PU
 }
 no_tls_proxy() {
-  if [ -f /etc/systemd/system/wls-tls-proxy.service ]; then
-    systemctl disable --now wls-tls-proxy >/dev/null 2>&1 || true
-    rm -f /etc/systemd/system/wls-tls-proxy.service
+  if [ -f /etc/systemd/system/wslcd-tls-proxy.service ]; then
+    systemctl disable --now wslcd-tls-proxy >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/wslcd-tls-proxy.service
     systemctl daemon-reload
   fi
 }
@@ -481,8 +504,8 @@ if [ -n "$U" ]; then
     echo "Uživatel $U vytvořen"
   fi
   mkdir -p /etc/sudoers.d
-  echo "$U ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/wls-$U
-  chmod 440 /etc/sudoers.d/wls-$U
+  echo "$U ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/wslcd-$U
+  chmod 440 /etc/sudoers.d/wslcd-$U
   if ! grep -q '^\[user\]' /etc/wsl.conf; then printf '\n[user]\ndefault=%s\n' "$U" >> /etc/wsl.conf; fi
 fi
 cat /etc/wsl.conf
@@ -556,6 +579,6 @@ mod tests {
     fn cli() {
         assert_eq!(Engine::Docker.cli(2375, false), vec!["docker"]);
         assert_eq!(Engine::Podman.cli(2375, false), vec!["podman", "--url", "tcp://127.0.0.1:2375"]);
-        assert_eq!(Engine::Podman.cli(2376, true), vec!["podman", "--url", "unix:///run/wls-podman/podman.sock"]);
+        assert_eq!(Engine::Podman.cli(2376, true), vec!["podman", "--url", "unix:///run/wslcd-podman/podman.sock"]);
     }
 }

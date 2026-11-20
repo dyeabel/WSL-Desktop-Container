@@ -18,7 +18,7 @@ pub enum Val {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Template {
-    /// identifikátor (WLS_DEBUG_COMPOSE_NEW=<id>), zároveň výchozí název projektu
+    /// identifikátor (WSLCD_DEBUG_COMPOSE_NEW=<id>), zároveň výchozí název projektu
     pub id: &'static str,
     pub name: &'static str,
     desc_cs: &'static str,
@@ -34,7 +34,7 @@ impl Template {
 
     /// Obsah `.env`: název projektu a proměnné šablony (hesla se vygenerují znovu při každém volání).
     pub fn render_env(&self, project: &str) -> String {
-        let mut s = format!("# WLS Desktop – {}\nCOMPOSE_PROJECT_NAME={project}\n", self.name);
+        let mut s = format!("# WSL Container Desktop – {}\nCOMPOSE_PROJECT_NAME={project}\n", self.name);
         for (k, v) in self.env {
             let val = match v {
                 Val::Text(t) => t.to_string(),

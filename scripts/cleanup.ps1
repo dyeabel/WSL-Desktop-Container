@@ -5,7 +5,7 @@
 #   (-Since výchozí: poslední 2 hodiny)
 #
 #   1. target\<profil>\incremental: od každého crate jen nejnovější sezení (a vše změněné od -Since)
-#   2. target\<profil>\build\wls-desktop\<hash>: jen nejnovější hash (a vše změněné od -Since);
+#   2. target\<profil>\build\<crate>\<hash>: jen nejnovější hash (a vše změněné od -Since);
 #      závislosti se nemažou – jejich hashe se mění jen s toolchainem / features a mazání by
 #      jen zbytečně vynutilo jejich nový překlad (hlídá je limit -MaxGB)
 #   3. dist\: balíčky jen posledních -KeepDist verzí
@@ -67,8 +67,8 @@ if ($after -gt $MaxGB * 1GB) {
 
 # dist: balíčky posledních $KeepDist verzí
 if (Test-Path 'dist') {
-    $byVersion = Get-ChildItem dist -File | Where-Object { $_.Name -match '^WLS-Desktop-(\d+\.\d+\.\d+[^-]*)-win-x64' } |
-        Group-Object { [regex]::Match($_.Name, '^WLS-Desktop-(\d+\.\d+\.\d+[^-]*)-win-x64').Groups[1].Value }
+    $byVersion = Get-ChildItem dist -File | Where-Object { $_.Name -match '^(?:WLS-Desktop|WSL-Container-Desktop)-(\d+\.\d+\.\d+[^-]*)-win-x64' } |
+        Group-Object { [regex]::Match($_.Name, '^(?:WLS-Desktop|WSL-Container-Desktop)-(\d+\.\d+\.\d+[^-]*)-win-x64').Groups[1].Value }
     $old = $byVersion | Sort-Object { try { [version]($_.Name -replace '[-+].*$', '') } catch { [version]'0.0' } } -Descending | Select-Object -Skip $KeepDist
     $n = 0
     foreach ($g in $old) { foreach ($f in $g.Group) { Remove-Item $f.FullName -Force; $n++ } }

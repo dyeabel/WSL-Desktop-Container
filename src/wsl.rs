@@ -107,14 +107,26 @@ pub(crate) fn base(distro: &str, user: Option<&str>, cwd: Option<&str>) -> Comma
     c
 }
 
+/// Záznam do přehledu „Na pozadí“ (distribuce, uživatel, zkrácený příkaz).
+fn track(distro: &str, user: Option<&str>, args: &[&str]) -> crate::activity::Guard {
+    let title = match user {
+        Some(u) => format!("{distro} ({u})"),
+        None => distro.to_string(),
+    };
+    crate::activity::start(crate::activity::Kind::Wsl, title, crate::activity::describe_cmd(args, 160))
+}
+
 /// Spustí program v distribuci a vrátí stdout (+stderr).
 pub fn run(distro: &str, user: Option<&str>, cwd: Option<&str>, args: &[&str]) -> Result<String, WslError> {
+    let mut g = track(distro, user, args);
     let out = base(distro, user, cwd)
         .args(args)
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| e.to_string())?;
-    finish(out)
+        .map_err(|e| e.to_string());
+    let r = out.map_err(WslError::from).and_then(finish);
+    g.set_ok(r.is_ok());
+    r
 }
 
 pub fn run_owned(distro: &str, user: Option<&str>, cwd: Option<&str>, args: &[String]) -> Result<String, WslError> {
@@ -124,6 +136,7 @@ pub fn run_owned(distro: &str, user: Option<&str>, cwd: Option<&str>, args: &[St
 
 /// Spustí program a pošle mu `input` na stdin.
 pub fn run_stdin(distro: &str, user: Option<&str>, args: &[&str], input: &str) -> Result<String, WslError> {
+    let _g = track(distro, user, args);
     let mut child = base(distro, user, None)
         .args(args)
         .stdin(Stdio::piped())
@@ -149,6 +162,8 @@ pub fn run_stream(
     mut on_line: impl FnMut(&str),
 ) -> Result<i32, String> {
     use std::io::{BufRead, BufReader, Read};
+    let a: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let mut g = track(distro, user, &a);
     let mut child = base(distro, user, cwd)
         .args(args)
         .stdin(Stdio::null())
@@ -203,7 +218,9 @@ pub fn run_stream(
         let _ = r.join();
     }
     let st = child.wait().map_err(|e| e.to_string())?;
-    Ok(st.code().unwrap_or(-1))
+    let code = st.code().unwrap_or(-1);
+    g.set_ok(code == 0);
+    Ok(code)
 }
 
 fn wsl_simple(args: &[&str]) -> Result<String, WslError> {
@@ -285,7 +302,7 @@ pub fn set_default(distro: &str) -> Result<String, WslError> {
 
 /// Skrytý proces, který drží distribuci (a tím i dockerd) naživu.
 /// Díky flock běží v distribuci vždy nejvýš jeden – další instance hned skončí.
-const KEEPALIVE_SCRIPT: &str = "if command -v flock >/dev/null 2>&1; then exec flock -n /tmp/.wls-desktop-keepalive.lock sleep infinity; else exec sleep infinity; fi";
+const KEEPALIVE_SCRIPT: &str = "if command -v flock >/dev/null 2>&1; then exec flock -n /tmp/.wsl-container-desktop-keepalive.lock sleep infinity; else exec sleep infinity; fi";
 
 pub fn keepalive(distro: &str) -> Result<Child, String> {
     hidden("wsl.exe")
@@ -576,7 +593,7 @@ mod manage_tests {
 
     #[test]
     fn names() {
-        assert!(valid_distro_name("WLS-Test-Import"));
+        assert!(valid_distro_name("WSLCD-Test-Import"));
         assert!(valid_distro_name("debian_12.dev"));
         assert!(!valid_distro_name(""));
         assert!(!valid_distro_name("a b"));

@@ -1,5 +1,5 @@
 //! Pro živé testy: operace workeru stejnou cestou jako z UI, bez běžící aplikace.
-//! Konfigurace se zapisuje do `WLS_DATA_DIR` (test ji musí nastavit, jinak by se přepsala
+//! Konfigurace se zapisuje do `WSLCD_DATA_DIR` (test ji musí nastavit, jinak by se přepsala
 //! skutečná konfigurace).
 
 use super::{Shared, Worker};
@@ -8,7 +8,7 @@ use crate::engine::Engine;
 use std::sync::{Arc, RwLock};
 
 fn worker(cfg: Config) -> Worker {
-    assert!(crate::config::isolated(), "testkit potřebuje WLS_DATA_DIR");
+    assert!(crate::config::isolated(), "testkit potřebuje WSLCD_DATA_DIR");
     let (msg, _m) = std::sync::mpsc::channel();
     let (cmd, _c) = std::sync::mpsc::channel();
     Worker { ctx: eframe::egui::Context::default(), cfg: Arc::new(RwLock::new(cfg)), msg, cmd, shared: Arc::new(Shared::default()) }

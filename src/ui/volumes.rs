@@ -51,9 +51,9 @@ pub struct VolState {
 }
 
 impl VolState {
-    /// Stav po startu; `WLS_DEBUG_RESTORE=1` otevře dialog obnovy (pro screenshoty).
+    /// Stav po startu; `WSLCD_DEBUG_RESTORE=1` otevře dialog obnovy (pro screenshoty).
     pub fn new() -> Self {
-        Self { restore: std::env::var("WLS_DEBUG_RESTORE").ok().map(|_| RestoreDlg::default()), ..Default::default() }
+        Self { restore: std::env::var("WSLCD_DEBUG_RESTORE").ok().map(|_| RestoreDlg::default()), ..Default::default() }
     }
 }
 

@@ -496,7 +496,13 @@ impl Worker {
         self.ctx.request_repaint();
         let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::ContainerFs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline | Cmd::Inspect(_) | Cmd::VolumeSizes)
             || matches!(cmd, Cmd::Stack(StackOp::Read { .. } | StackOp::Validate { .. }));
+        // přehled „Na pozadí“: akce uživatele (bez obnovování a procházení)
+        let mut act = (!is_fs && !matches!(cmd, Cmd::Refresh)).then(|| crate::activity::start(crate::activity::Kind::Action, activity_label(&cmd), String::new()));
         let res = self.exec_inner(cmd);
+        if let Some(a) = act.as_mut() {
+            a.set_ok(res.is_ok());
+        }
+        drop(act);
         self.shared.busy.fetch_sub(1, Ordering::SeqCst);
         match res {
             Ok(s) if !s.trim().is_empty() => self.send(Msg::Toast(true, s.trim().to_string())),
@@ -648,5 +654,52 @@ impl Worker {
             Cmd::UpdateLimits { id, name, update } => self.update_limits(id, name, update),
             Cmd::ContainerFs { view, id, op } => self.container_fs(view, id, op),
         }
+    }
+}
+
+/// Popis akce pro přehled „Na pozadí“.
+fn activity_label(c: &Cmd) -> String {
+    let short = |id: &str| id.chars().take(12).collect::<String>();
+    match c {
+        Cmd::Container(id, a) => tf!("Kontejner {}: {a}", "Container {}: {a}", short(id)),
+        Cmd::Run(_) => t!("Spuštění kontejneru", "Running a container").into(),
+        Cmd::Build(_) => t!("Sestavení image", "Building an image").into(),
+        Cmd::Pull(r) => tf!("Stahování {r}", "Pulling {r}"),
+        Cmd::RemoveImage(id) => tf!("Odstranění image {}", "Removing image {}", short(id)),
+        Cmd::PruneContainers | Cmd::PruneImages { .. } | Cmd::PruneVolumes | Cmd::PruneNetworks => t!("Úklid (prune)", "Clean-up (prune)").into(),
+        Cmd::CreateVolume(n) => tf!("Vytvoření volume {n}", "Creating volume {n}"),
+        Cmd::RemoveVolume(n) => tf!("Odstranění volume {n}", "Removing volume {n}"),
+        Cmd::BackupVolume { volume, .. } => tf!("Záloha volume {volume}", "Backing up volume {volume}"),
+        Cmd::RestoreVolume { volume, .. } => tf!("Obnova volume {volume}", "Restoring volume {volume}"),
+        Cmd::CloneVolume { from, to } => tf!("Kopie volume {from} → {to}", "Copying volume {from} → {to}"),
+        Cmd::CreateNetwork(n, _) => tf!("Vytvoření sítě {n}", "Creating network {n}"),
+        Cmd::RemoveNetwork(n) => tf!("Odstranění sítě {}", "Removing network {}", short(n)),
+        Cmd::Compose { args, project, .. } => format!("compose {}{}", project.as_deref().map(|p| format!("-p {p} ")).unwrap_or_default(), args.join(" ")),
+        Cmd::ComposeUpPath(p) => format!("compose up -d ({p})"),
+        Cmd::Wsl(w) => match w {
+            WslCmd::Start(n) => tf!("Spuštění distribuce {n}", "Starting distribution {n}"),
+            WslCmd::Terminate(n) => tf!("Ukončení distribuce {n}", "Terminating distribution {n}"),
+            WslCmd::Shutdown => t!("Vypnutí WSL", "Shutting down WSL").into(),
+            WslCmd::SetDefault(n) => tf!("Výchozí distribuce {n}", "Default distribution {n}"),
+        },
+        Cmd::EngineStart => t!("Start enginu", "Starting the engine").into(),
+        Cmd::EngineStop => t!("Zastavení enginu", "Stopping the engine").into(),
+        Cmd::EngineRestart => t!("Restart enginu", "Restarting the engine").into(),
+        Cmd::SetupEngine => t!("Nastavení API enginu", "Setting up the engine API").into(),
+        Cmd::SetPrimary { distro, .. } => tf!("Přepnutí primární distribuce na {distro}", "Switching the primary distribution to {distro}"),
+        Cmd::InstallEngine(e, _) => tf!("Instalace {}", "Installing {}", e.name()),
+        Cmd::UninstallEngine { engine, .. } => tf!("Odinstalace {}", "Uninstalling {}", engine.name()),
+        Cmd::AddDistro(_) => t!("Přidání distribuce", "Adding a distribution").into(),
+        Cmd::Sleep => t!("Uspání distribuce", "Putting the distribution to sleep").into(),
+        Cmd::SetTls(on) => if *on { t!("Zapnutí TLS", "Turning TLS on") } else { t!("Vypnutí TLS", "Turning TLS off") }.into(),
+        Cmd::FreeMemory => t!("Uvolnění paměti WSL", "Freeing WSL memory").into(),
+        Cmd::RegenCerts => t!("Nové certifikáty", "New certificates").into(),
+        Cmd::PauseAll => t!("Pozastavení kontejnerů", "Pausing containers").into(),
+        Cmd::UnpauseAll => t!("Obnovení kontejnerů", "Resuming containers").into(),
+        Cmd::SaveDaemonJson(_) => t!("Uložení daemon.json", "Saving daemon.json").into(),
+        Cmd::Recreate { .. } => t!("Znovuvytvoření kontejneru", "Recreating a container").into(),
+        Cmd::UpdateLimits { name, .. } => tf!("Limity kontejneru {name}", "Container limits {name}"),
+        // ostatní: název varianty
+        other => format!("{other:?}").split(['(', ' ', '{']).next().unwrap_or("").to_string(),
     }
 }

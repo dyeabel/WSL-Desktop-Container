@@ -33,8 +33,8 @@ pub struct NetState {
 
 impl Default for NetState {
     fn default() -> Self {
-        // pro ladění/screenshoty: WLS_DEBUG_NETWORK=1 (provoz) | ports | map
-        let tab = match std::env::var("WLS_DEBUG_NETWORK").as_deref() {
+        // pro ladění/screenshoty: WSLCD_DEBUG_NETWORK=1 (provoz) | ports | map
+        let tab = match std::env::var("WSLCD_DEBUG_NETWORK").as_deref() {
             Ok("ports") => NetTab::Ports,
             Ok("map") | Ok("networks") => NetTab::Networks,
             Ok(_) => NetTab::Traffic,
@@ -311,7 +311,7 @@ fn endpoints(app: &mut App, ui: &mut egui::Ui, d: &NetData) {
             if tls {
                 ui.label(muted("TLS proxy"));
                 match proxy {
-                    Some(s) => sel(ui, mono(format!("wls-tls-proxy · {} · {}", s.local(), s.process()))),
+                    Some(s) => sel(ui, mono(format!("wslcd-tls-proxy · {} · {}", s.local(), s.process()))),
                     None => ui.label(RichText::new(t!("nenaslouchá", "not listening")).color(theme::red())),
                 };
                 ui.end_row();
@@ -522,7 +522,7 @@ fn ports(app: &mut App, ui: &mut egui::Ui) {
                 r.col(|ui| {
                     match k {
                         ListenKind::EngineApi => badge(ui, t!("API enginu", "engine API"), theme::accent()),
-                        ListenKind::TlsProxy => badge(ui, "TLS proxy (wls-tls-proxy)", theme::green()),
+                        ListenKind::TlsProxy => badge(ui, "TLS proxy (wslcd-tls-proxy)", theme::green()),
                         ListenKind::Dns => badge(ui, "DNS", theme::grey()),
                         ListenKind::ContainerProxy => badge(ui, t!("port kontejneru", "container port"), theme::grey()),
                         ListenKind::Other => ui.label(""),

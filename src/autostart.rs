@@ -21,14 +21,13 @@ mod reg {
     };
 
     const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-    const NAME: &str = "WLS Desktop";
 
     fn w(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
-    pub fn get() -> Option<String> {
-        let (k, n) = (w(KEY), w(NAME));
+    pub fn get(name: &str) -> Option<String> {
+        let (k, n) = (w(KEY), w(name));
         let mut buf = vec![0u16; 1024];
         let mut len = (buf.len() * 2) as u32;
         let r = unsafe {
@@ -41,16 +40,16 @@ mod reg {
         Some(String::from_utf16_lossy(&buf[..chars.min(buf.len())]))
     }
 
-    pub fn set(value: &str) -> Result<(), String> {
-        let (k, n, v) = (w(KEY), w(NAME), w(value));
+    pub fn set(name: &str, value: &str) -> Result<(), String> {
+        let (k, n, v) = (w(KEY), w(name), w(value));
         let r = unsafe {
             RegSetKeyValueW(HKEY_CURRENT_USER, k.as_ptr(), n.as_ptr(), REG_SZ, v.as_ptr().cast(), (v.len() * 2) as u32)
         };
         if r == 0 { Ok(()) } else { Err(format!("RegSetKeyValueW: {r}")) }
     }
 
-    pub fn delete() -> Result<(), String> {
-        let (k, n) = (w(KEY), w(NAME));
+    pub fn delete(name: &str) -> Result<(), String> {
+        let (k, n) = (w(KEY), w(name));
         let r = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, k.as_ptr(), n.as_ptr()) };
         // 2 = ERROR_FILE_NOT_FOUND (už není)
         if r == 0 || r == 2 { Ok(()) } else { Err(format!("RegDeleteKeyValueW: {r}")) }
@@ -59,34 +58,49 @@ mod reg {
 
 #[cfg(not(windows))]
 mod reg {
-    pub fn get() -> Option<String> {
+    pub fn get(_: &str) -> Option<String> {
         None
     }
-    pub fn set(_: &str) -> Result<(), String> {
+    pub fn set(_: &str, _: &str) -> Result<(), String> {
         Err("jen Windows".into())
     }
-    pub fn delete() -> Result<(), String> {
+    pub fn delete(_: &str) -> Result<(), String> {
         Ok(())
     }
 }
 
+/// Název hodnoty v registru.
+const NAME: &str = "WSL Container Desktop";
+/// Hodnota z doby před přejmenováním (WLS Desktop) – převede se na novou.
+const LEGACY_NAME: &str = "WLS Desktop";
+
 pub fn is_enabled() -> bool {
-    reg::get().is_some()
+    reg::get(NAME).or_else(|| reg::get(LEGACY_NAME)).is_some()
 }
 
 pub fn set(on: bool) -> Result<(), String> {
     if on {
-        reg::set(&command().ok_or("current_exe")?)
+        reg::set(NAME, &command().ok_or("current_exe")?)?;
+        reg::delete(LEGACY_NAME)
     } else {
-        reg::delete()
+        reg::delete(NAME)?;
+        reg::delete(LEGACY_NAME)
     }
 }
 
-/// Pokud je autostart zapnutý, ale EXE se mezitím přesunulo, opraví cestu.
+/// Pokud je autostart zapnutý, ale EXE se mezitím přesunulo (nebo jde o hodnotu z doby před
+/// přejmenováním aplikace), opraví cestu a název hodnoty.
 pub fn fix_path() {
-    if let (Some(cur), Some(want)) = (reg::get(), command()) {
+    let Some(want) = command() else { return };
+    if reg::get(LEGACY_NAME).is_some() {
+        if reg::set(NAME, &want).is_ok() {
+            let _ = reg::delete(LEGACY_NAME);
+        }
+        return;
+    }
+    if let Some(cur) = reg::get(NAME) {
         if !cur.eq_ignore_ascii_case(&want) {
-            let _ = reg::set(&want);
+            let _ = reg::set(NAME, &want);
         }
     }
 }

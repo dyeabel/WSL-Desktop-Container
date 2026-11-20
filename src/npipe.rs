@@ -57,7 +57,7 @@ pub fn sddl_for_sid(sid: &str) -> Result<String, String> {
 /// Odpověď 502 pro klienta, když se nepodaří spojit s API enginu (aby `docker` ukázal důvod
 /// místo uzavřeného spojení).
 pub fn error_response(msg: &str) -> Vec<u8> {
-    let body = format!("{{\"message\":{}}}\n", serde_json::Value::String(format!("WLS Desktop: {msg}")));
+    let body = format!("{{\"message\":{}}}\n", serde_json::Value::String(format!("WSL Container Desktop: {msg}")));
     format!(
         "HTTP/1.1 502 Bad Gateway\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -696,7 +696,7 @@ pub(crate) mod tests {
                 s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK").unwrap();
             }
         });
-        let name = format!(r"\\.\pipe\wls_test_unit_{}", std::process::id());
+        let name = format!(r"\\.\pipe\wslcd_test_unit_{}", std::process::id());
         let relay = Relay::start(&name, Arc::new(move || Ok(Target::Plain(port)))).unwrap();
         // druhý relay se stejným názvem nesmí vzniknout (FILE_FLAG_FIRST_PIPE_INSTANCE)
         assert!(Relay::start(&name, Arc::new(move || Ok(Target::Plain(port)))).is_err());
@@ -712,7 +712,7 @@ pub(crate) mod tests {
     fn relay_reports_unreachable_engine() {
         // volný port: bind a hned zavřít
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let name = format!(r"\\.\pipe\wls_test_unreach_{}", std::process::id());
+        let name = format!(r"\\.\pipe\wslcd_test_unreach_{}", std::process::id());
         let _relay = Relay::start(&name, Arc::new(move || Ok(Target::Plain(port)))).unwrap();
         let r = ping_pipe(&name);
         assert!(r.starts_with("HTTP/1.1 502"), "{r}");

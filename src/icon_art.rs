@@ -1,84 +1,98 @@
-//! Kresba ikony aplikace (zlatý zaoblený čtverec se „stohem“ kontejnerů).
-//! Sdílí ji build.rs (ikona EXE) i aplikace (ikona okna a traye).
-//! Vykresluje se v libovolné velikosti se supersamplingem 4×4.
+//! Ikona aplikace (zlaté kostky s tučňákem na tmavém zaobleném čtverci).
+//! Pixely jsou předgenerované ze `assets/icon.jpg` skriptem `scripts/make_icon.py`
+//! (`assets/icon/<n>.rgba`). Sdílí ji build.rs (ikona EXE) i aplikace (okno, tray, oznámení).
 
-const GOLD: [f32; 3] = [0xDB as f32, 0xB4 as f32, 0x7C as f32];
-const DARK: [f32; 3] = [0x1E as f32, 0x1A as f32, 0x14 as f32];
+const DARK: [f32; 3] = [0x1B as f32, 0x19 as f32, 0x16 as f32];
 
-/// Je bod (x, y) v zaobleném obdélníku? Souřadnice 0..1.
-fn in_rrect(x: f32, y: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> bool {
-    if x < x0 || x > x1 || y < y0 || y > y1 {
-        return false;
-    }
-    let cx = x.clamp(x0 + r, x1 - r);
-    let cy = y.clamp(y0 + r, y1 - r);
-    (x - cx).powi(2) + (y - cy).powi(2) <= r * r
-}
+/// Předgenerované velikosti (RGBA, řádky shora dolů).
+const PREPARED: [(u32, &[u8]); 9] = [
+    (16, include_bytes!("../assets/icon/16.rgba")),
+    (20, include_bytes!("../assets/icon/20.rgba")),
+    (24, include_bytes!("../assets/icon/24.rgba")),
+    (32, include_bytes!("../assets/icon/32.rgba")),
+    (40, include_bytes!("../assets/icon/40.rgba")),
+    (48, include_bytes!("../assets/icon/48.rgba")),
+    (64, include_bytes!("../assets/icon/64.rgba")),
+    (128, include_bytes!("../assets/icon/128.rgba")),
+    (256, include_bytes!("../assets/icon/256.rgba")),
+];
 
-/// Barva vzorku: None = průhledné.
-fn sample(x: f32, y: f32, dot: Option<[u8; 3]>) -> Option<[f32; 3]> {
-    if let Some(c) = dot {
-        // stavová tečka vpravo dole s tmavým lemem
-        let d = ((x - 0.78).powi(2) + (y - 0.78).powi(2)).sqrt();
-        if d <= 0.17 {
-            return Some([c[0] as f32, c[1] as f32, c[2] as f32]);
-        }
-        if d <= 0.23 {
-            return Some(DARK);
-        }
+/// Ikona bez stavové tečky: přesná předgenerovaná velikost, jinak zmenšení nejbližší větší
+/// (průměr plochy, s předem vynásobenou průhledností).
+fn base(size: u32) -> Vec<u8> {
+    if let Some((_, d)) = PREPARED.iter().find(|(n, _)| *n == size) {
+        return d.to_vec();
     }
-    if !in_rrect(x, y, 0.04, 0.04, 0.96, 0.96, 0.22) {
-        return None;
-    }
-    let boxes = [
-        (0.355, 0.20, 0.645, 0.45),
-        (0.19, 0.53, 0.48, 0.79),
-        (0.52, 0.53, 0.81, 0.79),
-    ];
-    for (x0, y0, x1, y1) in boxes {
-        if in_rrect(x, y, x0, y0, x1, y1, 0.035) {
-            // vodorovná „žebra“ kontejneru
-            let rel = (y - y0) / (y1 - y0);
-            let rib = (rel * 3.0).fract() < 0.18 && rel > 0.15;
-            return Some(if rib { [0x3A as f32, 0x31 as f32, 0x24 as f32] } else { DARK });
-        }
-    }
-    Some(GOLD)
-}
-
-/// RGBA pixely (řádky shora dolů) ikony o velikosti `size`×`size`.
-/// `dot` přidá stavovou tečku dané barvy (pro ikonu v tray).
-pub fn render(size: u32, dot: Option<[u8; 3]>) -> Vec<u8> {
-    const SS: u32 = 4;
+    let (src_n, src) = PREPARED.iter().find(|(n, _)| *n > size).copied().unwrap_or(PREPARED[PREPARED.len() - 1]);
     let mut out = vec![0u8; (size * size * 4) as usize];
+    let scale = src_n as f32 / size as f32;
     for py in 0..size {
         for px in 0..size {
-            let (mut r, mut g, mut b, mut a) = (0.0, 0.0, 0.0, 0.0);
-            for sy in 0..SS {
-                for sx in 0..SS {
-                    let x = (px as f32 + (sx as f32 + 0.5) / SS as f32) / size as f32;
-                    let y = (py as f32 + (sy as f32 + 0.5) / SS as f32) / size as f32;
-                    if let Some(c) = sample(x, y, dot) {
-                        r += c[0];
-                        g += c[1];
-                        b += c[2];
-                        a += 1.0;
-                    }
+            let (x0, x1) = ((px as f32 * scale) as u32, (((px + 1) as f32 * scale).ceil() as u32).min(src_n));
+            let (y0, y1) = ((py as f32 * scale) as u32, (((py + 1) as f32 * scale).ceil() as u32).min(src_n));
+            let mut acc = [0f32; 4];
+            let mut cnt = 0f32;
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    let i = ((sy * src_n + sx) * 4) as usize;
+                    let a = src[i + 3] as f32;
+                    acc[0] += src[i] as f32 * a;
+                    acc[1] += src[i + 1] as f32 * a;
+                    acc[2] += src[i + 2] as f32 * a;
+                    acc[3] += a;
+                    cnt += 1.0;
                 }
             }
             let i = ((py * size + px) * 4) as usize;
-            if a > 0.0 {
-                out[i] = (r / a).round() as u8;
-                out[i + 1] = (g / a).round() as u8;
-                out[i + 2] = (b / a).round() as u8;
-                out[i + 3] = (a / (SS * SS) as f32 * 255.0).round() as u8;
+            if acc[3] > 0.0 {
+                out[i] = (acc[0] / acc[3]).round() as u8;
+                out[i + 1] = (acc[1] / acc[3]).round() as u8;
+                out[i + 2] = (acc[2] / acc[3]).round() as u8;
             }
+            out[i + 3] = (acc[3] / cnt.max(1.0)).round() as u8;
         }
     }
     out
 }
 
-#[allow(dead_code)]
+/// RGBA pixely (řádky shora dolů) ikony o velikosti `size`×`size`.
+/// `dot` přidá stavovou tečku dané barvy vpravo dole (pro ikonu v tray).
+pub fn render(size: u32, dot: Option<[u8; 3]>) -> Vec<u8> {
+    let mut out = base(size);
+    let Some(c) = dot else { return out };
+    const SS: u32 = 4;
+    for py in 0..size {
+        for px in 0..size {
+            // podíl vzorků v tečce a v tmavém lemu kolem ní
+            let (mut in_dot, mut in_ring) = (0.0f32, 0.0f32);
+            for sy in 0..SS {
+                for sx in 0..SS {
+                    let x = (px as f32 + (sx as f32 + 0.5) / SS as f32) / size as f32;
+                    let y = (py as f32 + (sy as f32 + 0.5) / SS as f32) / size as f32;
+                    let d = ((x - 0.78).powi(2) + (y - 0.78).powi(2)).sqrt();
+                    if d <= 0.17 {
+                        in_dot += 1.0;
+                    } else if d <= 0.23 {
+                        in_ring += 1.0;
+                    }
+                }
+            }
+            let n = (SS * SS) as f32;
+            let cover = (in_dot + in_ring) / n;
+            if cover == 0.0 {
+                continue;
+            }
+            let i = ((py * size + px) * 4) as usize;
+            let col = |k: usize| (c[k] as f32 * in_dot + DARK[k] * in_ring) / (in_dot + in_ring);
+            for k in 0..3 {
+                out[i + k] = (col(k) * cover + out[i + k] as f32 * (1.0 - cover)).round() as u8;
+            }
+            out[i + 3] = (255.0 * cover + out[i + 3] as f32 * (1.0 - cover)).round().min(255.0) as u8;
+        }
+    }
+    out
+}
+
 fn crc32(data: &[u8]) -> u32 {
     let mut c = 0xFFFF_FFFFu32;
     for &b in data {

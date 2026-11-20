@@ -4,8 +4,8 @@
 use super::*;
 use crate::netinfo::{compare_ports, published_of, WinState};
 
-const WEB: &str = "wls-test-net-web";
-const CLIENT: &str = "wls-test-net-client";
+const WEB: &str = "wslcd-test-net-web";
+const CLIENT: &str = "wslcd-test-net-client";
 
 /// Úklid testovacích kontejnerů (`1` = jejich názvy) i při selhání testu.
 struct Cleanup<F: Fn(&[&str]) -> Result<String, String>>(F, [&'static str; 2]);
@@ -36,8 +36,8 @@ fn container_ip(v: &Value) -> String {
         .to_string()
 }
 
-const DL_WEB: &str = "wls-test-net-dl-web";
-const DL_CLIENT: &str = "wls-test-net-dl-client";
+const DL_WEB: &str = "wslcd-test-net-dl-web";
+const DL_CLIENT: &str = "wslcd-test-net-dl-client";
 
 /// Provoz po spojeních, historie ukončených spojení, graf provozu a konflikty portů
 /// s ostatními distribucemi: `cargo test live_net_conn -- --ignored --nocapture`.
@@ -160,7 +160,7 @@ fn live_net_conn_traffic() {
 
     drop(guard);
     let left: Vec<Container> = d.get("/containers/json?all=true").unwrap();
-    assert!(!left.iter().any(|x| x.name().starts_with("wls-test-net-dl")), "úklid");
+    assert!(!left.iter().any(|x| x.name().starts_with("wslcd-test-net-dl")), "úklid");
 }
 
 #[test]
@@ -245,7 +245,7 @@ fn live_net_ports_in_out() {
     for _ in 0..10 {
         let win = windows_listeners(&mut names).expect("Windows porty");
         // běžící aplikace přeposílá IPv6 localhost vlastní relay – v aplikaci je to `own_pid`
-        let own = win.iter().find(|x| x.process.eq_ignore_ascii_case("wls-desktop.exe")).map_or(std::process::id(), |x| x.pid);
+        let own = win.iter().find(|x| x.process.eq_ignore_ascii_case("wsl-container-desktop.exe")).map_or(std::process::id(), |x| x.pid);
         state = netinfo::windows_state(&pub18190, &win, own);
         if state != WinState::NotForwarded {
             for x in win.iter().filter(|x| x.port == 18190 || x.port == cfg.port) {
@@ -272,7 +272,7 @@ fn live_net_ports_in_out() {
     assert!(nd.by_id.get(&web_id).is_some_and(|x| x.listen.iter().any(|s| s.local_port == 9999)), "{nd:?}");
     let od = ov.data.lock().unwrap().clone();
     eprintln!("VM rate {:?}, history {} vzorků, mode {:?}", od.vm_rate.map(|(a, b)| (netinfo::fmt_rate(a), netinfo::fmt_rate(b))), od.history.len(), od.wsl_mode);
-    for t in od.containers.iter().filter(|t| t.name.starts_with("wls-test-net")) {
+    for t in od.containers.iter().filter(|t| t.name.starts_with("wslcd-test-net")) {
         eprintln!("traffic {} rate {:?} total rx {} tx {}", t.name, t.rate.map(|(a, b)| (netinfo::fmt_rate(a), netinfo::fmt_rate(b))), t.rx_total, t.tx_total);
     }
     assert!(od.vm_rate.is_some() && !od.history.is_empty());
@@ -280,5 +280,5 @@ fn live_net_ports_in_out() {
     drop((ns, ov));
     drop(guard);
     let left: Vec<Container> = d.get("/containers/json?all=true").unwrap();
-    assert!(!left.iter().any(|x| x.name().starts_with("wls-test-net")), "úklid");
+    assert!(!left.iter().any(|x| x.name().starts_with("wslcd-test-net")), "úklid");
 }

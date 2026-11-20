@@ -3,14 +3,14 @@
 //! Spuštění (stahuje Debian ~100 MB a balíčky Dockeru, trvá několik minut):
 //! `cargo test live_docker_e2e -- --ignored --nocapture`
 //!
-//! Test vytvoří distribuci `WLS-Test-Docker`, nainstaluje Docker stejnou cestou jako aplikace,
+//! Test vytvoří distribuci `WSLCD-Test-Docker`, nainstaluje Docker stejnou cestou jako aplikace,
 //! projde API bez ověření i s TLS, kontejnery, události, build, compose, Recreate a shim,
 //! a nakonec distribuci odregistruje. Nezasahuje do běžícího enginu ani konfigurace:
 //! - porty 2385 (místo 2375/2376, které může používat jiný engine – všechny distribuce WSL
 //!   sdílí jednu síť),
 //! - `iptables: false` v daemon.json – Docker jinak mění pravidla firewallu sdíleného síťového
 //!   jmenného prostoru WSL a mohl by rozbít síť kontejnerů jiného enginu,
-//! - `WLS_DATA_DIR` = dočasná složka (konfigurace, certifikáty; DOCKER_HOST se nemění).
+//! - `WSLCD_DATA_DIR` = dočasná složka (konfigurace, certifikáty; DOCKER_HOST se nemění).
 
 use crate::config::Config;
 use crate::docker::{Docker, Event};
@@ -19,7 +19,7 @@ use crate::wsl;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const DISTRO: &str = "WLS-Test-Docker";
+const DISTRO: &str = "WSLCD-Test-Docker";
 const PORT: u16 = 2385;
 
 struct Cleanup {
@@ -28,8 +28,8 @@ struct Cleanup {
 
 impl Drop for Cleanup {
     fn drop(&mut self) {
-        if std::env::var("WLS_E2E_KEEP").is_ok() {
-            eprintln!("WLS_E2E_KEEP: distribuce {DISTRO} a {} ponechány", self.data.display());
+        if std::env::var("WSLCD_E2E_KEEP").is_ok() {
+            eprintln!("WSLCD_E2E_KEEP: distribuce {DISTRO} a {} ponechány", self.data.display());
             return;
         }
         let _ = crate::docker::configure_tls(false);
@@ -55,10 +55,10 @@ fn user(a: &[&str]) -> Result<String, String> {
 #[ignore]
 fn live_docker_e2e() {
     let t = Instant::now();
-    let data = std::env::temp_dir().join(format!("wls-e2e-docker-{}", std::process::id()));
+    let data = std::env::temp_dir().join(format!("wslcd-e2e-docker-{}", std::process::id()));
     std::fs::create_dir_all(&data).unwrap();
     // SAFETY (env): test běží samostatně (--test-threads=1 / jen tento test)
-    unsafe { std::env::set_var("WLS_DATA_DIR", &data) };
+    unsafe { std::env::set_var("WSLCD_DATA_DIR", &data) };
     assert!(crate::config::isolated());
     let _ = std::process::Command::new("wsl.exe").args(["--unregister", DISTRO]).output();
     let _cleanup = Cleanup { data: data.clone() };
@@ -187,7 +187,7 @@ fn live_docker_e2e() {
     let shim = Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("debug").join("docker.exe")).filter(|p| p.exists());
     let shim_ps = |label: &str| {
         if let Some(s) = &shim {
-            let o = std::process::Command::new(s).args(["ps", "--format", "{{.Names}}"]).env("WLS_SHIM_DEBUG", "1").output().unwrap();
+            let o = std::process::Command::new(s).args(["ps", "--format", "{{.Names}}"]).env("WSLCD_SHIM_DEBUG", "1").output().unwrap();
             let out = String::from_utf8_lossy(&o.stdout).to_string();
             let err = String::from_utf8_lossy(&o.stderr).to_string();
             eprintln!("shim ({label}): {:?} | {}", out.trim(), err.lines().filter(|l| l.contains("fast path") || l.contains("context")).collect::<Vec<_>>().join(" | "));
@@ -227,7 +227,7 @@ fn live_docker_e2e() {
     let r = crate::worker::testkit::set_tls(Config::load(), false);
     assert!(r.is_ok(), "{r:?}");
     assert!(Docker::with_tls(PORT, None).ping());
-    assert!(root(&["sh", "-c", "systemctl is-active wls-tls-proxy || true"]).unwrap().trim() != "active");
+    assert!(root(&["sh", "-c", "systemctl is-active wslcd-tls-proxy || true"]).unwrap().trim() != "active");
 
     step(&t, &format!("hotovo za {:.0} s", t.elapsed().as_secs_f64()));
 }

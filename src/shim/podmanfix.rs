@@ -121,7 +121,7 @@ pub fn buildx_cli(args: &[String], cli: &[String]) -> Option<Vec<String>> {
         [p, flag, url] if p == "podman" && flag == "--url" => url.clone(),
         _ => return None,
     };
-    Some(vec!["sh".into(), "-c".into(), BUILDX_SCRIPT.into(), "wls-buildx".into(), url])
+    Some(vec!["sh".into(), "-c".into(), BUILDX_SCRIPT.into(), "wslcd-buildx".into(), url])
 }
 
 /// Přepínače `docker compose` (před podpříkazem), které berou hodnotu.
@@ -303,10 +303,10 @@ mod tests {
 
     #[test]
     fn buildx_routing() {
-        let cli = a(&["podman", "--url", "unix:///run/wls-podman/podman.sock"]);
+        let cli = a(&["podman", "--url", "unix:///run/wslcd-podman/podman.sock"]);
         let c = buildx_cli(&a(&["buildx", "ls"]), &cli).unwrap();
         assert_eq!(&c[..2], &a(&["sh", "-c"])[..]);
-        assert_eq!(&c[3..], &a(&["wls-buildx", "unix:///run/wls-podman/podman.sock"])[..]);
+        assert_eq!(&c[3..], &a(&["wslcd-buildx", "unix:///run/wslcd-podman/podman.sock"])[..]);
         assert!(buildx_cli(&a(&["build", "."]), &cli).is_none());
         assert!(buildx_cli(&a(&["buildx", "ls"]), &a(&["docker"])).is_none());
     }

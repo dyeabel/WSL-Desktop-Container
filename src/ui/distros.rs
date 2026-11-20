@@ -41,12 +41,12 @@ pub struct DistroDialogs {
 }
 
 impl DistroDialogs {
-    /// Pro ladění/screenshoty: WLS_DEBUG_REMOVE_DISTRO=<název> otevře dialog odebrání,
-    /// WLS_DEBUG_IMPORT=1 dialog importu.
+    /// Pro ladění/screenshoty: WSLCD_DEBUG_REMOVE_DISTRO=<název> otevře dialog odebrání,
+    /// WSLCD_DEBUG_IMPORT=1 dialog importu.
     pub fn from_env() -> Self {
         Self {
-            remove: std::env::var("WLS_DEBUG_REMOVE_DISTRO").ok().filter(|n| !n.is_empty()).map(|n| remove_dlg(&n)),
-            import: std::env::var("WLS_DEBUG_IMPORT").ok().map(|_| ImportDlg::default()),
+            remove: std::env::var("WSLCD_DEBUG_REMOVE_DISTRO").ok().filter(|n| !n.is_empty()).map(|n| remove_dlg(&n)),
+            import: std::env::var("WSLCD_DEBUG_IMPORT").ok().map(|_| ImportDlg::default()),
             ..Default::default()
         }
     }
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn import_validation() {
         let ex = vec!["Debian".to_string()];
-        assert!(import_problems("WLS-Test-Import", &ex, r"C:\a.tar").is_empty());
+        assert!(import_problems("WSLCD-Test-Import", &ex, r"C:\a.tar").is_empty());
         assert!(import_problems("x", &ex, r"C:\a.TAR.GZ").is_empty());
         assert!(import_problems("x", &ex, r"C:\a.vhdx").is_empty());
         assert_eq!(import_problems("debian", &ex, r"C:\a.tar").len(), 1);

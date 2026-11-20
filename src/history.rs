@@ -918,7 +918,7 @@ pub fn store() -> &'static Store {
     GLOBAL.get_or_init(Store::default)
 }
 
-/// Složka historie v datové složce aplikace (respektuje portable režim a `WLS_DATA_DIR`).
+/// Složka historie v datové složce aplikace (respektuje portable režim a `WSLCD_DATA_DIR`).
 pub fn dir() -> Option<PathBuf> {
     crate::config::data_dir().map(|d| d.join("history"))
 }
@@ -1058,7 +1058,7 @@ mod tests {
     const G: u64 = 1 << 30;
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("wls-hist-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("wslcd-hist-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }
@@ -1390,7 +1390,7 @@ mod tests {
         assert_eq!(summary(&[a(now - 21.0 * 3600.0)], &[], now).busiest, None);
     }
 
-    /// Skutečné vzorky ~2 minuty stejnou cestou jako aplikace do dočasné `WLS_DATA_DIR`,
+    /// Skutečné vzorky ~2 minuty stejnou cestou jako aplikace do dočasné `WSLCD_DATA_DIR`,
     /// zápis, nové načtení a souhrn:
     /// `cargo test live_history_two_minutes -- --ignored --nocapture`
     #[test]
@@ -1399,11 +1399,11 @@ mod tests {
         // skutečná konfigurace jen ke čtení (distribuce, port, TLS), pak oddělená datová složka
         let real = crate::config::Config::load();
         crate::docker::configure_tls(real.tls).expect("TLS");
-        let data = std::env::temp_dir().join(format!("wls-test-history-{}", std::process::id()));
+        let data = std::env::temp_dir().join(format!("wslcd-test-history-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&data);
         std::fs::create_dir_all(&data).unwrap();
         // SAFETY (env): test běží samostatně
-        unsafe { std::env::set_var("WLS_DATA_DIR", &data) };
+        unsafe { std::env::set_var("WSLCD_DATA_DIR", &data) };
         let mut cfg = real.clone();
         cfg.alerts.toast = false;
         let hdir = dir().unwrap();

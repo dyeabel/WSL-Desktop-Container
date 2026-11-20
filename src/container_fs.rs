@@ -802,7 +802,7 @@ pub fn upload(d: &Docker, id: &str, items: &[PathBuf], dir: &str, progress: impl
     if !st.is_dir() {
         return Err(tf!("{dir}: není adresář", "{dir}: not a directory"));
     }
-    let tmp = std::env::temp_dir().join(format!("wls-upload-{}-{}.tar", std::process::id(), now_nanos()));
+    let tmp = std::env::temp_dir().join(format!("wslcd-upload-{}-{}.tar", std::process::id(), now_nanos()));
     let res: Result<(usize, u64), String> = (|| {
         let f = std::fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
         let (f, files) = build_upload_tar(std::io::BufWriter::new(f), items)?;
@@ -1118,7 +1118,7 @@ mod tests {
     }
 
     fn tmp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("wls-cfs-test-{tag}-{}-{}", std::process::id(), now_nanos()));
+        let d = std::env::temp_dir().join(format!("wslcd-cfs-test-{tag}-{}-{}", std::process::id(), now_nanos()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -1223,15 +1223,15 @@ mod tests {
         assert_eq!(s, "č\n");
     }
 
-    /// Živý test proti enginu (WLS_PORT, výchozí 2375): kontejner `wls-test-cfs` z alpine:3.20.
+    /// Živý test proti enginu (WSLCD_PORT, výchozí 2375): kontejner `wslcd-test-cfs` z alpine:3.20.
     /// `cargo test live_container_fs -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn live_container_fs() {
-        let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+        let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
         let d = Docker::new(port);
         assert!(d.ping(), "API na {port} neodpovídá");
-        const NAME: &str = "wls-test-cfs";
+        const NAME: &str = "wslcd-test-cfs";
         let cleanup = || {
             let _ = d.container_action(NAME, "remove");
         };

@@ -306,7 +306,7 @@ pub fn run(args: &[String], port: u16, tls: bool, debug: bool) -> Result<bool, S
         None
     };
     if debug {
-        eprintln!("[wls-docker] events: GET {} (API, schéma Dockeru)", plan.path);
+        eprintln!("[wslcd-docker] events: GET {} (API, schéma Dockeru)", plan.path);
     }
     let mut out = std::io::stdout();
     let r = stream(port, cfg, &plan.path, |l| {
@@ -321,7 +321,7 @@ pub fn run(args: &[String], port: u16, tls: bool, debug: bool) -> Result<bool, S
         Ok(()) => Ok(true),
         Err(Fail::Before(e)) => {
             if debug {
-                eprintln!("[wls-docker] events přes API nejdou ({e}) – podman events");
+                eprintln!("[wslcd-docker] events přes API nejdou ({e}) – podman events");
             }
             Ok(false)
         }

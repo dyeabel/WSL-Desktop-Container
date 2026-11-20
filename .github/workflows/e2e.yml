@@ -8,8 +8,8 @@
 #   - volný port 2385 na 127.0.0.1;
 #   - Rust (MSVC) a Visual Studio Build Tools s Windows SDK (rc.exe), nebo nechat nainstalovat
 #     krok rust-toolchain.
-# Test vytvoří a na konci odregistruje distribuci WLS-Test-Docker; nesahá na ostatní distribuce,
-# běžící engine ani konfiguraci aplikace (WLS_DATA_DIR = dočasná složka).
+# Test vytvoří a na konci odregistruje distribuci WSLCD-Test-Docker; nesahá na ostatní distribuce,
+# běžící engine ani konfiguraci aplikace (WSLCD_DATA_DIR = dočasná složka).
 #
 # Spuštění: Actions → e2e → Run workflow (jen ručně – bez runneru by úloha čekala ve frontě).
 name: e2e
@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       keep:
-        description: 'Ponechat distribuci WLS-Test-Docker po testu (ladění)'
+        description: 'Ponechat distribuci WSLCD-Test-Docker po testu (ladění)'
         type: boolean
         default: false
 
@@ -47,11 +47,11 @@ jobs:
       - name: Docker E2E
         shell: pwsh
         env:
-          WLS_E2E_KEEP: ${{ inputs.keep && '1' || '' }}
+          WSLCD_E2E_KEEP: ${{ inputs.keep && '1' || '' }}
         run: |
-          if (-not $env:WLS_E2E_KEEP) { Remove-Item Env:WLS_E2E_KEEP -ErrorAction SilentlyContinue }
+          if (-not $env:WSLCD_E2E_KEEP) { Remove-Item Env:WSLCD_E2E_KEEP -ErrorAction SilentlyContinue }
           cargo test live_docker_e2e -- --ignored --nocapture --test-threads=1
       - name: Úklid
         if: always() && !inputs.keep
         shell: pwsh
-        run: wsl --unregister WLS-Test-Docker 2>$null; exit 0
+        run: wsl --unregister WSLCD-Test-Docker 2>$null; exit 0

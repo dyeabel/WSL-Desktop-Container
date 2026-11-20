@@ -152,7 +152,7 @@ fn npipe_section(app: &mut App, ui: &mut egui::Ui) {
         }
         match crate::npipe::state() {
             crate::npipe::State::Running => {
-                ui.label(RichText::new(t!("\u{E184} Běží – jen dokud běží WLS Desktop", "\u{E184} Running – only while WLS Desktop runs")).color(theme::green()).small());
+                ui.label(RichText::new(t!("\u{E184} Běží – jen dokud běží WSL Container Desktop", "\u{E184} Running – only while WSL Container Desktop runs")).color(theme::green()).small());
             }
             crate::npipe::State::Failed(e) if on => {
                 ui.label(RichText::new(tf!("\u{E4E0} Rouru nelze spustit: {e}", "\u{E4E0} Cannot start the pipe: {e}")).color(theme::red()).small());
@@ -449,8 +449,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
         section(ui, t!("O aplikaci", "About"));
         ui.label(muted(tf!(
-            "WLS Desktop {} · Rust + egui · Docker API přes tcp://127.0.0.1 · konfigurace v %APPDATA%\\WLS_Desktop",
-            "WLS Desktop {} · Rust + egui · Docker API via tcp://127.0.0.1 · configuration in %APPDATA%\\WLS_Desktop",
+            "WSL Container Desktop {} · Rust + egui · Docker API přes tcp://127.0.0.1 · konfigurace v %APPDATA%\\WSL_Container_Desktop",
+            "WSL Container Desktop {} · Rust + egui · Docker API via tcp://127.0.0.1 · configuration in %APPDATA%\\WSL_Container_Desktop",
             env!("CARGO_PKG_VERSION")
         )));
     }
@@ -516,7 +516,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             ui.spinner();
                         }
                     });
-                    ui.label(muted(t!("Po instalaci otevři nový terminál. Ladění: proměnná WLS_SHIM_DEBUG=1 vypíše, co se spouští ve WSL.", "Open a new terminal after installing. Debugging: WLS_SHIM_DEBUG=1 prints what runs in WSL.")).small());
+                    ui.label(muted(t!("Po instalaci otevři nový terminál. Ladění: proměnná WSLCD_SHIM_DEBUG=1 vypíše, co se spouští ve WSL.", "Open a new terminal after installing. Debugging: WSLCD_SHIM_DEBUG=1 prints what runs in WSL.")).small());
                 }
             }
         });
@@ -594,12 +594,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-/// Jiné kopie shimu WLS Desktop (starší verze v PATH, zbylá výchozí instalace) a tlačítko úklidu.
+/// Jiné kopie shimu WSL Container Desktop (starší verze v PATH, zbylá výchozí instalace) a tlačítko úklidu.
 pub fn duplicates_ui(app: &App, ui: &mut egui::Ui, s: &crate::shim_install::Status, checking: bool) {
     if s.duplicates.is_empty() {
         return;
     }
-    ui.label(RichText::new(t!("\u{E4E0} Další kopie příkazu docker z WLS Desktop:", "\u{E4E0} Other copies of the WLS Desktop docker command:")).color(theme::yellow()).small());
+    ui.label(RichText::new(t!("\u{E4E0} Další kopie příkazu docker z WSL Container Desktop:", "\u{E4E0} Other copies of the WSL Container Desktop docker command:")).color(theme::yellow()).small());
     for d in &s.duplicates {
         let what = match (d.in_path, d.delete_files) {
             (true, true) => t!("v PATH, soubory se smažou", "in PATH, files will be deleted"),

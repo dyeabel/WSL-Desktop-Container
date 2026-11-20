@@ -1,11 +1,11 @@
 //! Integrační testy proti skutečnému WSL/Dockeru.
 //! Spouštěj ručně: `cargo test -- --ignored --test-threads=1`
-//! (distribuce se bere z WLS_DISTRO, výchozí Ubuntu)
+//! (distribuce se bere z WSLCD_DISTRO, výchozí Ubuntu)
 
 use crate::{docker::Docker, fs, wsl};
 
 fn distro() -> String {
-    std::env::var("WLS_DISTRO").unwrap_or_else(|_| "Ubuntu".into())
+    std::env::var("WSLCD_DISTRO").unwrap_or_else(|_| "Ubuntu".into())
 }
 
 #[test]
@@ -45,13 +45,13 @@ fn live_fs_root_lists_docker_dir() {
     assert!(e.iter().any(|x| x.name == "volumes"), "{:?}", e.iter().map(|x| &x.name).collect::<Vec<_>>());
 }
 
-/// Podman API (port z WLS_PODMAN_PORT, výchozí 2376): stejné operace jako aplikace.
+/// Podman API (port z WSLCD_PODMAN_PORT, výchozí 2376): stejné operace jako aplikace.
 #[test]
 #[ignore]
 fn live_podman_api() {
     use crate::engine::Engine;
     use crate::worker::RunSpec;
-    let port: u16 = std::env::var("WLS_PODMAN_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2376);
+    let port: u16 = std::env::var("WSLCD_PODMAN_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2376);
     let d = Docker::new(port);
     assert!(d.ping(), "Podman API na {port} neodpovídá");
 
@@ -70,28 +70,28 @@ fn live_podman_api() {
 
     // kontejner přes CLI (podman --url) jako v aplikaci
     let distro = distro();
-    let _ = wsl::run(&distro, None, None, &["podman", "--url", &format!("tcp://127.0.0.1:{port}"), "rm", "-f", "wls-pod-test"]);
-    let spec = RunSpec { image: "alpine:3.20".into(), name: "wls-pod-test".into(), command: "sleep 120".into(), restart: "no".into(), ..Default::default() };
+    let _ = wsl::run(&distro, None, None, &["podman", "--url", &format!("tcp://127.0.0.1:{port}"), "rm", "-f", "wslcd-pod-test"]);
+    let spec = RunSpec { image: "alpine:3.20".into(), name: "wslcd-pod-test".into(), command: "sleep 120".into(), restart: "no".into(), ..Default::default() };
     wsl::run_owned(&distro, None, None, &spec.args_for(Engine::Podman, port, false)).expect("podman run");
-    let c = d.snapshot().containers.into_iter().find(|c| c.name() == "wls-pod-test").expect("kontejner v API");
+    let c = d.snapshot().containers.into_iter().find(|c| c.name() == "wslcd-pod-test").expect("kontejner v API");
     assert!(c.running(), "{}", c.status);
-    assert!(d.stats(&c.id, "wls-pod-test").is_some(), "stats");
+    assert!(d.stats(&c.id, "wslcd-pod-test").is_some(), "stats");
     d.container_action(&c.id, "stop").expect("stop");
     d.container_action(&c.id, "remove").expect("remove");
 
-    d.post_json("/volumes/create", serde_json::json!({"Name": "wls-pod-vol"})).expect("volume");
-    d.delete("/volumes/wls-pod-vol").expect("volume rm");
-    d.post_json("/networks/create", serde_json::json!({"Name": "wls-pod-net", "Driver": "bridge"})).expect("net");
-    d.delete("/networks/wls-pod-net").expect("net rm");
+    d.post_json("/volumes/create", serde_json::json!({"Name": "wslcd-pod-vol"})).expect("volume");
+    d.delete("/volumes/wslcd-pod-vol").expect("volume rm");
+    d.post_json("/networks/create", serde_json::json!({"Name": "wslcd-pod-net", "Driver": "bridge"})).expect("net");
+    d.delete("/networks/wslcd-pod-net").expect("net rm");
     assert!(d.df().is_some(), "df");
 }
 
-/// Přidání distribuce: instalace (Debian jako WLS-Test-Debian), příprava, kontrola, odregistrace.
+/// Přidání distribuce: instalace (Debian jako WSLCD-Test-Debian), příprava, kontrola, odregistrace.
 /// Stahuje ~100 MB – spouštěj jen ručně: `cargo test live_add_distro -- --ignored --nocapture`.
 #[test]
 #[ignore]
 fn live_add_distro() {
-    let name = "WLS-Test-Debian";
+    let name = "WSLCD-Test-Debian";
     let _ = std::process::Command::new("wsl.exe").args(["--unregister", name]).output();
     let out = wsl::install_distro("Debian", name).expect("install");
     eprintln!("install: {}", out.trim());
@@ -111,11 +111,11 @@ fn live_add_distro() {
 
 /// pkg_install / pkg_installed / pkg_remove v dočasných kontejnerech Fedory (dnf),
 /// openSUSE (zypper) a Archu (pacman); Debian (apt) jen detekce bez změn.
-/// Potřebuje Podman API na portu z WLS_PORT (výchozí 2375). Stahuje image (~250 MB).
+/// Potřebuje Podman API na portu z WSLCD_PORT (výchozí 2375). Stahuje image (~250 MB).
 #[test]
 #[ignore]
 fn live_pkg_helpers() {
-    let port = std::env::var("WLS_PORT").unwrap_or_else(|_| "2375".into());
+    let port = std::env::var("WSLCD_PORT").unwrap_or_else(|_| "2375".into());
     let url = format!("tcp://127.0.0.1:{port}");
     let script = format!(
         "{}\npkg_install less >/dev/null 2>&1; echo \"inst:$(pkg_installed less bash neexistuje-xyz)\"; pkg_remove less >/dev/null 2>&1; echo \"after:$(pkg_installed less bash)\"",
@@ -166,24 +166,24 @@ fn live_docker_host_roundtrip() {
 }
 
 /// Detail kontejneru: inspect -> RunSpec, statistiky, logy a znovuvytvoření (úspěch i návrat
-/// původního). Pracuje jen s vlastními objekty `wls-test-detail*`.
-/// `WLS_DISTRO=Debian cargo test live_container_detail -- --ignored --nocapture`
+/// původního). Pracuje jen s vlastními objekty `wslcd-test-detail*`.
+/// `WSLCD_DISTRO=Debian cargo test live_container_detail -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn live_container_detail() {
     use crate::engine::Engine;
     use crate::worker::RunSpec;
     use std::time::Duration;
-    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
     let d = Docker::new(port);
     assert!(d.ping(), "API na {port} neodpovídá");
     let ver: serde_json::Value = d.get("/version").unwrap();
     let engine = if ver.to_string().contains("Podman") { Engine::Podman } else { Engine::Docker };
     let cfg = crate::config::Config { distro: distro(), engine, port, ..Default::default() };
-    let name = "wls-test-detail";
-    let vol = "wls-test-detail-vol";
+    let name = "wslcd-test-detail";
+    let vol = "wslcd-test-detail-vol";
     let cleanup = || {
-        for n in [name, "wls-test-detail-wls-old"] {
+        for n in [name, "wslcd-test-detail-wslcd-old"] {
             let _ = d.container_action(n, "remove");
         }
         let _ = d.delete(&format!("/volumes/{vol}"));
@@ -252,7 +252,7 @@ fn live_container_detail() {
     assert!(new.running);
     assert!(new.env.iter().any(|(k, v)| k == "B" && v == "2"));
     assert_eq!(new.port_specs, vec!["18082:80".to_string()]);
-    assert!(d.get::<serde_json::Value>("/containers/wls-test-detail-wls-old/json").is_err());
+    assert!(d.get::<serde_json::Value>("/containers/wslcd-test-detail-wslcd-old/json").is_err());
 
     // nový kontejner hned skončí -> odstraní se a původní se vrátí a znovu spustí
     let bad = RunSpec { command: "false".into(), restart: "no".into(), ..new.to_run_spec() };
@@ -262,7 +262,7 @@ fn live_container_detail() {
     let back = inspect(name);
     assert_eq!(back.id, new.id, "vrátil se původní kontejner");
     assert!(back.running, "{}", back.status);
-    assert!(d.get::<serde_json::Value>("/containers/wls-test-detail-wls-old/json").is_err());
+    assert!(d.get::<serde_json::Value>("/containers/wslcd-test-detail-wslcd-old/json").is_err());
     let all: Vec<crate::docker::Container> = d.get("/containers/json?all=1").unwrap();
     assert_eq!(all.iter().filter(|c| c.name().starts_with(name)).count(), 1);
 
@@ -270,22 +270,22 @@ fn live_container_detail() {
 }
 
 /// Znovuvytvoření zachová všechny sítě (aliasy, pevnou IP) i anonymní volume s daty.
-/// Pracuje jen s vlastními objekty `wls-test-recreate`, `wls-test-net-a`, `wls-test-net-b`
+/// Pracuje jen s vlastními objekty `wslcd-test-recreate`, `wslcd-test-net-a`, `wslcd-test-net-b`
 /// a anonymními volume tohoto kontejneru.
-/// `WLS_DISTRO=Debian cargo test live_recreate_networks -- --ignored --nocapture`
+/// `WSLCD_DISTRO=Debian cargo test live_recreate_networks -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn live_recreate_networks() {
     use crate::engine::Engine;
     use serde_json::{json, Value};
-    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
     let d = Docker::new(port);
     assert!(d.ping(), "API na {port} neodpovídá");
     let ver: Value = d.get("/version").unwrap();
     let engine = if ver.to_string().contains("Podman") { Engine::Podman } else { Engine::Docker };
     let cfg = crate::config::Config { distro: distro(), engine, port, ..Default::default() };
-    let name = "wls-test-recreate";
-    let (net_a, net_b, ip_b) = ("wls-test-net-a", "wls-test-net-b", "10.231.77.50");
+    let name = "wslcd-test-recreate";
+    let (net_a, net_b, ip_b) = ("wslcd-test-net-a", "wslcd-test-net-b", "10.231.77.50");
     // anonymní volume našich kontejnerů (podle inspectu, ať se nesáhne na cizí)
     let anon_of = |c: &str| -> Vec<String> {
         d.get::<Value>(&format!("/containers/{c}/json"))
@@ -300,7 +300,7 @@ fn live_recreate_networks() {
     };
     let cleanup = |extra: &[String]| {
         let mut vols: Vec<String> = extra.to_vec();
-        for c in [name, "wls-test-recreate-wls-old"] {
+        for c in [name, "wslcd-test-recreate-wslcd-old"] {
             vols.extend(anon_of(c));
             let _ = d.container_action(c, "remove");
         }
@@ -383,7 +383,7 @@ fn live_recreate_networks() {
     let second = wait_log(name);
     eprintln!("log nového: {second:?}");
     assert!(second.contains("found keep-me"), "{second}");
-    assert!(d.get::<Value>("/containers/wls-test-recreate-wls-old/json").is_err());
+    assert!(d.get::<Value>("/containers/wslcd-test-recreate-wslcd-old/json").is_err());
     // anonymní volume po odstranění starého kontejneru stále existuje
     assert!(d.get::<Value>(&format!("/volumes/{}", anon[0])).is_ok());
 
@@ -422,19 +422,19 @@ fn live_autostart_roundtrip() {
 #[test]
 #[ignore]
 fn live_events_stream() {
-    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = Docker::new(port).stream_events(|| {}, |e| tx.send((e.action().to_string(), e.name(), e.triggers_refresh())).is_ok());
     });
     std::thread::sleep(std::time::Duration::from_millis(500));
     let d = Docker::new(port);
-    d.post_json("/containers/create?name=wls-test-events", serde_json::json!({"Image": "docker.io/library/alpine:3.20", "Cmd": ["true"]}))
+    d.post_json("/containers/create?name=wslcd-test-events", serde_json::json!({"Image": "docker.io/library/alpine:3.20", "Cmd": ["true"]}))
         .expect("create");
-    d.delete("/containers/wls-test-events?force=1").expect("remove");
+    d.delete("/containers/wslcd-test-events?force=1").expect("remove");
     let mut seen = vec![];
     while let Ok(ev) = rx.recv_timeout(std::time::Duration::from_secs(5)) {
-        if ev.1 == "wls-test-events" {
+        if ev.1 == "wslcd-test-events" {
             seen.push(ev);
         }
     }
@@ -445,24 +445,24 @@ fn live_events_stream() {
 
 /// Sestavení image z Dockerfile stejnou cestou jako aplikace (`worker::build::run_build`):
 /// dočasná složka v %TEMP% (windowsová cesta -> wslpath), engine a distribuce z konfigurace
-/// (WLS_DISTRO ji přepíše), API na portu WLS_PORT (výchozí 2375). Image `wls-test-build:latest`
+/// (WSLCD_DISTRO ji přepíše), API na portu WSLCD_PORT (výchozí 2375). Image `wslcd-test-build:latest`
 /// a složka se na konci smažou.
 #[test]
 #[ignore]
 fn live_build_image() {
     let cfg = crate::config::Config::load();
-    let distro = std::env::var("WLS_DISTRO").unwrap_or(cfg.distro.clone());
-    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let distro = std::env::var("WSLCD_DISTRO").unwrap_or(cfg.distro.clone());
+    let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
     let d = Docker::new(port);
     assert!(d.ping(), "API na {port} neodpovídá");
 
-    let dir = std::env::temp_dir().join(format!("wls-test-build-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("wslcd-test-build-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("Dockerfile"), "FROM docker.io/library/alpine:3.20\nRUN echo ok\n").unwrap();
 
     let spec = crate::worker::BuildSpec {
         context: dir.to_string_lossy().to_string(),
-        tags: "wls-test-build:latest".into(),
+        tags: "wslcd-test-build:latest".into(),
         ..Default::default()
     };
     let mut lines = Vec::new();
@@ -472,8 +472,8 @@ fn live_build_image() {
     });
     eprintln!("=> {res:?} ({} řádků výstupu)", lines.len());
 
-    let img: Result<serde_json::Value, crate::docker::ApiError> = d.get("/images/wls-test-build:latest/json");
-    let removed = d.delete("/images/wls-test-build:latest");
+    let img: Result<serde_json::Value, crate::docker::ApiError> = d.get("/images/wslcd-test-build:latest/json");
+    let removed = d.delete("/images/wslcd-test-build:latest");
     eprintln!("odstranění image: {removed:?}");
     let _ = std::fs::remove_dir_all(&dir);
 
@@ -482,7 +482,7 @@ fn live_build_image() {
     let img = img.expect("image v API");
     eprintln!("image Id: {}", img.get("Id").and_then(|v| v.as_str()).unwrap_or("?"));
     assert!(removed.is_ok(), "{removed:?}");
-    assert!(d.get::<serde_json::Value>("/images/wls-test-build:latest/json").is_err(), "image zůstal");
+    assert!(d.get::<serde_json::Value>("/images/wslcd-test-build:latest/json").is_err(), "image zůstal");
     assert!(!dir.exists());
 }
 
@@ -496,23 +496,23 @@ fn live_tls_proxy() {
     let distro = distro();
     let root = |args: &[&str]| wsl::run(&distro, Some("root"), None, args);
     let cleanup = || {
-        let _ = root(&["sh", "-c", "systemctl disable --now wls-test-tls-proxy wls-test-podman >/dev/null 2>&1; \
-            rm -f /etc/systemd/system/wls-test-tls-proxy.service; systemctl daemon-reload; rm -rf /tmp/wls-test-tls /tmp/wls-test-podman.sock"]);
+        let _ = root(&["sh", "-c", "systemctl disable --now wslcd-test-tls-proxy wslcd-test-podman >/dev/null 2>&1; \
+            rm -f /etc/systemd/system/wslcd-test-tls-proxy.service; systemctl daemon-reload; rm -rf /tmp/wslcd-test-tls /tmp/wslcd-test-podman.sock"]);
     };
     cleanup();
-    root(&["sh", "-c", "systemd-run --unit wls-test-podman podman system service --time=0 unix:///tmp/wls-test-podman.sock && \
-        for i in $(seq 50); do [ -S /tmp/wls-test-podman.sock ] && break; sleep 0.2; done"]).expect("podman socket");
+    root(&["sh", "-c", "systemd-run --unit wslcd-test-podman podman system service --time=0 unix:///tmp/wslcd-test-podman.sock && \
+        for i in $(seq 50); do [ -S /tmp/wslcd-test-podman.sock ] && break; sleep 0.2; done"]).expect("podman socket");
     let script = format!(
-        "{}\ntls_proxy /tmp/wls-test-podman.sock wls-test-podman.service && sleep 1 && systemctl is-active wls-test-tls-proxy",
+        "{}\ntls_proxy /tmp/wslcd-test-podman.sock wslcd-test-podman.service && sleep 1 && systemctl is-active wslcd-test-tls-proxy",
         crate::engine::Engine::Podman.setup_script().split("\nset -e\n").next().unwrap()
     );
-    let out = root(&["env", "PORT=2377", "WLS_TLS_DIR=/tmp/wls-test-tls", "WLS_TLS_UNIT=wls-test-tls-proxy", "sh", "-c", &script]);
+    let out = root(&["env", "PORT=2377", "WSLCD_TLS_DIR=/tmp/wslcd-test-tls", "WSLCD_TLS_UNIT=wslcd-test-tls-proxy", "sh", "-c", &script]);
     eprintln!("{out:?}");
     // certifikáty do dočasné složky ve Windows
-    let dir = std::env::temp_dir().join("wls-test-tls");
+    let dir = std::env::temp_dir().join("wslcd-test-tls");
     let _ = std::fs::create_dir_all(&dir);
     for f in ["ca.pem", "cert.pem", "key.pem"] {
-        let pem = root(&["cat", &format!("/tmp/wls-test-tls/{f}")]).expect(f);
+        let pem = root(&["cat", &format!("/tmp/wslcd-test-tls/{f}")]).expect(f);
         std::fs::write(dir.join(f), pem).unwrap();
     }
     let cfg = crate::docker::tls_config(&dir);
@@ -536,7 +536,7 @@ fn live_tls_proxy() {
     let second = cfg.as_ref().map(|c| Docker::with_tls(2377, Some(std::sync::Arc::new(c.clone()))).ping()).unwrap_or(false);
     // relay pojmenované roury -> TLS proxy na 2377 (testovací roura, ne roura aplikace)
     let via_pipe = cfg.as_ref().ok().map(|c| {
-        let name = format!(r"\\.\pipe\wls_test_tls_{}", std::process::id());
+        let name = format!(r"\\.\pipe\wslcd_test_tls_{}", std::process::id());
         let c = std::sync::Arc::new(c.clone());
         let relay = crate::npipe::Relay::start(&name, std::sync::Arc::new(move || Ok(crate::npipe::Target::Tls(2377, c.clone())))).expect("relay");
         let r = (crate::npipe::tests::ping_pipe(&name), crate::npipe::tests::get_via_pipe(&name, "/version"));
@@ -558,12 +558,12 @@ fn live_tls_proxy() {
 }
 
 /// Relay pojmenované roury proti běžícímu API bez TLS na 127.0.0.1:2375 (jen čte /_ping),
-/// na testovací rouře `\\.\pipe\wls_test_engine_<pid>` – roura aplikace se nepoužije.
+/// na testovací rouře `\\.\pipe\wslcd_test_engine_<pid>` – roura aplikace se nepoužije.
 /// `cargo test live_npipe_plain -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn live_npipe_plain() {
-    let name = format!(r"\\.\pipe\wls_test_engine_{}", std::process::id());
+    let name = format!(r"\\.\pipe\wslcd_test_engine_{}", std::process::id());
     let relay = crate::npipe::Relay::start(&name, std::sync::Arc::new(|| Ok(crate::npipe::Target::Plain(2375)))).expect("relay");
     let r = crate::npipe::tests::ping_pipe(&name);
     let version = crate::npipe::tests::get_via_pipe(&name, "/version");
@@ -580,38 +580,38 @@ fn live_npipe_plain() {
 #[ignore]
 fn live_fs_root_symlink_safe() {
     let d = distro();
-    let dir = "/tmp/wls-test-fs-root";
+    let dir = "/tmp/wslcd-test-fs-root";
     let root = |a: &[&str]| wsl::run(&d, Some("root"), None, a);
-    root(&["sh", "-c", "rm -rf /tmp/wls-test-fs-root && mkdir /tmp/wls-test-fs-root && cd /tmp/wls-test-fs-root && echo tajne > secret && chmod 600 secret && ln -s secret link && echo a > plain && chmod 640 plain"]).unwrap();
+    root(&["sh", "-c", "rm -rf /tmp/wslcd-test-fs-root && mkdir /tmp/wslcd-test-fs-root && cd /tmp/wslcd-test-fs-root && echo tajne > secret && chmod 600 secret && ln -s secret link && echo a > plain && chmod 640 plain"]).unwrap();
     let w = fs::write_text(&d, true, &format!("{dir}/link"), "pwned\n");
     let c = fs::chmod(&d, true, "666", &format!("{dir}/link"));
     let p = fs::write_text(&d, true, &format!("{dir}/plain"), "b\n");
-    let state = root(&["sh", "-c", "cd /tmp/wls-test-fs-root && cat secret && stat -c '%a %n' secret plain && cat plain && ls -a"]).unwrap();
+    let state = root(&["sh", "-c", "cd /tmp/wslcd-test-fs-root && cat secret && stat -c '%a %n' secret plain && cat plain && ls -a"]).unwrap();
     let _ = root(&["rm", "-rf", dir]);
     eprintln!("{w:?} {c:?} {p:?}\n{state}");
     assert!(w.is_err() && c.is_err(), "{w:?} {c:?}");
     assert!(p.is_ok(), "{p:?}");
     assert!(state.contains("tajne") && state.contains("600 secret") && state.contains("640 plain") && state.contains("b\n"), "{state}");
-    assert!(!state.contains(".wls-edit"), "{state}");
+    assert!(!state.contains(".wslcd-edit"), "{state}");
 }
 
-/// Záloha, obnova a klon volume + velikosti (jen volume `wls-test-*`).
-/// `WLS_DISTRO=Debian cargo test live_volume_backup_restore -- --ignored --nocapture`
+/// Záloha, obnova a klon volume + velikosti (jen volume `wslcd-test-*`).
+/// `WSLCD_DISTRO=Debian cargo test live_volume_backup_restore -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn live_volume_backup_restore() {
     use crate::engine::Engine;
     use crate::worker::{volume_op_for_test, Cmd, HELPER_IMAGE};
-    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
     let d = Docker::new(port);
     assert!(d.ping(), "API na {port} neodpovídá");
     let ver: serde_json::Value = d.get("/version").unwrap();
     let engine = if ver.to_string().contains("Podman") { Engine::Podman } else { Engine::Docker };
     let cfg = crate::config::Config { distro: distro(), engine, port, ..Default::default() };
     let cli = engine.cli(port, false);
-    let (src, dst, cln) = ("wls-test-backup", "wls-test-restore", "wls-test-clone");
+    let (src, dst, cln) = ("wslcd-test-backup", "wslcd-test-restore", "wslcd-test-clone");
     // složka s mezerou a apostrofem (uvozovky Windows v názvech nedovolí)
-    let dir = std::env::temp_dir().join("wls-test backup it's");
+    let dir = std::env::temp_dir().join("wslcd-test backup it's");
     let cleanup = || {
         for v in [src, dst, cln] {
             let _ = d.delete(&format!("/volumes/{v}?force=true"));
@@ -649,7 +649,7 @@ fn live_volume_backup_restore() {
     assert!(du.get(src).is_some_and(|s| *s > 0), "{du:?}");
 
     // záloha do Windows
-    let target = dir.join("wls-test-backup 'x'.tar.gz").to_string_lossy().to_string();
+    let target = dir.join("wslcd-test-backup 'x'.tar.gz").to_string_lossy().to_string();
     let r = volume_op_for_test(cfg.clone(), Cmd::BackupVolume { volume: src.into(), target: target.clone(), stop: false });
     eprintln!("záloha: {r:?}");
     assert!(r.is_ok(), "{r:?}");
@@ -680,8 +680,8 @@ fn live_volume_backup_restore() {
 
     cleanup();
     let left: serde_json::Value = d.get("/volumes").unwrap();
-    eprintln!("úklid hotov, zbývající volume wls-test-*: {}", left.to_string().matches("\"wls-test-").count());
-    assert!(!left.to_string().contains("\"wls-test-backup\"") && !dir.exists());
+    eprintln!("úklid hotov, zbývající volume wslcd-test-*: {}", left.to_string().matches("\"wslcd-test-").count());
+    assert!(!left.to_string().contains("\"wslcd-test-backup\"") && !dir.exists());
 }
 
 /// Zrušení sestavení: `RUN sleep 45` se po zrušení nesmí dál provádět v distribuci.
@@ -689,11 +689,11 @@ fn live_volume_backup_restore() {
 #[ignore]
 fn live_build_cancel() {
     let cfg = crate::config::Config::load();
-    let distro = std::env::var("WLS_DISTRO").unwrap_or(cfg.distro.clone());
-    let dir = std::env::temp_dir().join(format!("wls-test-build-cancel-{}", std::process::id()));
+    let distro = std::env::var("WSLCD_DISTRO").unwrap_or(cfg.distro.clone());
+    let dir = std::env::temp_dir().join(format!("wslcd-test-build-cancel-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("Dockerfile"), "FROM docker.io/library/alpine:3.20\nRUN sleep 45 && echo wlscancel\n").unwrap();
-    let spec = crate::worker::BuildSpec { context: dir.to_string_lossy().to_string(), tags: "wls-test-cancel:latest".into(), ..Default::default() };
+    let spec = crate::worker::BuildSpec { context: dir.to_string_lossy().to_string(), tags: "wslcd-test-cancel:latest".into(), ..Default::default() };
     std::thread::spawn(|| {
         std::thread::sleep(std::time::Duration::from_secs(8));
         crate::worker::cancel_build();
@@ -711,7 +711,7 @@ fn live_build_cancel() {
 }
 
 /// Nový stack ze šablony Redis stejnou cestou jako aplikace (`worker::compose::create_stack`):
-/// dočasná složka /tmp/wls-test-compose-*, projekt `wls-test-compose`, port hostitele mimo 6379.
+/// dočasná složka /tmp/wslcd-test-compose-*, projekt `wslcd-test-compose`, port hostitele mimo 6379.
 /// Pak `config -q` (soubor i obsah editoru přes stdin), `up -d`, kontrola kontejneru přes API,
 /// nakonec `down -v` a smazání složky. Jiných stacků, kontejnerů, volume ani image se nedotýká.
 #[test]
@@ -719,13 +719,13 @@ fn live_build_cancel() {
 fn live_compose_new_stack() {
     use crate::worker::compose::{create_stack, validate, NewStackSpec};
     let cfg = crate::config::Config::load();
-    let distro = std::env::var("WLS_DISTRO").unwrap_or(cfg.distro.clone());
-    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let distro = std::env::var("WSLCD_DISTRO").unwrap_or(cfg.distro.clone());
+    let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
     let d = Docker::new(port);
     assert!(d.ping(), "API na {port} neodpovídá");
     let cli = cfg.engine.cli(port, false);
-    let project = "wls-test-compose";
-    let dir = format!("/tmp/wls-test-compose-{}", std::process::id());
+    let project = "wslcd-test-compose";
+    let dir = format!("/tmp/wslcd-test-compose-{}", std::process::id());
     let t = crate::compose_templates::TEMPLATES.iter().find(|t| t.id == "redis").unwrap();
     let host_port = 16379 + std::process::id() % 1000;
     let env = crate::ui::compose_new::set_env_line(&t.render_env(project), "REDIS_PORT", &host_port.to_string());
@@ -784,20 +784,20 @@ fn live_compose_new_stack() {
     assert!(rm.is_ok() && fs::list(&distro, false, &dir).is_err());
 }
 
-/// Správa distribucí: rootfs alpine (export kontejneru přes engine v WLS_DISTRO) -> wsl --import
-/// jako WLS-Test-Import, kontrola v `wsl -l -v`, disk (sparse, compact), export, unregister.
-/// Sahá jen na distribuci WLS-Test-Import. Stahuje alpine:3.20 (~3 MB).
-/// `WLS_DISTRO=Debian cargo test live_distro_manage -- --ignored --nocapture`
+/// Správa distribucí: rootfs alpine (export kontejneru přes engine v WSLCD_DISTRO) -> wsl --import
+/// jako WSLCD-Test-Import, kontrola v `wsl -l -v`, disk (sparse, compact), export, unregister.
+/// Sahá jen na distribuci WSLCD-Test-Import. Stahuje alpine:3.20 (~3 MB).
+/// `WSLCD_DISTRO=Debian cargo test live_distro_manage -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn live_distro_manage() {
-    const NAME: &str = "WLS-Test-Import";
-    const CTR: &str = "wls-test-rootfs";
-    /// Úklid i při panice – odregistruje jen WLS-Test-* distribuci.
+    const NAME: &str = "WSLCD-Test-Import";
+    const CTR: &str = "wslcd-test-rootfs";
+    /// Úklid i při panice – odregistruje jen WSLCD-Test-* distribuci.
     struct Cleanup(std::path::PathBuf);
     impl Drop for Cleanup {
         fn drop(&mut self) {
-            assert!(NAME.starts_with("WLS-Test-"));
+            assert!(NAME.starts_with("WSLCD-Test-"));
             if wsl::list().map(|l| l.iter().any(|d| d.name == NAME)).unwrap_or(false) {
                 let _ = wsl::terminate(NAME);
                 let _ = wsl::unregister(NAME);
@@ -814,7 +814,7 @@ fn live_distro_manage() {
         wsl::run_owned(&engine_distro, None, None, &v)
     };
 
-    let tmp = std::env::temp_dir().join(format!("wls-test-import-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("wslcd-test-import-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).unwrap();
     let guard = Cleanup(tmp.clone());
     if wsl::list().unwrap().iter().any(|d| d.name == NAME) {
@@ -838,7 +838,7 @@ fn live_distro_manage() {
     let out = wsl::import(NAME, &folder.display().to_string(), &rootfs.display().to_string()).expect("import");
     eprintln!("import: {}", out.trim());
     let list = wsl::list().unwrap();
-    let d = list.iter().find(|d| d.name == NAME).expect("WLS-Test-Import v wsl -l -v");
+    let d = list.iter().find(|d| d.name == NAME).expect("WSLCD-Test-Import v wsl -l -v");
     eprintln!("wsl -l -v: {} {} v{}", d.name, d.state, d.version);
     let rel = wsl::run(NAME, Some("root"), None, &["cat", "/etc/alpine-release"]).expect("run");
     eprintln!("alpine-release: {}", rel.trim());
@@ -882,7 +882,7 @@ fn live_distro_manage() {
 #[test]
 #[ignore]
 fn live_shared_agent_speed() {
-    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
     let n = 20;
     let t = std::time::Instant::now();
     for _ in 0..n {
@@ -902,7 +902,7 @@ fn live_shared_agent_speed() {
 #[ignore]
 fn live_compose_label_trust() {
     let mut cfg = crate::config::Config::load();
-    if let Ok(d) = std::env::var("WLS_DISTRO") {
+    if let Ok(d) = std::env::var("WSLCD_DISTRO") {
         cfg.distro = d;
     }
     let d = Docker::new(cfg.port);
@@ -912,28 +912,28 @@ fn live_compose_label_trust() {
         a.extend(extra.iter().map(|s| s.to_string()));
         wsl::run_owned(&cfg.distro, None, None, &a)
     };
-    let _ = run(&["rm", "-f", "wls-test-trust-a", "wls-test-trust-b"]);
+    let _ = run(&["rm", "-f", "wslcd-test-trust-a", "wslcd-test-trust-b"]);
     // image, který si sám nastaví labely compose
-    let dir = std::env::temp_dir().join(format!("wls-test-trust-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("wslcd-test-trust-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("Dockerfile"),
-        "FROM docker.io/library/alpine:3.20\nLABEL com.docker.compose.project=wls-test-evil com.docker.compose.project.working_dir=/tmp\n",
+        "FROM docker.io/library/alpine:3.20\nLABEL com.docker.compose.project=wslcd-test-evil com.docker.compose.project.working_dir=/tmp\n",
     )
     .unwrap();
-    let spec = crate::worker::BuildSpec { context: dir.to_string_lossy().to_string(), tags: "wls-test-trust:latest".into(), ..Default::default() };
+    let spec = crate::worker::BuildSpec { context: dir.to_string_lossy().to_string(), tags: "wslcd-test-trust:latest".into(), ..Default::default() };
     crate::worker::build::run_build(&cfg.distro, cfg.engine, cfg.port, cfg.tls, &spec, |_| {}).expect("build");
-    run(&["create", "--name", "wls-test-trust-a", "wls-test-trust:latest", "true"]).expect("create a");
-    let evil = crate::worker::check_stack_for_test(cfg.clone(), "/tmp", "wls-test-evil");
+    run(&["create", "--name", "wslcd-test-trust-a", "wslcd-test-trust:latest", "true"]).expect("create a");
+    let evil = crate::worker::check_stack_for_test(cfg.clone(), "/tmp", "wslcd-test-evil");
     // label na kontejneru (ne z image), ale složka neexistuje
-    run(&["create", "--name", "wls-test-trust-b", "--label", "com.docker.compose.project=wls-test-gone", "docker.io/library/alpine:3.20", "true"]).expect("create b");
-    let gone = crate::worker::check_stack_for_test(cfg.clone(), "/nonexistent/wls-test", "wls-test-gone");
+    run(&["create", "--name", "wslcd-test-trust-b", "--label", "com.docker.compose.project=wslcd-test-gone", "docker.io/library/alpine:3.20", "true"]).expect("create b");
+    let gone = crate::worker::check_stack_for_test(cfg.clone(), "/nonexistent/wslcd-test", "wslcd-test-gone");
     // stejný projekt, existující složka s compose souborem -> projde
-    wsl::run(&cfg.distro, None, None, &["sh", "-c", "mkdir -p /tmp/wls-test-trust-ok && echo 'services: {}' > /tmp/wls-test-trust-ok/compose.yaml"]).unwrap();
-    let ok = crate::worker::check_stack_for_test(cfg.clone(), "/tmp/wls-test-trust-ok", "wls-test-gone");
-    let _ = run(&["rm", "-f", "wls-test-trust-a", "wls-test-trust-b"]);
-    let _ = d.delete("/images/wls-test-trust:latest");
-    let _ = wsl::run(&cfg.distro, None, None, &["rm", "-rf", "/tmp/wls-test-trust-ok"]);
+    wsl::run(&cfg.distro, None, None, &["sh", "-c", "mkdir -p /tmp/wslcd-test-trust-ok && echo 'services: {}' > /tmp/wslcd-test-trust-ok/compose.yaml"]).unwrap();
+    let ok = crate::worker::check_stack_for_test(cfg.clone(), "/tmp/wslcd-test-trust-ok", "wslcd-test-gone");
+    let _ = run(&["rm", "-f", "wslcd-test-trust-a", "wslcd-test-trust-b"]);
+    let _ = d.delete("/images/wslcd-test-trust:latest");
+    let _ = wsl::run(&cfg.distro, None, None, &["rm", "-rf", "/tmp/wslcd-test-trust-ok"]);
     let _ = std::fs::remove_dir_all(&dir);
     eprintln!("evil: {evil:?}\ngone: {gone:?}\nok: {ok:?}");
     assert!(evil.is_err() && gone.is_err() && ok.is_ok());
@@ -944,41 +944,41 @@ fn live_compose_label_trust() {
 #[ignore]
 fn live_run_env_file() {
     let mut cfg = crate::config::Config::load();
-    if let Ok(d) = std::env::var("WLS_DISTRO") {
+    if let Ok(d) = std::env::var("WSLCD_DISTRO") {
         cfg.distro = d;
     }
     let d = Docker::new(cfg.port);
-    let _ = d.delete("/containers/wls-test-envfile?force=1");
+    let _ = d.delete("/containers/wslcd-test-envfile?force=1");
     let spec = crate::worker::RunSpec {
         image: "alpine:3.20".into(),
-        name: "wls-test-envfile".into(),
+        name: "wslcd-test-envfile".into(),
         env: "SECRET_TOKEN=tajne heslo=1\nPLAIN=x".into(),
         command: "sleep 60".into(),
         ..Default::default()
     };
     let r = crate::worker::run_for_test(cfg.clone(), spec);
-    let v: serde_json::Value = d.get("/containers/wls-test-envfile/json").expect("inspect");
+    let v: serde_json::Value = d.get("/containers/wslcd-test-envfile/json").expect("inspect");
     let env: Vec<String> = serde_json::from_value(v.pointer("/Config/Env").cloned().unwrap_or_default()).unwrap_or_default();
-    let left = wsl::run(&cfg.distro, None, None, &["sh", "-c", "ls ${TMPDIR:-/tmp}/wls-env.* 2>/dev/null | wc -l"]).unwrap_or_default();
-    let _ = d.delete("/containers/wls-test-envfile?force=1");
+    let left = wsl::run(&cfg.distro, None, None, &["sh", "-c", "ls ${TMPDIR:-/tmp}/wslcd-env.* 2>/dev/null | wc -l"]).unwrap_or_default();
+    let _ = d.delete("/containers/wslcd-test-envfile?force=1");
     eprintln!("{r:?} env={env:?} zbylé soubory={}", left.trim());
     assert!(r.is_ok(), "{r:?}");
     assert!(env.iter().any(|e| e == "SECRET_TOKEN=tajne heslo=1") && env.iter().any(|e| e == "PLAIN=x"), "{env:?}");
     assert_eq!(left.trim(), "0");
 }
 
-/// Sloučené logy compose stacku: dva kontejnery s labely projektu `wls-test-logs` (jeden s TTY,
+/// Sloučené logy compose stacku: dva kontejnery s labely projektu `wslcd-test-logs` (jeden s TTY,
 /// druhý po pár řádcích zmlkne), stejné streamy jako okno logů stacku (`logbuf::Streams`),
 /// reorder buffer podle času a ukončení vláken po zastavení (i u mlčícího kontejneru).
-/// `WLS_DISTRO=Debian cargo test live_stack_logs -- --ignored --nocapture`
+/// `WSLCD_DISTRO=Debian cargo test live_stack_logs -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn live_stack_logs() {
     use crate::logbuf::{self, LogBuf, Streams, MAX_LINES, REORDER};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
-    const PROJECT: &str = "wls-test-logs";
-    let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    const PROJECT: &str = "wslcd-test-logs";
+    let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
     let d = Docker::new(port);
     assert!(d.ping(), "API na {port} neodpovídá");
     let ver: serde_json::Value = d.get("/version").unwrap();
@@ -986,7 +986,7 @@ fn live_stack_logs() {
     let url = format!("tcp://127.0.0.1:{port}");
     let cli: Vec<&str> = if podman { vec!["podman", "--url", &url] } else { vec!["docker", "-H", &url] };
     let distro = distro();
-    let names = ["wls-test-logs-web", "wls-test-logs-worker"];
+    let names = ["wslcd-test-logs-web", "wslcd-test-logs-worker"];
     let cleanup = || {
         for n in names {
             let _ = d.container_action(n, "remove");
@@ -1055,17 +1055,17 @@ fn live_stack_logs() {
         assert!(nums.windows(2).all(|w| w[1] == w[0] + 1), "{prefix}{nums:?}");
     }
     let all_now: Vec<crate::docker::Container> = d.get("/containers/json?all=1").unwrap();
-    assert!(!all_now.iter().any(|c| c.name().starts_with("wls-test-logs-")), "úklid");
+    assert!(!all_now.iter().any(|c| c.name().starts_with("wslcd-test-logs-")), "úklid");
 }
 
 /// Uvolnění paměti WSL: zahodí cache Linuxu a nahlásí VmmemWSL před a po.
 #[test]
 #[ignore]
 fn live_free_memory() {
-    let data = std::env::temp_dir().join(format!("wls-test-mem-{}", std::process::id()));
+    let data = std::env::temp_dir().join(format!("wslcd-test-mem-{}", std::process::id()));
     std::fs::create_dir_all(&data).unwrap();
     // SAFETY (env): test běží samostatně
-    unsafe { std::env::set_var("WLS_DATA_DIR", &data) };
+    unsafe { std::env::set_var("WSLCD_DATA_DIR", &data) };
     let cfg = crate::config::Config { distro: distro(), ..Default::default() };
     let r = crate::worker::testkit::free_memory(cfg);
     let _ = std::fs::remove_dir_all(&data);
@@ -1081,13 +1081,13 @@ fn live_stack_logs_attach_later() {
     use crate::logbuf::{self, LogBuf, Streams, MAX_LINES, REORDER};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
-    const PROJECT: &str = "wls-test-follow";
+    const PROJECT: &str = "wslcd-test-follow";
     let cfg = crate::config::Config::load();
     crate::docker::configure_tls(cfg.tls).expect("tls");
     let d = Docker::new(cfg.port);
     assert!(d.ping(), "API na {} neodpovídá", cfg.port);
     let cli = cfg.engine.cli(cfg.port, cfg.tls);
-    let distro = std::env::var("WLS_DISTRO").unwrap_or(cfg.distro.clone());
+    let distro = std::env::var("WSLCD_DISTRO").unwrap_or(cfg.distro.clone());
     let run = |extra: &[&str]| {
         let mut a: Vec<String> = cli.clone();
         a.extend(extra.iter().map(|s| s.to_string()));
@@ -1103,7 +1103,7 @@ fn live_stack_logs_attach_later() {
         ])
         .expect("run");
     };
-    let _ = run(&["rm", "-f", "wls-test-follow-a", "wls-test-follow-b"]);
+    let _ = run(&["rm", "-f", "wslcd-test-follow-a", "wslcd-test-follow-b"]);
     start("a");
     std::thread::sleep(Duration::from_millis(800));
     let t0 = logbuf::stack_targets(&d.snapshot().containers, PROJECT);
@@ -1130,25 +1130,25 @@ fn live_stack_logs_attach_later() {
     let b = g.iter().filter(|l| l.src == 1 && l.text.contains("b line")).count();
     drop(g);
     let stopped = streams.stop_and_join(Duration::from_secs(5));
-    let _ = run(&["rm", "-f", "wls-test-follow-a", "wls-test-follow-b"]);
+    let _ = run(&["rm", "-f", "wslcd-test-follow-a", "wslcd-test-follow-b"]);
     eprintln!("a: {a_before} -> {a} řádků, b (připojeno později): {b}, vlákna skončila: {stopped}");
     assert!(a > a_before, "stream prvního kontejneru se přerušil");
     assert!(b >= 5, "řádky nového kontejneru nedorazily");
     assert!(stopped);
 }
 
-/// Přepnutí primární distribuce tam a zpět (WLS_PRIMARY_A = výchozí Ubuntu, WLS_PRIMARY_B = Debian):
+/// Přepnutí primární distribuce tam a zpět (WSLCD_PRIMARY_A = výchozí Ubuntu, WSLCD_PRIMARY_B = Debian):
 /// API na stejném portu pokaždé obslouží engine zvolené distribuce, v té druhé se TCP API vypne;
 /// při návratu na A se B uspí (wsl --terminate).
 #[test]
 #[ignore]
 fn live_switch_primary() {
-    let a = std::env::var("WLS_PRIMARY_A").unwrap_or_else(|_| "Ubuntu".into());
-    let b = std::env::var("WLS_PRIMARY_B").unwrap_or_else(|_| "Debian".into());
-    let data = std::env::temp_dir().join(format!("wls-test-primary-{}", std::process::id()));
+    let a = std::env::var("WSLCD_PRIMARY_A").unwrap_or_else(|_| "Ubuntu".into());
+    let b = std::env::var("WSLCD_PRIMARY_B").unwrap_or_else(|_| "Debian".into());
+    let data = std::env::temp_dir().join(format!("wslcd-test-primary-{}", std::process::id()));
     std::fs::create_dir_all(&data).unwrap();
     // SAFETY (env): test běží samostatně
-    unsafe { std::env::set_var("WLS_DATA_DIR", &data) };
+    unsafe { std::env::set_var("WSLCD_DATA_DIR", &data) };
     let mut cfg = crate::config::Config { distro: a.clone(), port: 2376, tls: true, keep_alive: false, ..Default::default() };
     let engine_on_api = |port: u16| -> String {
         let v: serde_json::Value = Docker::new(port).get("/version").expect("/version");
@@ -1173,12 +1173,12 @@ fn live_switch_primary() {
 }
 
 /// Nastavení Docker API (jako „Nastavit API“) a překlad host.docker.internal v kontejneru –
-/// na výchozím bridge i ve vlastní síti (compose). WLS_DISTRO s Dockerem, WLS_TLS=1 pro TLS.
+/// na výchozím bridge i ve vlastní síti (compose). WSLCD_DISTRO s Dockerem, WSLCD_TLS=1 pro TLS.
 #[test]
 #[ignore]
 fn live_docker_host_internal() {
     let d = distro();
-    let tls = std::env::var("WLS_TLS").is_ok_and(|v| v == "1");
+    let tls = std::env::var("WSLCD_TLS").is_ok_and(|v| v == "1");
     let port = if tls { "2376" } else { "2375" };
     let user = wsl::run(&d, None, None, &["id", "-un"]).map(|u| u.trim().to_string()).unwrap_or_default();
     let script = crate::engine::Engine::Docker.setup_script();
@@ -1193,12 +1193,29 @@ fn live_docker_host_internal() {
     assert!(out.contains("host.docker.internal -> 172.17.0.1"), "{out}");
     let probe = "getent hosts host.docker.internal && nslookup example.com >/dev/null && echo DNS-OK";
     let a = wsl::run(&d, Some("root"), None, &["docker", "run", "--rm", "docker.io/library/alpine:3.20", "sh", "-c", probe]).expect("bridge");
-    let _ = wsl::run(&d, Some("root"), None, &["docker", "network", "create", "wls-test-hdi"]);
-    let b = wsl::run(&d, Some("root"), None, &["docker", "run", "--rm", "--network", "wls-test-hdi", "docker.io/library/alpine:3.20", "sh", "-c", probe]);
-    let _ = wsl::run(&d, Some("root"), None, &["docker", "network", "rm", "wls-test-hdi"]);
+    let _ = wsl::run(&d, Some("root"), None, &["docker", "network", "create", "wslcd-test-hdi"]);
+    let b = wsl::run(&d, Some("root"), None, &["docker", "run", "--rm", "--network", "wslcd-test-hdi", "docker.io/library/alpine:3.20", "sh", "-c", probe]);
+    let _ = wsl::run(&d, Some("root"), None, &["docker", "network", "rm", "wslcd-test-hdi"]);
     let b = b.expect("user network");
     eprintln!("bridge: {a}\nnetwork: {b}");
     for r in [&a, &b] {
         assert!(r.contains("172.17.0.1") && r.contains("host.docker.internal") && r.contains("DNS-OK"), "{r}");
+    }
+}
+
+/// Převod distribucí po přejmenování aplikace: v běžících ostatních distribucích odstraní služby
+/// a soubory `wls-*` a uvolní API, v primární nastaví API pod novými názvy (`wslcd-*`).
+/// Spouštěj s WSLCD_DATA_DIR = datová složka aplikace (certifikáty se uloží tam).
+#[test]
+#[ignore]
+fn live_migrate_rename() {
+    assert!(crate::config::isolated(), "nastav WSLCD_DATA_DIR");
+    let cfg = crate::config::Config::load();
+    let (r, log, _) = crate::worker::testkit::set_primary(cfg.clone(), &cfg.distro, Some(cfg.engine), false);
+    eprintln!("{log}\n{r:?}");
+    assert!(r.is_ok(), "{r:?}");
+    for d in wsl::list().expect("wsl -l").iter().filter(|d| d.running()) {
+        let left = wsl::run(&d.name, Some("root"), None, &["sh", "-c", "ls /etc/systemd/system/wls-* /etc/wls-desktop 2>/dev/null; getent group wls-api; true"]).unwrap_or_default();
+        assert!(left.trim().is_empty(), "{}: {left}", d.name);
     }
 }

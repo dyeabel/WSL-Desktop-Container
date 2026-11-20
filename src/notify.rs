@@ -1,7 +1,7 @@
 //! Oznámení ve Windows (toast). Aplikace se registruje jako odesílatel přes
 //! AppUserModelId v HKCU (bez instalace a zástupce), aby oznámení nesla její název a ikonu.
 
-pub const AUMID: &str = "WLS.Desktop";
+pub const AUMID: &str = "WSL.Container.Desktop";
 
 #[cfg(windows)]
 fn app_dir() -> Option<std::path::PathBuf> {
@@ -19,7 +19,7 @@ pub fn register() {
         p
     });
     let key = format!(r"HKCU\Software\Classes\AppUserModelId\{AUMID}");
-    let mut vals = vec![("DisplayName", "WLS Desktop".to_string())];
+    let mut vals = vec![("DisplayName", "WSL Container Desktop".to_string())];
     if let Some(i) = icon {
         vals.push(("IconUri", i.display().to_string()));
     }

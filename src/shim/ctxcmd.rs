@@ -1,4 +1,4 @@
-//! `docker context …` – kontexty WLS (distribuce + engine + port + TLS), viz `contexts.rs`.
+//! `docker context …` – kontexty WSL Container Desktop (distribuce + engine + port + TLS), viz `contexts.rs`.
 //!
 //! Příkazy se vyřizují přímo v shimu (do WSL se nepředávají):
 //! `ls` (`-q`, `--format`), `show`, `use`, `create`, `rm`, `inspect`.
@@ -41,7 +41,7 @@ struct Row {
 }
 
 fn default_description(t: &Target) -> String {
-    format!("WLS Desktop settings ({}, {})", t.distro, t.engine.name())
+    format!("WSL Container Desktop settings ({}, {})", t.distro, t.engine.name())
 }
 
 /// Endpoint výchozího kontextu: DOCKER_HOST, když je nastavená (má přednost), jinak API aplikace.
@@ -165,7 +165,7 @@ struct WlsMeta {
 #[serde(rename_all = "PascalCase")]
 struct Meta {
     description: String,
-    #[serde(rename = "WLS")]
+    #[serde(rename = "WSLCD")]
     wls: WlsMeta,
 }
 
@@ -282,7 +282,7 @@ fn parse(args: &[String], bools: &[(&str, &str)], values: &[(&str, &str)]) -> Re
 
 const USAGE: &str = "Usage:  docker context COMMAND
 
-Manage contexts (WLS Desktop: a context is a WSL distribution + engine + API port)
+Manage contexts (WSL Container Desktop: a context is a WSL distribution + engine + API port)
 
 Commands:
   create      Create a context
@@ -415,7 +415,7 @@ pub fn run(args: &[String], env: &CtxEnv) -> Res {
                 }
             }
         })(),
-        "update" | "export" | "import" => Err(format!("\"docker context {sub}\" is not supported by WLS Desktop contexts (use rm + create)")),
+        "update" | "export" | "import" => Err(format!("\"docker context {sub}\" is not supported by WSL Container Desktop contexts (use rm + create)")),
         other => Err(format!("docker context: unknown command \"{other}\"\nSee 'docker context --help'.")),
     };
     match r {
@@ -509,7 +509,7 @@ mod tests {
 
     #[test]
     fn docker_host_is_default_endpoint() {
-        let dir = std::env::temp_dir().join(format!("wls-ctxcmd-dh-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("wslcd-ctxcmd-dh-{}", std::process::id()));
         let _g = Tmp(dir.clone());
         let mut env = env_in(&dir, None);
         env.docker_host = Some("npipe:////./pipe/docker_engine".into());
@@ -526,12 +526,12 @@ mod tests {
 
     #[test]
     fn lifecycle() {
-        let dir = std::env::temp_dir().join(format!("wls-ctxcmd-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("wslcd-ctxcmd-{}", std::process::id()));
         let _g = Tmp(dir.clone());
         let env = env_in(&dir, None);
         let r = run(&s(&["ls"]), &env);
-        assert_eq!(r.out, "NAME        DESCRIPTION                             DOCKER ENDPOINT
-default *   WLS Desktop settings (Debian, Podman)   tcp://127.0.0.1:2375
+        assert_eq!(r.out, "NAME        DESCRIPTION                                       DOCKER ENDPOINT
+default *   WSL Container Desktop settings (Debian, Podman)   tcp://127.0.0.1:2375
 ");
         assert_eq!(run(&s(&["show"]), &env).out, "default\n");
 
@@ -555,10 +555,10 @@ default *   WLS Desktop settings (Debian, Podman)   tcp://127.0.0.1:2375
         let r = run(&s(&["ls"]), &env);
         assert_eq!(
             r.out,
-            "NAME      DESCRIPTION                             DOCKER ENDPOINT
-default   WLS Desktop settings (Debian, Podman)   tcp://127.0.0.1:2375
-sec                                               tcp://127.0.0.1:2390
-ubu *     Ubuntu Docker                           tcp://127.0.0.1:2380
+            "NAME      DESCRIPTION                                       DOCKER ENDPOINT
+default   WSL Container Desktop settings (Debian, Podman)   tcp://127.0.0.1:2375
+sec                                                         tcp://127.0.0.1:2390
+ubu *     Ubuntu Docker                                     tcp://127.0.0.1:2380
 "
         );
         assert_eq!(run(&s(&["ls", "-q"]), &env).out, "default\nsec\nubu\n");
@@ -575,9 +575,9 @@ ubu *     Ubuntu Docker                           tcp://127.0.0.1:2380
         let r = run(&s(&["inspect", "ubu"]), &env);
         let v: serde_json::Value = serde_json::from_str(&r.out).unwrap();
         assert_eq!(v[0]["Endpoints"]["docker"]["Host"], "tcp://127.0.0.1:2380");
-        assert_eq!(v[0]["Metadata"]["WLS"]["Engine"], "docker");
+        assert_eq!(v[0]["Metadata"]["WSLCD"]["Engine"], "docker");
         assert!(r.out.starts_with("[\n    {\n        \"Name\": \"ubu\",\n"), "{}", r.out);
-        assert_eq!(run(&s(&["inspect", "--format", "{{.Metadata.WLS.Distro}} {{.Metadata.WLS.Port}}"]), &env).out, "Ubuntu 2380\n");
+        assert_eq!(run(&s(&["inspect", "--format", "{{.Metadata.WSLCD.Distro}} {{.Metadata.WSLCD.Port}}"]), &env).out, "Ubuntu 2380\n");
         assert_eq!(run(&s(&["inspect", "-f", "{{.Name}}", "default"]), &env).out, "default\n");
         assert_eq!(run(&s(&["inspect", "nope"]), &env).code, 1);
 

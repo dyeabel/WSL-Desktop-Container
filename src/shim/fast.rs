@@ -1948,8 +1948,8 @@ pub fn podman_version_text(v: &Value, wls_version: &str, context: &str) -> Strin
     let f = |k: &str| s(v, k).to_string();
     let api = f("ApiVersion");
     let mut o = String::new();
-    // verze klienta jako u Dockeru (podle API), verze WLS Desktop jen tady v hlavičce
-    o.push_str(&format!("Client: WLS Desktop {wls_version} (docker shim)\n"));
+    // verze klienta jako u Dockeru (podle API), verze WSL Container Desktop jen tady v hlavičce
+    o.push_str(&format!("Client: WSL Container Desktop {wls_version} (docker shim)\n"));
     o.push_str(&format!(
         " Version:           {}\n API version:       {api}\n OS/Arch:           windows/amd64\n Context:           {context}\n\n",
         docker_version_for_api(&api)
@@ -1973,7 +1973,7 @@ pub fn podman_version_text(v: &Value, wls_version: &str, context: &str) -> Strin
 }
 
 /// Verze Docker CLI, která odpovídá verzi API (`1.41` -> `20.10.0`): skripty kontrolují
-/// `{{.Client.Version}}` proti verzím Dockeru („≥ 20.10“), verze WLS Desktop (0.x) by je zmátla.
+/// `{{.Client.Version}}` proti verzím Dockeru („≥ 20.10“), verze WSL Container Desktop (0.x) by je zmátla.
 pub fn docker_version_for_api(api: &str) -> String {
     const MAP: &[(&str, &str)] = &[
         ("1.40", "19.03.0"),
@@ -2271,7 +2271,7 @@ nginx             latest    c05939e13a61   13 days ago          167MB
         let v = json!({"Version":"5.4.2","ApiVersion":"1.41"});
         let segs = parse_template("client={{.Client.Version}} server={{.Server.Version}} api={{.Server.APIVersion}} capi={{.Client.APIVersion}}").unwrap();
         let out = podman_version_format(&v, &segs, "default").unwrap();
-        // klient jako Docker CLI podle API (skripty „≥ 20.10“), ne verze WLS Desktop
+        // klient jako Docker CLI podle API (skripty „≥ 20.10“), ne verze WSL Container Desktop
         assert_eq!(out, "client=20.10.0 server=5.4.2 api=1.41 capi=1.41\n");
         assert_eq!(docker_version_for_api("1.43"), "24.0.0");
         assert_eq!(docker_version_for_api("9.99"), "20.10.0");
@@ -2292,7 +2292,7 @@ nginx             latest    c05939e13a61   13 days ago          167MB
             "BuildTime":"2025-12-21T17:42:01+01:00","Components":[{"Name":"Podman Engine","Version":"5.4.2"},{"Name":"Conmon","Version":"conmon version 2.1.12"},{"Name":"OCI Runtime (crun)","Version":"crun version 1.21\ncommit: x"}]});
         let t = podman_version_text(&v, "0.6.2", "default");
         assert!(t.contains(" API version:       1.41\n"), "{t}");
-        assert!(t.starts_with("Client: WLS Desktop 0.6.2 (docker shim)\n Version:           20.10.0\n"), "{t}");
+        assert!(t.starts_with("Client: WSL Container Desktop 0.6.2 (docker shim)\n Version:           20.10.0\n"), "{t}");
         assert!(t.contains("  API version:      1.41 (minimum version 1.24)\n"), "{t}");
         assert!(t.contains("  Version:          5.4.2\n") && t.contains("Built:            Sun Dec 21 17:42:01 2025"), "{t}");
         assert!(t.contains(" OCI Runtime (crun):\n  Version:          crun version 1.21\n"), "{t}");
@@ -2612,8 +2612,8 @@ nginx             latest    c05939e13a61   13 days ago          167MB
     // ------------------------------------------------------------ živý test
 
     fn live_cli(args: &[&str]) -> (Vec<String>, f64) {
-        let distro = std::env::var("WLS_DISTRO").unwrap_or_else(|_| "Debian".into());
-        let port = std::env::var("WLS_PORT").unwrap_or_else(|_| "2375".into());
+        let distro = std::env::var("WSLCD_DISTRO").unwrap_or_else(|_| "Debian".into());
+        let port = std::env::var("WSLCD_PORT").unwrap_or_else(|_| "2375".into());
         let url = format!("tcp://127.0.0.1:{port}");
         let mut times = Vec::new();
         let mut out = Vec::new();
@@ -2629,7 +2629,7 @@ nginx             latest    c05939e13a61   13 days ago          167MB
     }
 
     fn live_fast(args: &[&str]) -> (Vec<String>, f64) {
-        let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+        let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
         let mut times = Vec::new();
         let mut out = Vec::new();
         for _ in 0..5 {
@@ -2649,29 +2649,29 @@ nginx             latest    c05939e13a61   13 days ago          167MB
     #[test]
     #[ignore]
     fn live_fast_tls_proxy() {
-        let distro = std::env::var("WLS_DISTRO").unwrap_or_else(|_| "Debian".into());
+        let distro = std::env::var("WSLCD_DISTRO").unwrap_or_else(|_| "Debian".into());
         let root = |script: &str, env: &[&str]| {
             let o = std::process::Command::new("wsl.exe").args(["-d", &distro, "-u", "root", "-e", "env"]).args(env).args(["sh", "-c", script]).output().expect("wsl.exe");
             (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr))
         };
         let cleanup = || {
-            root("systemctl disable --now wls-test-tls-proxy wls-test-podman >/dev/null 2>&1; rm -f /etc/systemd/system/wls-test-tls-proxy.service; systemctl daemon-reload; systemctl reset-failed wls-test-tls-proxy wls-test-podman >/dev/null 2>&1; rm -rf /tmp/wls-test-tls /tmp/wls-test-podman.sock", &[]);
+            root("systemctl disable --now wslcd-test-tls-proxy wslcd-test-podman >/dev/null 2>&1; rm -f /etc/systemd/system/wslcd-test-tls-proxy.service; systemctl daemon-reload; systemctl reset-failed wslcd-test-tls-proxy wslcd-test-podman >/dev/null 2>&1; rm -rf /tmp/wslcd-test-tls /tmp/wslcd-test-podman.sock", &[]);
         };
         cleanup();
-        let (ok, out) = root("systemd-run --unit wls-test-podman podman system service --time=0 unix:///tmp/wls-test-podman.sock && for i in $(seq 50); do [ -S /tmp/wls-test-podman.sock ] && break; sleep 0.2; done", &[]);
+        let (ok, out) = root("systemd-run --unit wslcd-test-podman podman system service --time=0 unix:///tmp/wslcd-test-podman.sock && for i in $(seq 50); do [ -S /tmp/wslcd-test-podman.sock ] && break; sleep 0.2; done", &[]);
         assert!(ok, "{out}");
         let script = format!(
             "{}
-tls_proxy /tmp/wls-test-podman.sock wls-test-podman.service && sleep 1 && systemctl is-active wls-test-tls-proxy",
+tls_proxy /tmp/wslcd-test-podman.sock wslcd-test-podman.service && sleep 1 && systemctl is-active wslcd-test-tls-proxy",
             crate::engine::Engine::Podman.setup_script().split("
 set -e
 ").next().unwrap()
         );
-        let (ok, out) = root(&script, &["PORT=2377", "WLS_TLS_DIR=/tmp/wls-test-tls", "WLS_TLS_UNIT=wls-test-tls-proxy"]);
-        let dir = std::env::temp_dir().join(format!("wls-shim-tls-{}", std::process::id()));
+        let (ok, out) = root(&script, &["PORT=2377", "WSLCD_TLS_DIR=/tmp/wslcd-test-tls", "WSLCD_TLS_UNIT=wslcd-test-tls-proxy"]);
+        let dir = std::env::temp_dir().join(format!("wslcd-shim-tls-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         for f in ["ca.pem", "cert.pem", "key.pem"] {
-            let (_, pem) = root(&format!("cat /tmp/wls-test-tls/{f}"), &[]);
+            let (_, pem) = root(&format!("cat /tmp/wslcd-test-tls/{f}"), &[]);
             std::fs::write(dir.join(f), pem).unwrap();
         }
         let cfg = crate::apitls::tls_config(&dir).map(Arc::new);
@@ -2694,7 +2694,7 @@ set -e
     }
 
     /// `cargo test --bin docker -- --ignored live_fast_path --nocapture`
-    /// (WLS_DISTRO, výchozí Debian; WLS_PORT, výchozí 2375; Podman bez TLS)
+    /// (WSLCD_DISTRO, výchozí Debian; WSLCD_PORT, výchozí 2375; Podman bez TLS)
     #[test]
     #[ignore]
     fn live_fast_path_matches_cli() {
@@ -2754,10 +2754,10 @@ set -e
                 assert_eq!(c, f, "{args:?}");
             }
             // stderr kontejneru musí jít na stderr (nginx loguje přístupy na stdout, chyby na stderr)
-            let distro = std::env::var("WLS_DISTRO").unwrap_or_else(|_| "Debian".into());
-            let url = format!("tcp://127.0.0.1:{}", std::env::var("WLS_PORT").unwrap_or_else(|_| "2375".into()));
+            let distro = std::env::var("WSLCD_DISTRO").unwrap_or_else(|_| "Debian".into());
+            let url = format!("tcp://127.0.0.1:{}", std::env::var("WSLCD_PORT").unwrap_or_else(|_| "2375".into()));
             let o = std::process::Command::new("wsl.exe").args(["-d", &distro, "-e", "podman", "--url", &url, "logs", "--tail", "50", ctr]).output().expect("wsl.exe");
-            let port: u16 = std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+            let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
             let fo = try_run(&a(&["logs", "--tail", "50", ctr]), port, false).expect("fast logs");
             let pick = |st: u8| -> Vec<u8> { fo.chunks.iter().filter(|(x, _)| *x == st).flat_map(|(_, d)| d.clone()).collect() };
             println!("logs streams {ctr}: stdout {} B, stderr {} B", pick(1).len(), pick(2).len());
@@ -2782,7 +2782,7 @@ set -e
             }
         }
         // neexistující objekt -> fallback (chybu vypíše CLI)
-        assert!(try_run(&a(&["inspect", "wls-test-does-not-exist"]), std::env::var("WLS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375), false).is_err());
+        assert!(try_run(&a(&["inspect", "wslcd-test-does-not-exist"]), std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375), false).is_err());
 
         let (t, _) = live_fast(&["ps", "-a"]);
         println!("{}", t.join("\n"));

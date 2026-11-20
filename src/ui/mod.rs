@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod alerts;
 pub mod events;
 pub mod build;
@@ -248,7 +249,7 @@ pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 fn sort_id(key: &str) -> egui::Id {
-    egui::Id::new(("wls-sort", key))
+    egui::Id::new(("wslcd-sort", key))
 }
 
 /// Aktuální řazení tabulky: (index sloupce, vzestupně).

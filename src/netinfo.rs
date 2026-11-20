@@ -5,7 +5,7 @@
 use std::collections::{HashMap, VecDeque};
 
 /// Oddělovač sekcí ve výstupu sběrného skriptu.
-pub const MARK: &str = "@@WLS@@";
+pub const MARK: &str = "@@WSLCD@@";
 
 // ---------------------------------------------------------------- /proc/net/dev
 
@@ -670,7 +670,7 @@ pub struct DistroListen {
 
 /// Skript pro distribuci: síťový jmenný prostor a naslouchající TCP sockety
 /// (`ss`, v distribucích bez iproute2 záložně `netstat`).
-pub const DISTRO_SCRIPT: &str = "readlink /proc/self/ns/net; echo @@WLS@@; ss -ltnpH 2>/dev/null || netstat -ltn 2>/dev/null";
+pub const DISTRO_SCRIPT: &str = "readlink /proc/self/ns/net; echo @@WSLCD@@; ss -ltnpH 2>/dev/null || netstat -ltn 2>/dev/null";
 
 /// Výstup `DISTRO_SCRIPT` -> (síťový prostor, naslouchající sockety).
 pub fn parse_distro_listen(text: &str) -> (String, Vec<Sock>) {
@@ -707,7 +707,7 @@ pub fn distro_conflicts(p: &Published, engine_netns: &str, others: &[DistroListe
 pub enum ListenKind {
     /// API enginu (dockerd / podman na TCP)
     EngineApi,
-    /// TLS proxy před API (`wls-tls-proxy`, socat)
+    /// TLS proxy před API (`wslcd-tls-proxy`, socat)
     TlsProxy,
     Dns,
     /// přesměrování publikovaného portu kontejneru (conmon, docker-proxy, rootlessport…)
@@ -720,7 +720,7 @@ pub enum ListenKind {
 pub fn listen_kind(s: &Sock, api_port: u16, published: &[u16]) -> ListenKind {
     let has = |n: &str| s.procs.iter().any(|p| p == n);
     if s.local_port == api_port && s.proto == "tcp" {
-        // v režimu TLS drží port socat (wls-tls-proxy), jinak přímo dockerd / podman
+        // v režimu TLS drží port socat (wslcd-tls-proxy), jinak přímo dockerd / podman
         return if has("socat") { ListenKind::TlsProxy } else { ListenKind::EngineApi };
     }
     if s.local_port == 53 || has("systemd-resolve") || has("dnsmasq") || has("aardvark-dns") {
@@ -1112,11 +1112,11 @@ Active Connections
         let mut lo = lis(8080, &["node"]);
         lo.local_ip = "127.0.0.1".into();
         assert!(distro_conflicts(&publ(80, "10.0.0.1", 8080), engine, &[d("X", engine, vec![lo])]).is_empty());
-        let (ns, socks) = parse_distro_listen("net:[4026531840]\n@@WLS@@\nLISTEN 0 4096 0.0.0.0:8080 0.0.0.0:* users:((\"python3\",pid=9,fd=3))\n");
+        let (ns, socks) = parse_distro_listen("net:[4026531840]\n@@WSLCD@@\nLISTEN 0 4096 0.0.0.0:8080 0.0.0.0:* users:((\"python3\",pid=9,fd=3))\n");
         assert_eq!(ns, engine);
         assert_eq!(socks[0].procs, vec!["python3"]);
         // záložní netstat bez procesů
-        let (ns, socks) = parse_distro_listen("readlink: x\n@@WLS@@\nActive Internet connections\ntcp 0 0 0.0.0.0:22 0.0.0.0:* LISTEN\ntcp6 0 0 :::80 :::* LISTEN\n");
+        let (ns, socks) = parse_distro_listen("readlink: x\n@@WSLCD@@\nActive Internet connections\ntcp 0 0 0.0.0.0:22 0.0.0.0:* LISTEN\ntcp6 0 0 :::80 :::* LISTEN\n");
         assert_eq!(ns, "");
         assert_eq!(socks.iter().map(|s| s.local_port).collect::<Vec<_>>(), vec![22, 80]);
     }

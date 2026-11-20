@@ -482,8 +482,8 @@ pub fn fmt_time(t: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Zkrácený výstup Podmanu 5.4 (`podman run --network wls-test-net -p 18080:80
-    /// -p 127.0.0.1:18443:443/udp -e DB_PASSWORD=… -v wls-test-vol:/data -v /tmp:/host-tmp:ro …`).
+    /// Zkrácený výstup Podmanu 5.4 (`podman run --network wslcd-test-net -p 18080:80
+    /// -p 127.0.0.1:18443:443/udp -e DB_PASSWORD=… -v wslcd-test-vol:/data -v /tmp:/host-tmp:ro …`).
     const PODMAN: &str = r#"{
       "Id": "deb4928f5176ccb536ef6fa2aa14a3d807ac2016b3e09688c56a2263d0c91754",
       "Created": "2026-11-18T18:36:14.457324752Z",
@@ -491,16 +491,16 @@ mod tests {
       "State": {"Status": "running", "Running": true, "Paused": false, "ExitCode": 0, "Error": "",
                 "StartedAt": "2026-11-18T18:36:14.605588542Z", "FinishedAt": "0001-01-01T00:00:00Z"},
       "Image": "sha256:bf8527eb54c3680e728d5b4b383a8ba730d72dae7236fbc8dff97ed6b224a731",
-      "Name": "/wls-test-shape",
+      "Name": "/wslcd-test-shape",
       "HostConfig": {
         "PortBindings": {"443/udp": [{"HostIp": "127.0.0.1", "HostPort": "18443"}], "80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "18080"}]},
         "RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0},
         "NetworkMode": "bridge",
-        "Binds": ["/tmp:/host-tmp:ro,rprivate,nosuid,nodev,rbind", "wls-test-vol:/data:rw,rprivate,nosuid,nodev,rbind"],
+        "Binds": ["/tmp:/host-tmp:ro,rprivate,nosuid,nodev,rbind", "wslcd-test-vol:/data:rw,rprivate,nosuid,nodev,rbind"],
         "Mounts": null
       },
       "Mounts": [
-        {"Type": "volume", "Name": "wls-test-vol", "Source": "/var/lib/containers/storage/volumes/wls-test-vol/_data", "Destination": "/data", "Driver": "local", "Mode": "", "RW": true},
+        {"Type": "volume", "Name": "wslcd-test-vol", "Source": "/var/lib/containers/storage/volumes/wslcd-test-vol/_data", "Destination": "/data", "Driver": "local", "Mode": "", "RW": true},
         {"Type": "bind", "Source": "/tmp", "Destination": "/host-tmp", "Mode": "", "RW": false}
       ],
       "Config": {
@@ -514,7 +514,7 @@ mod tests {
       },
       "NetworkSettings": {
         "Ports": {"443/udp": [{"HostIp": "127.0.0.1", "HostPort": "18443"}], "80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "18080"}]},
-        "Networks": {"wls-test-net": {"Aliases": ["deb4928f5176"], "MacAddress": "f2:30:38:e9:2d:c4", "Gateway": "10.89.0.1",
+        "Networks": {"wslcd-test-net": {"Aliases": ["deb4928f5176"], "MacAddress": "f2:30:38:e9:2d:c4", "Gateway": "10.89.0.1",
                      "IPAddress": "10.89.0.2", "IPPrefixLen": 24, "GlobalIPv6Address": ""}}
       }
     }"#;
@@ -557,7 +557,7 @@ mod tests {
         let v: Value = serde_json::from_str(PODMAN).unwrap();
         let mut d = parse(&v);
         set_image_defaults(&mut d, &serde_json::json!({"Config": {"Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"], "Cmd": ["/bin/sh"]}}));
-        assert_eq!(d.name, "wls-test-shape");
+        assert_eq!(d.name, "wslcd-test-shape");
         assert_eq!(d.image, "docker.io/library/alpine:3.20");
         assert!(d.running && d.health.is_none());
         assert_eq!(d.restart, "unless-stopped");
@@ -570,11 +570,11 @@ mod tests {
 
         let r = d.to_run_spec();
         assert_eq!(r.image, "alpine:3.20");
-        assert_eq!(r.name, "wls-test-shape");
+        assert_eq!(r.name, "wslcd-test-shape");
         assert_eq!(r.ports, "18080:80, 127.0.0.1:18443:443/udp");
         assert_eq!(r.env, "DB_PASSWORD=secret1\nPLAIN=v");
-        assert_eq!(r.volumes, "wls-test-vol:/data\n/tmp:/host-tmp:ro");
-        assert_eq!(r.network, "wls-test-net");
+        assert_eq!(r.volumes, "wslcd-test-vol:/data\n/tmp:/host-tmp:ro");
+        assert_eq!(r.network, "wslcd-test-net");
         assert_eq!(r.restart, "unless-stopped");
         assert_eq!(r.command, r#"sh -c 'echo "hi there"; sleep 300'"#);
         assert!(!d.entrypoint_differs());

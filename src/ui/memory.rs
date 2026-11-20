@@ -95,7 +95,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         })
         .response;
     ui.add_space(4.0);
-    if std::env::var_os("WLS_DEBUG_MEMORY").is_some() && now.is_some() && !DEBUG_DONE.swap(true, Ordering::Relaxed) {
+    if std::env::var_os("WSLCD_DEBUG_MEMORY").is_some() && now.is_some() && !DEBUG_DONE.swap(true, Ordering::Relaxed) {
         head.scroll_to_me(Some(egui::Align::TOP));
     }
     if std::mem::take(&mut app.mem.scroll_to) {
@@ -106,8 +106,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let last = app.mem.last.clone();
     let range = &mut app.mem.range;
     // obě dlaždice stejně vysoké: výška obsahu té vyšší z minulého snímku
+    // (jen vedle sebe – pod sebou by souhrn převzal výšku grafu a zbyla v něm prázdná plocha)
     let hid = egui::Id::new("mem-tiles-h");
-    let tile_h = ui.ctx().data(|d| d.get_temp::<f32>(hid)).unwrap_or(0.0).max(super::dashboard::TILE_H);
+    let side_by_side = ui.available_width() >= super::dashboard::TWO_COL_MIN;
+    let tile_h = if side_by_side { ui.ctx().data(|d| d.get_temp::<f32>(hid)).unwrap_or(0.0).max(super::dashboard::TILE_H) } else { 0.0 };
     let measured = std::cell::Cell::new(0.0f32);
     let measure = |ui: &egui::Ui, top: f32| measured.set(measured.get().max(ui.cursor().top() - top));
     super::dashboard::two_tiles(
@@ -148,7 +150,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         },
     );
     let h = measured.get();
-    if (h - tile_h).abs() > 0.5 && (h > super::dashboard::TILE_H || tile_h > super::dashboard::TILE_H) {
+    if side_by_side && (h - tile_h).abs() > 0.5 && (h > super::dashboard::TILE_H || tile_h > super::dashboard::TILE_H) {
         ui.ctx().data_mut(|d| d.insert_temp(hid, h));
         ui.ctx().request_repaint();
     }

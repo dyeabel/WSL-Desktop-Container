@@ -498,14 +498,14 @@ mod tests {
     #[ignore]
     fn live_ipv6_localhost_relay() {
         use crate::docker::Docker;
-        const NAME: &str = "wls-test-v6";
+        const NAME: &str = "wslcd-test-v6";
         const P: u16 = 18290;
         let cfg = crate::config::Config::load();
         crate::docker::configure_tls(cfg.tls).unwrap();
         let d = Docker::new(cfg.port);
         assert!(d.ping(), "API na {} neodpovídá", cfg.port);
         let podman = |args: &[&str]| {
-            let mut a = vec!["podman", "--url", "unix:///run/wls-podman/podman.sock"];
+            let mut a = vec!["podman", "--url", "unix:///run/wslcd-podman/podman.sock"];
             a.extend_from_slice(args);
             crate::wsl::run(&cfg.distro, Some("root"), None, &a)
         };

@@ -3,7 +3,7 @@
 //! Předávají se jen proměnné, které příkaz opravdu potřebuje:
 //! - `-e VAR` / `--env VAR` / `--env=VAR` bez hodnoty (Docker ji bere z prostředí),
 //! - proměnné použité v compose souborech (`${VAR}`, `${VAR:-x}`, `$VAR`),
-//! - ručně vyjmenované v `WLS_FORWARD_ENV` (oddělené čárkou nebo středníkem).
+//! - ručně vyjmenované v `WSLCD_FORWARD_ENV` (oddělené čárkou nebo středníkem).
 //!
 //! Proměnné, které by uvnitř WSL rozbily CLI (DOCKER_HOST, PATH…), se nepředávají.
 
@@ -107,7 +107,7 @@ pub fn build_wslenv(args: &[String], is_compose: bool, cwd: &Path, existing: &st
             }
         }
     }
-    if let Ok(extra) = std::env::var("WLS_FORWARD_ENV") {
+    if let Ok(extra) = std::env::var("WSLCD_FORWARD_ENV") {
         names.extend(extra.split([',', ';', ' ']).map(|s| s.trim().to_string()).filter(|s| valid_name(s)));
     }
     let already: BTreeSet<String> = existing

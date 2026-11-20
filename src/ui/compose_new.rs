@@ -43,7 +43,7 @@ impl NewStack {
         s
     }
 
-    /// Otevře dialog se šablonou podle id (WLS_DEBUG_COMPOSE_NEW).
+    /// Otevře dialog se šablonou podle id (WSLCD_DEBUG_COMPOSE_NEW).
     pub fn from_id(id: &str) -> Self {
         Self::new(TEMPLATES.iter().position(|t| t.id == id.trim()).unwrap_or(0))
     }

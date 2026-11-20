@@ -6,7 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 /// Uloží stdin do nového souboru čitelného jen vlastníkem a vypíše jeho cestu.
-const ENV_FILE_SCRIPT: &str = r#"umask 077; f=$(mktemp "${TMPDIR:-/tmp}/wls-env.XXXXXX") && cat > "$f" && echo "$f""#;
+const ENV_FILE_SCRIPT: &str = r#"umask 077; f=$(mktemp "${TMPDIR:-/tmp}/wslcd-env.XXXXXX") && cat > "$f" && echo "$f""#;
 
 impl Worker {
     pub(super) fn run_container(&self, spec: RunSpec) -> Result<String, String> {

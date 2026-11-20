@@ -4,16 +4,16 @@
 #
 # Výstup: dist\winget\manifests\<p>\<Publisher>\<Name>\<verze>\*.yaml (struktura repozitáře
 # microsoft/winget-pkgs). Instalace z winget je typ "zip" s vnořeným portable EXE: winget
-# rozbalí ZIP do %LOCALAPPDATA%\Microsoft\WinGet\Packages\… a vytvoří příkaz `wls-desktop`.
-# Data aplikace jsou v %APPDATA%\WLS_Desktop (balíček -winget.zip nemá PORTABLE.txt), takže
+# rozbalí ZIP do %LOCALAPPDATA%\Microsoft\WinGet\Packages\… a vytvoří příkaz `wsl-container-desktop`.
+# Data aplikace jsou v %APPDATA%\WSL_Container_Desktop (balíček -winget.zip nemá PORTABLE.txt), takže
 # upgrade přes winget o nastavení nepřijde.
 #
 # Odeslání do winget-pkgs (PR do microsoft/winget-pkgs, např. `wingetcreate submit <složka>`)
 # vyžaduje, aby byl InstallerUrl veřejně stažitelný – repozitář s releasy musí být veřejný.
 param(
     [string]$Version,
-    [string]$Repo = 'dyeabel/WLS-Desktop-Container',
-    [string]$Identifier = 'dyeabel.WLSDesktop',
+    [string]$Repo = 'dyeabel/WSL-Container-Desktop-Container',
+    [string]$Identifier = 'dyeabel.WSLContainerDesktop',
     [string]$Publisher = 'dyeabel',
     [string]$License = 'Proprietary',
     [string]$ReleaseDate = (Get-Date -Format 'yyyy-MM-dd'),
@@ -25,7 +25,7 @@ Set-Location $root
 if (-not $Version) {
     $Version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 }
-$name = "WLS-Desktop-$Version-win-x64"
+$name = "WSL-Container-Desktop-$Version-win-x64"
 $zip = Join-Path $root "dist\$name-winget.zip"
 if (-not (Test-Path $zip)) { throw "Chybí $zip – nejdřív scripts\package.ps1" }
 $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToUpper()
@@ -61,8 +61,8 @@ MinimumOSVersion: 10.0.19041.0
 InstallerType: zip
 NestedInstallerType: portable
 NestedInstallerFiles:
-- RelativeFilePath: $name\wls-desktop.exe
-  PortableCommandAlias: wls-desktop
+- RelativeFilePath: $name\wsl-container-desktop.exe
+  PortableCommandAlias: wsl-container-desktop
 ReleaseDate: $ReleaseDate
 Installers:
 - Architecture: x64
@@ -79,12 +79,12 @@ PackageVersion: $Version
 PackageLocale: en-US
 Publisher: $Publisher
 PublisherUrl: https://github.com/$($Repo.Split('/')[0])
-PackageName: WLS Desktop
+PackageName: WSL Container Desktop
 PackageUrl: https://github.com/$Repo
 License: $License
 ShortDescription: Native desktop app to manage Docker or Podman running in WSL 2 without Docker Desktop.
 Description: |-
-  WLS Desktop manages a Docker or Podman engine inside a WSL 2 distribution: containers, images,
+  WSL Container Desktop manages a Docker or Podman engine inside a WSL 2 distribution: containers, images,
   volumes, networks, compose stacks, logs, files, engine installation with TLS-secured API,
   and a docker.exe command for Windows that forwards to the engine in WSL.
 Tags:
