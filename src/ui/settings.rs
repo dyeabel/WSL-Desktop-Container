@@ -159,6 +159,49 @@ fn npipe_section(app: &mut App, ui: &mut egui::Ui) {
             }
             _ => {}
         }
+        // standardní roura Dockeru – nástroje ji najdou bez DOCKER_HOST
+        ui.add_space(4.0);
+        ui.add_enabled_ui(on, |ui| {
+            let mut std_on = app.cfg.read().map(|c| c.npipe_standard).unwrap_or(true);
+            if ui
+                .checkbox(&mut std_on, tf!("Také standardní roura {} (jako Docker Desktop)", "Also the standard pipe {} (like Docker Desktop)", crate::npipe::STANDARD_PIPE))
+                .on_hover_text(t!(
+                    "Docker CLI, Testcontainers (Java i .NET), VS Code a Docker SDK ji použijí samy, když DOCKER_HOST není nastavená – zápis adresy roury pak nehraje roli.",
+                    "Docker CLI, Testcontainers (Java and .NET), VS Code and Docker SDKs use it on their own when DOCKER_HOST is not set – so the pipe address format does not matter."
+                ))
+                .changed()
+            {
+                let res = match app.cfg.write() {
+                    Ok(mut g) => {
+                        g.npipe_standard = std_on;
+                        g.save()
+                    }
+                    Err(e) => Err(e.to_string()),
+                };
+                if let Err(e) = res {
+                    app.toast(false, tf!("Nastavení nelze uložit: {e}", "Cannot save settings: {e}"));
+                }
+                app.cfg_draft.npipe_standard = std_on;
+                let ctx = ui.ctx().clone();
+                crate::npipe::apply(on, app.cfg.clone(), move || ctx.request_repaint());
+            }
+        });
+        match crate::npipe::state_standard() {
+            crate::npipe::State::Running => {
+                ui.label(
+                    RichText::new(t!(
+                        "\u{E184} Standardní roura běží – nástroje se připojí bez DOCKER_HOST (doporučeno ji nenastavovat).",
+                        "\u{E184} The standard pipe is running – tools connect without DOCKER_HOST (best left unset)."
+                    ))
+                    .color(theme::green())
+                    .small(),
+                );
+            }
+            crate::npipe::State::Failed(e) if on => {
+                ui.label(RichText::new(tf!("\u{E4E0} Standardní rouru nelze použít: {e}", "\u{E4E0} Cannot use the standard pipe: {e}")).color(theme::yellow()).small());
+            }
+            _ => {}
+        }
         ui.label(
             muted(tf!(
                 "Aplikace přijímá spojení na {} (jen aktuální uživatel Windows, bez vzdáleného přístupu) a předává je API enginu – v režimu TLS s certifikátem aplikace, takže nástroje nepotřebují klíč na disku. \

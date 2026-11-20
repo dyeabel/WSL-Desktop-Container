@@ -362,6 +362,13 @@ that forwards to the engine API – over TLS when enabled. Tools then use
 `DOCKER_HOST=npipe:////./pipe/wls_docker_engine` and never need the client key; the pipe exists
 only while the app runs.
 
+By default the relay also listens on the **standard pipe `\\.\pipe\docker_engine`** (the one
+Docker Desktop uses; *Also the standard pipe* in the same section). Docker CLI, Testcontainers
+(Java and .NET), VS Code and Docker SDKs try it when `DOCKER_HOST` is not set, so with it running
+`DOCKER_HOST` is best left unset – that also avoids the problem that Go tools need the
+`npipe:////./pipe/…` form while Docker.DotNet (Testcontainers for .NET) only reads
+`npipe://./pipe/…`. When Docker Desktop already holds the pipe, the app keeps only its own.
+
 ### `docker` command for Windows (shim)
 
 The project also builds a small `docker.exe` (`src/shim/docker.rs`) that forwards commands to

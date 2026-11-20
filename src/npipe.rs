@@ -17,6 +17,9 @@ use std::time::Duration;
 
 /// Název roury aplikace (jiný než `docker_engine` Docker Desktopu, aby se nepraly).
 pub const PIPE_NAME: &str = r"\\.\pipe\wls_docker_engine";
+/// Standardní roura Dockeru ve Windows (Docker Desktop): Docker CLI, Testcontainers (Java i .NET),
+/// VS Code a SDK ji zkoušejí, když DOCKER_HOST není nastavená – pak není potřeba vůbec.
+pub const STANDARD_PIPE: &str = r"\\.\pipe\docker_engine";
 
 /// Velikost bloku pro přeposílání dat.
 const CHUNK: usize = 64 * 1024;
@@ -578,11 +581,39 @@ pub enum State {
 
 /// Relay aplikace – zamyká jen vlákno z `apply` (start / zastavení může chvíli trvat).
 static APP_RELAY: Mutex<Option<Relay>> = Mutex::new(None);
+/// Relay na standardní rouře `docker_engine`.
+static STD_RELAY: Mutex<Option<Relay>> = Mutex::new(None);
 /// Stav pro UI – drží se jen na okamžik, takže čtení z UI vlákna neblokuje.
 static APP_STATE: Mutex<State> = Mutex::new(State::Off);
+static STD_STATE: Mutex<State> = Mutex::new(State::Off);
 
 pub fn state() -> State {
     APP_STATE.lock().map(|g| g.clone()).unwrap_or(State::Off)
+}
+
+/// Stav standardní roury `\\.\pipe\docker_engine`.
+pub fn state_standard() -> State {
+    STD_STATE.lock().map(|g| g.clone()).unwrap_or(State::Off)
+}
+
+/// Zapne / vypne jednu rouru; vrací nový stav.
+fn switch(slot: &Mutex<Option<Relay>>, name: &str, on: bool, target: impl FnOnce() -> TargetFn) -> State {
+    let Ok(mut g) = slot.lock() else { return State::Failed("lock".into()) };
+    if !on {
+        // Drop počká na přijímací vlákno, takže název je pak hned volný pro nové zapnutí
+        *g = None;
+        return State::Off;
+    }
+    if g.is_some() {
+        return State::Running;
+    }
+    match Relay::start(name, target()) {
+        Ok(r) => {
+            *g = Some(r);
+            State::Running
+        }
+        Err(e) => State::Failed(e),
+    }
 }
 
 /// Cíl podle aktuální konfigurace aplikace (port, TLS klient aplikace).
@@ -598,29 +629,24 @@ pub fn app_target(cfg: Arc<RwLock<crate::config::Config>>) -> TargetFn {
     })
 }
 
-/// Zapne / vypne rouru aplikace na pozadí (neblokuje UI); `done` se zavolá po změně stavu.
+/// Zapne / vypne roury aplikace na pozadí (neblokuje UI); `done` se zavolá po změně stavu.
+/// Standardní `docker_engine` jen s `npipe_standard` – když ji drží Docker Desktop, zůstane
+/// ve stavu Failed a aplikace běží dál jen na své rouře.
 pub fn apply(on: bool, cfg: Arc<RwLock<crate::config::Config>>, done: impl FnOnce() + Send + 'static) {
     thread::spawn(move || {
-        let Ok(mut g) = APP_RELAY.lock() else { return };
-        // vypnutí: Drop počká na přijímací vlákno, takže název je pak hned volný pro nové zapnutí
-        let st = if !on {
-            *g = None;
-            State::Off
-        } else if g.is_some() {
-            State::Running
-        } else {
-            match Relay::start(PIPE_NAME, app_target(cfg)) {
-                Ok(r) => {
-                    *g = Some(r);
-                    State::Running
-                }
-                Err(e) => State::Failed(e),
-            }
-        };
+        let std_on = on && cfg.read().map(|c| c.npipe_standard).unwrap_or(false);
+        let st = switch(&APP_RELAY, PIPE_NAME, on, || app_target(cfg.clone()));
         if let Ok(mut s) = APP_STATE.lock() {
             *s = st;
         }
-        drop(g);
+        let st = switch(&STD_RELAY, STANDARD_PIPE, std_on, || app_target(cfg.clone()));
+        let st = match st {
+            State::Failed(e) => State::Failed(tf!("{e} (rouru nejspíš drží Docker Desktop)", "{e} (probably held by Docker Desktop)")),
+            s => s,
+        };
+        if let Ok(mut s) = STD_STATE.lock() {
+            *s = st;
+        }
         done();
     });
 }
