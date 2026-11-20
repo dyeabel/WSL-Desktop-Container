@@ -892,6 +892,54 @@ pub fn link_stays_inside(entry: &Path, target: &str) -> bool {
     true
 }
 
+/// Cíl symlinku smí mít `..` jen na začátku (`../a/b`, ne `a/../b`): Windows by `..` za
+/// jiným symlinkem vyhodnotil fyzicky, a lexikální kontrola `link_stays_inside` by neplatila.
+pub fn link_target_canonical(target: &str) -> bool {
+    let mut seen_name = false;
+    for c in target.split('/') {
+        match c {
+            "" | "." => {}
+            ".." if seen_name => return false,
+            ".." => {}
+            _ => seen_name = true,
+        }
+    }
+    true
+}
+
+/// Prochází cesta `dest/rel` přes existující symlink / reparse point (u `include_last` i poslední
+/// složka)? Na NTFS (bez rozlišení velikosti písmen) zachytí i `s/…`, když v cíli už je symlink `S`.
+fn through_link(dest: &Path, rel: &Path, include_last: bool) -> bool {
+    let comps: Vec<_> = rel.components().collect();
+    let n = if include_last { comps.len() } else { comps.len().saturating_sub(1) };
+    let mut cur = dest.to_path_buf();
+    for c in &comps[..n] {
+        cur.push(c);
+        match std::fs::symlink_metadata(&cur) {
+            Ok(m) if m.file_type().is_symlink() || is_reparse(&m) => return true,
+            Ok(_) => {}
+            Err(_) => return false, // dál nic neexistuje – vytvoří se jako běžné složky
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
+fn is_reparse(m: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    m.file_attributes() & 0x400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT (junction, mount point…)
+}
+
+#[cfg(not(windows))]
+fn is_reparse(_: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// Leží (už existující) složka `dir` po vyřešení všech odkazů uvnitř `dest_canon`?
+fn resolves_inside(dest_canon: &Path, dir: &Path) -> bool {
+    std::fs::canonicalize(dir).is_ok_and(|c| c.starts_with(dest_canon))
+}
+
 #[cfg(windows)]
 fn make_symlink(target: &Path, link: &Path, dir: bool) -> std::io::Result<()> {
     if dir { std::os::windows::fs::symlink_dir(target, link) } else { std::os::windows::fs::symlink_file(target, link) }
@@ -902,9 +950,13 @@ fn make_symlink(target: &Path, link: &Path, _dir: bool) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, link)
 }
 
-/// Rozbalí tar do složky `dest` (ochrana: `..`, absolutní cesty, symlinky ven se přeskočí).
+/// Rozbalí tar do složky `dest`. Ochrana (N-01): `..` a absolutní cesty se odmítnou, symlinky ven
+/// se přeskočí, nic se nezapíše přes existující symlink / reparse point (ani přes kolizi velikosti
+/// písmen na NTFS) a rodičovská složka každé položky musí po vyřešení odkazů ležet uvnitř `dest`.
 pub fn extract_tar<R: Read>(r: R, dest: &Path) -> Result<ExtractReport, String> {
     let mut rep = ExtractReport::default();
+    let dest_canon = std::fs::canonicalize(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+    let via_link = |raw: &str| tf!("{raw} – cesta vede přes symlink", "{raw} – path goes through a symlink");
     let mut ar = tar::Archive::new(r);
     let entries = ar.entries().map_err(|e| e.to_string())?;
     for e in entries {
@@ -919,14 +971,31 @@ pub fn extract_tar<R: Read>(r: R, dest: &Path) -> Result<ExtractReport, String> 
         }
         let target = dest.join(&rel);
         let kind = e.header().entry_type();
-        let mkparent = |t: &Path| t.parent().map(std::fs::create_dir_all).transpose().map_err(|e| format!("{}: {e}", t.display()));
+        // rodičovské složky: nevést přes symlink, vytvořit, ověřit, že po vyřešení zůstaly uvnitř
+        let mkparent = |t: &Path| -> Result<bool, String> {
+            let Some(parent) = t.parent() else { return Ok(false) };
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            Ok(resolves_inside(&dest_canon, parent))
+        };
+        let is_dir_entry = kind == tar::EntryType::Directory;
+        if through_link(dest, &rel, is_dir_entry) {
+            rep.skipped.push(via_link(&raw));
+            continue;
+        }
         match kind {
             tar::EntryType::Directory => {
                 std::fs::create_dir_all(&target).map_err(|e| format!("{}: {e}", target.display()))?;
+                if !resolves_inside(&dest_canon, &target) {
+                    rep.skipped.push(via_link(&raw));
+                    continue;
+                }
                 rep.dirs += 1;
             }
             tar::EntryType::Regular | tar::EntryType::Continuous | tar::EntryType::GNUSparse => {
-                mkparent(&target)?;
+                if !mkparent(&target)? {
+                    rep.skipped.push(via_link(&raw));
+                    continue;
+                }
                 // existující symlink v cíli nahradit, nepsat skrz něj
                 if std::fs::symlink_metadata(&target).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
                     let _ = std::fs::remove_file(&target);
@@ -942,9 +1011,17 @@ pub fn extract_tar<R: Read>(r: R, dest: &Path) -> Result<ExtractReport, String> 
                 let link = e.link_name_bytes().map(|l| String::from_utf8_lossy(&l).into_owned()).unwrap_or_default();
                 if kind == tar::EntryType::Link {
                     // pevný odkaz: cíl je cesta v archivu – zkopírovat už rozbalený soubor
-                    match safe_rel_path(&link).map(|p| dest.join(p)) {
-                        Some(src) if src.is_file() => {
-                            mkparent(&target)?;
+                    // zdroj nesmí vést přes symlink ani jím být (jinak by se zkopíroval soubor zvenku)
+                    let src = safe_rel_path(&link).filter(|p| !p.as_os_str().is_empty() && !through_link(dest, p, true)).map(|p| dest.join(p));
+                    match src {
+                        Some(src) if std::fs::symlink_metadata(&src).is_ok_and(|m| m.is_file()) => {
+                            if !mkparent(&target)? {
+                                rep.skipped.push(via_link(&raw));
+                                continue;
+                            }
+                            if std::fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+                                let _ = std::fs::remove_file(&target);
+                            }
                             rep.bytes += std::fs::copy(&src, &target).map_err(|e| format!("{}: {e}", target.display()))?;
                             rep.files += 1;
                         }
@@ -952,11 +1029,14 @@ pub fn extract_tar<R: Read>(r: R, dest: &Path) -> Result<ExtractReport, String> 
                     }
                     continue;
                 }
-                if !link_stays_inside(&rel, &link) {
+                if !link_stays_inside(&rel, &link) || !link_target_canonical(&link) {
                     rep.skipped.push(tf!("{raw} – symlink mimo cílovou složku ({link})", "{raw} – symlink outside the target folder ({link})"));
                     continue;
                 }
-                mkparent(&target)?;
+                if !mkparent(&target)? {
+                    rep.skipped.push(via_link(&raw));
+                    continue;
+                }
                 let t: PathBuf = link.split('/').filter(|c| !c.is_empty() && *c != ".").map(|c| if c == ".." { "..".to_string() } else { win_component(c) }).collect();
                 let is_dir = target.parent().map(|p| p.join(&t).is_dir()).unwrap_or(false);
                 if make_symlink(&t, &target, is_dir).is_err() {
@@ -1161,6 +1241,51 @@ mod tests {
         assert!(!dest.join("abs.txt").exists());
         assert!(!dest.join("ok").join("out").exists() && !dest.join("ok").join("abs").exists());
         std::fs::remove_dir_all(&dest).unwrap();
+    }
+
+    #[test]
+    fn link_targets_only_leading_dotdot() {
+        assert!(link_target_canonical("../a/b"));
+        assert!(link_target_canonical("../../a"));
+        assert!(link_target_canonical("x"));
+        assert!(!link_target_canonical("b/.."));
+        assert!(!link_target_canonical("S/../../x"));
+    }
+
+    /// N-01: řetěz symlinků + kolize velikosti písmen (`S` vs `s` na NTFS) nesmí zapsat mimo cíl.
+    /// Bez oprávnění k symlinkům (Developer Mode) se symlinky jen přeskočí – test platí v obou případech.
+    #[test]
+    fn extraction_blocks_symlink_chains() {
+        let root = tmp_dir("chain");
+        let dest = root.join("dest");
+        std::fs::create_dir_all(&dest).unwrap();
+        let data = tar_of(&[
+            ("d/", tar::EntryType::Directory, b"", ""),
+            ("d/S", tar::EntryType::Symlink, b"", ".."),
+            ("d/s/T", tar::EntryType::Symlink, b"", ".."),
+            ("d/s/t/evil.txt", tar::EntryType::Regular, b"x", ""),
+            ("d/S/evil2.txt", tar::EntryType::Regular, b"x", ""),
+            ("d/S/sub/", tar::EntryType::Directory, b"", ""),
+            ("d/via", tar::EntryType::Symlink, b"", "S/../.."),
+            ("d/hard", tar::EntryType::Link, b"", "d/S/../../x"),
+            ("d/ok.txt", tar::EntryType::Regular, b"ok", ""),
+        ]);
+        let rep = extract_tar(std::io::Cursor::new(data), &dest).unwrap();
+        assert_eq!(std::fs::read(dest.join("d").join("ok.txt")).unwrap(), b"ok");
+        assert!(!root.join("evil.txt").exists() && !dest.join("evil.txt").exists(), "{:?}", rep.skipped);
+        assert!(!dest.join("evil2.txt").exists() && !root.join("evil2.txt").exists());
+        assert!(!dest.join("T").exists() && !dest.join("sub").exists());
+        assert!(!dest.join("d").join("via").exists());
+        assert_eq!(rep.files, 1, "{:?}", rep.skipped);
+        // předem existující symlink v cíli (např. z dřívějšího stažení) se nesmí použít jako cesta ven
+        let out = root.join("outside");
+        std::fs::create_dir_all(&out).unwrap();
+        if make_symlink(&out, &dest.join("pre"), true).is_ok() {
+            let rep = extract_tar(std::io::Cursor::new(tar_of(&[("pre/x.txt", tar::EntryType::Regular, b"x", "")])), &dest).unwrap();
+            assert!(!out.join("x.txt").exists(), "{:?}", rep.skipped);
+            assert_eq!(rep.skipped.len(), 1);
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -26,6 +26,7 @@ mod memory;
 mod netinfo;
 #[allow(dead_code)] // používá docker shim, tady jen kvůli testům
 mod pathmap;
+mod portable_acl;
 mod portrelay;
 mod shim_install;
 mod tray;
@@ -34,6 +35,8 @@ mod ui;
 mod worker;
 mod wsl;
 mod wslconfig;
+#[cfg(test)]
+mod bench;
 #[cfg(test)]
 mod live_docker;
 #[cfg(test)]

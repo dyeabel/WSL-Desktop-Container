@@ -504,3 +504,95 @@ WSL idles the engine out. This is denial of service only.
 | TLS client | Session resumption is disabled – the socat/OpenSSL proxy rejected resumed sessions, so only the first new connection per client config worked. |
 
 Still open: plain mode for existing setups (F-01 / F-02 when TLS is not turned on), F-15 (event lines), F-16 – F-19.
+
+---
+
+# Re-audit (2026-11-20, commit `cc91d5b`)
+
+Read-only review of the current source, including the code added since the first review: the named-pipe relay (`npipe.rs`),
+the IPv6 relay (`portrelay.rs`), the shim fast path and contexts (`shim/*.rs`), files inside containers (`container_fs.rs`),
+DPAPI, compose templates and the CI workflows. Live checks were read-only (`/_ping`, `icacls`, `ss`). Dependencies were
+scanned with `cargo audit` 0.23 (RustSec database of 2026-11-20).
+
+## Status of the earlier findings
+
+| ID | Status | Evidence |
+|---|---|---|
+| F-01 / F-02 | Mitigated | New setups default to TLS, a *Turn TLS on* hint for plain setups. `Config::default` still has `tls: false` and plain mode still accepts any `Host` header. |
+| F-03, F-04 | Fixed | `wsl.rs` escapes `;` for `wt.exe`; fallback uses `CREATE_NEW_CONSOLE`, no `cmd.exe`. |
+| F-05 | Incomplete | up / build / pull are gated; *Open in Explorer* can still be bypassed (N-02), Terminal / Notepad use label folders. |
+| F-06, F-07, F-09, F-10, F-12, F-13, F-14 | Fixed | Verified in code. |
+| F-08 | Fixed | Expiry check, regeneration, `ca-key.pem` 0400. socat runs with `max-children=256`, not 32. |
+| F-11 | Incomplete | The interactive *Run* (Windows Terminal) still puts env values on the command line (N-06). |
+| F-15 | Partial | Frame cap and `short_id` fixed; event and header lines still unbounded. |
+| F-16 – F-19 | Open | Unchanged (Info). |
+
+## New findings
+
+| ID | Severity | Title | Location | Status |
+|---|---|---|---|---|
+| N-01 | Medium (fixed) | Downloading a folder from a container can write outside the target folder (symlink chains + case-insensitive NTFS names) | `src/container_fs.rs` (tar extraction) | Confirmed (reproduced by a test) |
+| N-02 | Medium (fixed) | *Open in Explorer* check bypassable with trailing dots / spaces or `\` in a Linux directory name – Explorer opens a file | `src/worker/mod.rs`, `src/wsl.rs` `unc()` | Confirmed (live test) |
+| N-03 | Medium, High on shared PCs (fixed) | Portable folder `C:\WSLContainerDesktop` inherits `Authenticated Users:(M)` – another local user can replace the EXEs (autostart, `docker.exe` on PATH) | `src/config.rs` portable mode | Confirmed (`icacls`) |
+| N-04 | Medium | `release.yml` runs on `pull_request` with `contents: write`; a self-hosted WSL runner exists for `e2e.yml` – a fork PR could target it if the repo becomes public | `.github/workflows/*.yml` | Suspected (depends on repo visibility) |
+| N-05 | Low | `\.\pipe\docker_engine` can be pre-created by another user; the app then reports it as Docker Desktop | `src/npipe.rs` | Confirmed (design) |
+| N-06 | Low | Interactive *Run* passes env values in argv | `src/worker/containers.rs`, `src/worker/spec.rs` | Confirmed |
+| N-07 | Low | Shim fast path: `dechunk` size overflow can panic; `read_all` unbounded | `src/shim/fast.rs` | Confirmed |
+| N-08 | Low | CI: secrets exposed as job env to every step, actions pinned by tag not SHA, `cargo audit` not in CI | `.github/workflows/release.yml` | Confirmed |
+| N-09 | Info | `ps_quote` now quotes the whole user PATH (U+2019 breaks it); Path rewritten as `REG_SZ` | `src/shim_install.rs` | Confirmed |
+| N-10 | Info | Doc said `max-children=32`, code uses 256 | `src/engine.rs` | Confirmed |
+| N-11 | Info | With WSL interop on, TLS / named pipe are not a boundary against non-root WSL users (they can start Windows programs as the user) | design | Known since F-06 |
+
+**N-01.** Extraction checks are lexical: `..` and absolute paths are rejected, but a symlink in an intermediate component is
+followed by `create_dir_all` / `File::create`. On case-insensitive NTFS a container can ship `S -> ..` and then `s/T/…`, so later
+entries land outside the destination (up to the Startup folder). Needs symlink creation, which Developer Mode allows.
+*Fix:* skip symlinks on Windows, or canonicalise every parent and require it inside the destination; detect case collisions.
+
+**N-02.** `test -d` runs on the Linux path, but Win32 normalisation strips trailing dots / spaces and treats `\` as a separator,
+so `/srv/app/x.hta.` passes the check while `\wsl.localhost\D\srv\app\x.hta.` opens `x.hta`. *Fix:* check `Path::is_dir()`
+on the final UNC path right before spawning Explorer, reject such names, and apply the image-label trust check to it.
+
+**N-03.** *Fix:* on first portable start set a protected DACL (user + SYSTEM + Administrators) on the folder, or warn when it is
+writable by others; recommend a location inside the user profile.
+
+**N-04.** *Fix:* keep self-hosted runners off public repositories (or restrict them with a runner group to `e2e.yml`), require
+approval for outside contributors, use `contents: read` for PR runs.
+
+## Dependencies (`cargo audit`)
+
+| Advisory | Crate | Kind | In the Windows build? |
+|---|---|---|---|
+| RUSTSEC-2026-0194, RUSTSEC-2026-0195 | `quick-xml` 0.30.0 | vulnerability (DoS) | **No** – only via `accesskit_unix` → `zbus_xml` (Linux) |
+| RUSTSEC-2024-0429 | `glib` 0.18.5 | unsound | No – Linux GTK backend of `rfd` / `tray-icon` |
+| RUSTSEC-2026-0370 / 0371 / 0372 | `zvariant`, `zbus_names`, `zvariant_derive` | unmaintained | No – Linux D-Bus |
+| RUSTSEC-2024-0370 | `proc-macro-error` | unmaintained | No |
+| RUSTSEC-2024-0436 | `paste` 1.0.15 | unmaintained | Yes, compile time only (proc-macro in `accesskit_windows`) |
+| RUSTSEC-2026-0192 | `ttf-parser` 0.25.1 | unmaintained | Yes, parses only the fonts embedded in the EXE (no untrusted input) |
+
+No known vulnerability is compiled into the Windows binaries (checked with `cargo tree -i … --target x86_64-pc-windows-msvc`).
+The advisories come from `Cargo.lock` covering all platforms; they disappear with the next `eframe` / `egui` upgrade.
+
+## Verdict
+
+**Safe to use on a single-user Windows PC** in the default configuration of new installs: TLS API with client certificate,
+named-pipe relay, app installed per user (winget / `%LOCALAPPDATA%`) or as a portable package (whose folder the app now
+locks to the user, N-03). The live benchmark confirms that plain HTTP without the certificate is rejected by both engines.
+
+**Not recommended on shared / RDP machines** while plain API mode is on (any local user gets root on the engine), or while
+another user can hold `\\.\pipe\docker_engine` (N-05).
+
+Recommendations for users: keep TLS on; use the named pipe instead of exporting `key.pem`; if the app warns that it could not
+restrict its portable folder, move it into your profile; if other WSL users or distributions are untrusted, consider
+`[interop] enabled=false` and drvfs `umask=077`.
+
+Fix order (original): N-01, N-03, N-02, N-04, then the Low items; add `cargo audit` to CI. N-01 – N-03 are fixed, see below.
+
+## Fixed after the re-audit
+
+| ID | Fix | Verified by |
+|---|---|---|
+| N-01 | `extract_tar` skips every entry whose path goes through an existing symlink or reparse point (this also catches case-insensitive NTFS collisions such as `S` vs `s`), symlink targets may use `..` only as a prefix, and the parent folder of every entry must resolve (`canonicalize`) inside the destination before anything is written. Hard-link sources must be regular files reached without symlinks. | `extraction_blocks_symlink_chains` – the attack from the audit, run with Developer Mode on; it fails on the previous code (`evil.txt` written outside the target) and passes now |
+| N-02 | *Open in Explorer* rejects Linux paths that Win32 would normalise differently (trailing dot or space, `\`, `:`, reserved characters, `.` / `..`) and checks on the Windows side that the final `\wsl.localhost\…` path is a directory right before starting `explorer.exe` (`wsl::explorer_dir`). | `unc_safe_rejects_win32_normalization`; `live_explorer_dir` – a Linux folder `x.hta.` next to a file `x.hta` passes `test -d` but is refused |
+| N-03 | In portable mode the app sets a protected DACL on its folder at start (current user, SYSTEM, Administrators – full control, inherited by subfolders and files) whenever the folder grants access to anyone else, and tells the user; if that fails it shows a warning to move the app into the user profile (`src/portable_acl.rs`). | `detects_inherited_and_shared_acl`, `protects_real_folder`; `live_portable_acl_c_root` – a folder under `C:\` loses `Authenticated Users:(M)` and `Users:(RX)` |
+
+Still open from the re-audit: N-04 (CI / self-hosted runner), N-05 – N-11.

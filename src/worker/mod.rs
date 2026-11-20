@@ -639,12 +639,15 @@ impl Worker {
                 .map_err(|e| e.to_string()),
             Cmd::Explorer(p) => {
                 // jen existující složka – cesta může pocházet z labelu kontejneru a explorer.exe
-                // by soubor rovnou otevřel přidruženým programem (F-05)
+                // by soubor rovnou otevřel přidruženým programem (F-05). Kontrola v Linuxu nestačí:
+                // Win32 jinak normalizuje názvy (`x.hta.` → `x.hta`, N-02) – proto ještě ve Windows
+                // na výsledné UNC cestě těsně před spuštěním.
                 if wsl::run(&distro, None, None, &["test", "-d", &p]).is_err() {
                     return Err(tf!("{p} není složka v {distro}", "{p} is not a folder in {distro}"));
                 }
+                let unc = wsl::explorer_dir(&distro, &p)?;
                 std::process::Command::new("explorer.exe")
-                    .arg(wsl::unc(&distro, &p))
+                    .arg(unc)
                     .spawn()
                     .map(|_| String::new())
                     .map_err(|e| e.to_string())

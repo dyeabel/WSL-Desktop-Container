@@ -344,6 +344,33 @@ pub fn unc(distro: &str, linux_path: &str) -> String {
     format!(r"\\wsl.localhost\{}{}", distro, linux_path.replace('/', r"\"))
 }
 
+/// Dá se linuxová cesta převést na UNC beze změny významu? Win32 u každé části odřízne tečky
+/// a mezery na konci, `\` bere jako oddělovač a `:` jako alternativní datový proud – `x.hta.`
+/// by v Linuxu byla složka, ve Windows ale soubor `x.hta` (N-02).
+pub fn unc_safe(linux_path: &str) -> bool {
+    linux_path.starts_with('/')
+        && linux_path.split('/').filter(|c| !c.is_empty()).all(|c| {
+            c != "."
+                && c != ".."
+                && !c.ends_with('.')
+                && !c.ends_with(' ')
+                && !c.chars().any(|ch| ch < ' ' || "\\:<>\"|?*".contains(ch))
+        })
+}
+
+/// UNC cesta ke složce v distribuci pro explorer.exe – jen když je cesta jednoznačná a ve Windows
+/// je to opravdu složka (soubor by explorer.exe otevřel přidruženým programem).
+pub fn explorer_dir(distro: &str, linux_path: &str) -> Result<String, String> {
+    if !unc_safe(linux_path) {
+        return Err(tf!("{linux_path}: název složky nejde bezpečně otevřít ve Windows", "{linux_path}: the folder name cannot be opened safely in Windows"));
+    }
+    let p = unc(distro, linux_path);
+    if !std::path::Path::new(&p).is_dir() {
+        return Err(tf!("{linux_path} není složka v {distro}", "{linux_path} is not a folder in {distro}"));
+    }
+    Ok(p)
+}
+
 /// Převede Windows cestu na linuxovou (wslpath), linuxovou nechá být.
 pub fn to_linux_path(distro: &str, path: &str) -> Result<String, String> {
     let p = path.trim().trim_matches('"');
@@ -590,6 +617,37 @@ mod lxss {
 #[cfg(test)]
 mod manage_tests {
     use super::*;
+
+    #[test]
+    fn unc_safe_rejects_win32_normalization() {
+        assert!(unc_safe("/home/u/stacks/my app"));
+        assert!(unc_safe("/srv/app.v2/x"));
+        assert!(!unc_safe("srv/app"), "jen absolutní");
+        assert!(!unc_safe("/srv/app/x.hta."), "tečka na konci");
+        assert!(!unc_safe("/srv/app/x.hta "), "mezera na konci");
+        assert!(!unc_safe("/srv/a\\..\\x.hta"), "zpětné lomítko");
+        assert!(!unc_safe("/srv/x.hta:stream"));
+        assert!(!unc_safe("/srv/../etc"));
+        assert!(!unc_safe("/srv/a\nb"));
+        // nejednoznačný název → chyba bez přístupu na disk (existenci ověřuje live_explorer_dir)
+        assert!(explorer_dir("WSLCD-No-Such-Distro", "/srv/x.hta.").is_err());
+    }
+
+    /// N-02 živě: složka `x.hta.` projde `test -d` v Linuxu, ve Windows ale vede na soubor `x.hta`.
+    /// `cargo test live_explorer_dir -- --ignored` (WSLCD_DISTRO, výchozí Debian)
+    #[test]
+    #[ignore]
+    fn live_explorer_dir() {
+        let d = std::env::var("WSLCD_DISTRO").unwrap_or_else(|_| "Debian".into());
+        let base = format!("/tmp/wslcd-n02-{}", std::process::id());
+        run(&d, None, None, &["sh", "-c", "mkdir -p \"$1/ok\" \"$1/x.hta.\" && echo x > \"$1/x.hta\"", "sh", &base]).unwrap();
+        assert!(run(&d, None, None, &["test", "-d", &format!("{base}/x.hta.")]).is_ok(), "Linux: je to složka");
+        let bad = explorer_dir(&d, &format!("{base}/x.hta."));
+        let ok = explorer_dir(&d, &format!("{base}/ok"));
+        let _ = run(&d, None, None, &["rm", "-rf", "--", &base]);
+        assert!(bad.is_err(), "{bad:?}");
+        assert!(ok.is_ok(), "{ok:?}");
+    }
 
     #[test]
     fn names() {

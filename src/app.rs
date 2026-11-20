@@ -184,6 +184,28 @@ impl App {
         if let Err(e) = crate::tray::init(cc.egui_ctx.clone(), tx.clone(), shared.clone(), cfg.clone()) {
             startup_toasts.push(Toast { ok: false, text: tf!("Ikonu v oznamovací oblasti nelze vytvořit: {e}", "Cannot create the tray icon: {e}"), until: 0.0 });
         }
+        // portable složka (např. C:\WSLContainerDesktop) nesmí být zapisovatelná pro ostatní
+        // uživatele – EXE se spouští po přihlášení a docker.exe je v PATH (N-03)
+        match crate::portable_acl::protect_portable_dir() {
+            Ok(true) => startup_toasts.push(Toast {
+                ok: true,
+                text: t!(
+                    "Složka aplikace je teď přístupná jen vám (ostatní uživatelé počítače ji nemohou měnit).",
+                    "The app folder is now accessible only to you (other users of this PC cannot modify it)."
+                )
+                .into(),
+                until: 0.0,
+            }),
+            Ok(false) => {}
+            Err(e) => startup_toasts.push(Toast {
+                ok: false,
+                text: tf!(
+                    "Oprávnění složky aplikace nejde omezit ({e}) – ostatní uživatelé počítače ji možná mohou měnit. Přesuňte aplikaci do svého profilu.",
+                    "Cannot restrict the app folder permissions ({e}) – other users of this PC may be able to modify it. Move the app into your profile."
+                ),
+                until: 0.0,
+            }),
+        }
         // pro ladění/screenshoty: WSLCD_START_PAGE=files|containers|…
         let page = match std::env::var("WSLCD_START_PAGE").unwrap_or_default().as_str() {
             "containers" => Page::Containers,

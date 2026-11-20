@@ -584,6 +584,13 @@ to the community repository means a pull request to `microsoft/winget-pkgs` (e.g
 `wingetcreate submit <folder>`); it requires a **public** download URL, i.e. a public repository
 (or another public host for the ZIP), and a license entry (`-License`).
 
+## Benchmark
+
+How Docker and Podman perform inside the app – latency of the app API, the `docker` command and plain `wsl.exe`, API load
+tests, 50 containers at once, resource footprint – see **[docs/BENCHMARK.md](docs/BENCHMARK.md)**. Reproduce with
+`powershell -ExecutionPolicy Bypass -File scriptsench.ps1` (`-Quick` for a ~2 minute smoke run); it switches the primary
+distribution for each engine like *Make primary* and switches back at the end.
+
 ## Tests
 
 ```bash

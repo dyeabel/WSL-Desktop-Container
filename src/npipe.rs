@@ -85,7 +85,7 @@ pub fn pump<R: Read, W: Write>(mut r: R, mut w: W) -> io::Result<u64> {
 // ---------------------------------------------------------------- Win32
 
 #[cfg(windows)]
-mod win {
+pub(crate) mod win {
     use std::io;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -168,6 +168,12 @@ mod win {
 
     /// Bezpečnostní popisovač ze SDDL (uvolní se LocalFree při drop).
     pub struct SecDesc(PSECURITY_DESCRIPTOR);
+    impl SecDesc {
+        /// Ukazatel na popisovač (platný, dokud žije SecDesc).
+        pub fn raw(&self) -> PSECURITY_DESCRIPTOR {
+            self.0
+        }
+    }
     // SAFETY: popisovač je neměnná paměť alokovaná systémem; jen ho předáváme CreateNamedPipeW.
     unsafe impl Send for SecDesc {}
     unsafe impl Sync for SecDesc {}
