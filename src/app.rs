@@ -128,6 +128,8 @@ pub struct App {
     first_frame: bool,
     /// spouštění s Windows (načte se při prvním zobrazení Nastavení)
     pub autostart: Option<bool>,
+    /// vybraná záložka stránky Nastavení
+    pub settings_tab: ui::settings::Tab,
     theme_checked: std::time::Instant,
     was_minimized: bool,
     /// okno bylo v minulém snímku schované (po zobrazení se hned obnoví data)
@@ -260,6 +262,7 @@ impl App {
             logo,
             first_frame: true,
             autostart: None,
+            settings_tab: Default::default(),
             theme_checked: std::time::Instant::now(),
             was_minimized: false,
             was_hidden: false,

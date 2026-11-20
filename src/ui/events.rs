@@ -133,6 +133,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     if to_settings {
         app.page = Page::Settings;
+        app.settings_tab = super::settings::Tab::Notifications;
     }
 
     let f = app.events.filter.to_lowercase();

@@ -172,16 +172,16 @@ fn remove_dialog(app: &mut App, ctx: &egui::Context) {
         if is_engine {
             ui.label(
                 RichText::new(tf!(
-                    "\u{E4E0} {} používá aplikace pro engine. Nejdřív v Nastavení přepni distribuci s enginem na jinou.",
-                    "\u{E4E0} {} is used by the app for the engine. Switch the engine distribution in Settings first.",
+                    "\u{E4E0} {} je primární distribuce aplikace. Nejdřív nastav jako primární jinou distribuci (tabulka distribucí na stránce WSL engine).",
+                    "\u{E4E0} {} is the app's primary distribution. First make another distribution primary (distribution list on the WSL engine page).",
                     d.name
                 ))
                 .color(theme::yellow()),
             );
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui.button(t!("\u{E270} Otevřít Nastavení", "\u{E270} Open Settings")).clicked() {
-                    app.page = crate::app::Page::Settings;
+                if ui.button(t!("\u{EB02} Otevřít WSL engine", "\u{EB02} Open WSL engine")).clicked() {
+                    app.page = crate::app::Page::Engine;
                     cancel = true;
                 }
             });
