@@ -14,7 +14,11 @@ pub fn wanted_sddl(user_sid: &str) -> String {
 
 /// Je DACL (SDDL, jen část `D:`) chráněný proti dědění a povoluje přístup jen uživateli,
 /// SYSTEM a Administrátorům? Zakazující ACE nevadí.
-pub fn dacl_is_private(sddl: &str, user_sid: &str) -> bool {
+///
+/// `sid_of` převede správce z SDDL na textový SID: Windows píše dobře známé účty zkratkou
+/// (`SY`, `BA`, a také `LA` = vestavěný Administrator s RID 500 – pod ním běží např.
+/// runner GitHub Actions), takže uživatel nemusí být v SDDL zapsaný svým SID.
+pub fn dacl_is_private(sddl: &str, user_sid: &str, sid_of: impl Fn(&str) -> String) -> bool {
     let Some(d) = sddl.find("D:").map(|i| &sddl[i + 2..]) else { return false };
     let flags = &d[..d.find('(').unwrap_or(d.len())];
     if !flags.contains('P') {
@@ -23,9 +27,50 @@ pub fn dacl_is_private(sddl: &str, user_sid: &str) -> bool {
     d.split('(').skip(1).filter_map(|a| a.split(')').next()).all(|ace| {
         let f: Vec<&str> = ace.split(';').collect();
         let allow = f.first().is_some_and(|t| *t == "A" || *t == "OA");
-        let trustee = f.get(5).copied().unwrap_or("");
-        !allow || trustee.eq_ignore_ascii_case(user_sid) || trustee == "SY" || trustee == "BA"
+        let sid = sid_of(f.get(5).copied().unwrap_or(""));
+        !allow || sid.eq_ignore_ascii_case(user_sid) || sid == SID_SYSTEM || sid == SID_ADMINS
     })
+}
+
+const SID_SYSTEM: &str = "S-1-5-18";
+const SID_ADMINS: &str = "S-1-5-32-544";
+
+/// Zkratka nebo SID ze SDDL → textový SID (`SY` → `S-1-5-18`, `LA` → `S-1-5-21-…-500`).
+/// Když převod selže, vrátí vstup beze změny.
+#[cfg(windows)]
+pub fn canonical_sid(s: &str) -> String {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
+    use windows_sys::Win32::Security::PSID;
+    if s.starts_with("S-") || s.is_empty() {
+        return s.to_string();
+    }
+    let w = crate::npipe::win::wide(s);
+    let mut sid: PSID = std::ptr::null_mut();
+    // SAFETY: w je řetězec ukončený nulou; sid alokuje systém (LocalFree).
+    if unsafe { ConvertStringSidToSidW(w.as_ptr(), &mut sid) } == 0 {
+        return s.to_string();
+    }
+    let mut out: *mut u16 = std::ptr::null_mut();
+    // SAFETY: sid je platný; out alokuje systém (LocalFree).
+    let ok = unsafe { ConvertSidToStringSidW(sid, &mut out) };
+    let r = if ok != 0 {
+        // SAFETY: out je řetězec ukončený nulou, platný do LocalFree.
+        unsafe {
+            let mut n = 0;
+            while *out.add(n) != 0 {
+                n += 1;
+            }
+            let v = String::from_utf16_lossy(std::slice::from_raw_parts(out, n));
+            LocalFree(out.cast());
+            v
+        }
+    } else {
+        s.to_string()
+    };
+    // SAFETY: sid alokovala ConvertStringSidToSidW (LocalAlloc).
+    unsafe { LocalFree(sid) };
+    r
 }
 
 /// V portable režimu zajistí soukromé ACL složky aplikace. Ok(true) = ACL se změnilo,
@@ -86,7 +131,7 @@ pub fn protect_dir(dir: &std::path::Path) -> Result<bool, String> {
     };
     // SAFETY: sd alokovala GetNamedSecurityInfoW (LocalAlloc).
     unsafe { LocalFree(sd) };
-    if dacl_is_private(&current, &sid) {
+    if dacl_is_private(&current, &sid, canonical_sid) {
         return Ok(false);
     }
 
@@ -122,20 +167,52 @@ mod tests {
 
     const ME: &str = "S-1-5-21-1-2-3-1001";
 
+    /// převod zkratek bez Win32 (pro test čisté logiky); LA = vestavěný Administrator
+    fn fake_sid(s: &str) -> String {
+        match s {
+            "SY" => "S-1-5-18".into(),
+            "BA" => "S-1-5-32-544".into(),
+            "BU" => "S-1-5-32-545".into(),
+            "AU" => "S-1-5-11".into(),
+            "LA" => "S-1-5-21-1-2-3-500".into(),
+            s => s.into(),
+        }
+    }
+
     #[test]
     fn detects_inherited_and_shared_acl() {
         // ACL kořene disku zděděné do C:\WSLContainerDesktop (N-03)
         let c_root = "D:AI(A;ID;FA;;;BA)(A;OICIIOID;GA;;;BA)(A;OICIID;FA;;;SY)(A;OICIID;0x1200a9;;;BU)(A;ID;0x1301bf;;;AU)(A;OICIIOID;SDGXGWGR;;;AU)";
-        assert!(!dacl_is_private(c_root, ME));
+        assert!(!dacl_is_private(c_root, ME, fake_sid));
         // chráněné, ale s přístupem pro Users
-        assert!(!dacl_is_private("D:P(A;OICI;FA;;;S-1-5-21-1-2-3-1001)(A;OICI;0x1200a9;;;BU)", ME));
+        assert!(!dacl_is_private("D:P(A;OICI;FA;;;S-1-5-21-1-2-3-1001)(A;OICI;0x1200a9;;;BU)", ME, fake_sid));
         // nechráněné (dědí z rodiče), i když jen uživatel
-        assert!(!dacl_is_private("D:(A;OICI;FA;;;S-1-5-21-1-2-3-1001)", ME));
-        assert!(!dacl_is_private("", ME));
+        assert!(!dacl_is_private("D:(A;OICI;FA;;;S-1-5-21-1-2-3-1001)", ME, fake_sid));
+        assert!(!dacl_is_private("", ME, fake_sid));
         // výsledek opravy
-        assert!(dacl_is_private(&wanted_sddl(ME), ME));
+        assert!(dacl_is_private(&wanted_sddl(ME), ME, fake_sid));
         // zakazující ACE pro jiné nevadí
-        assert!(dacl_is_private("D:P(D;OICI;FA;;;AU)(A;OICI;FA;;;s-1-5-21-1-2-3-1001)(A;OICI;FA;;;SY)", ME));
+        assert!(dacl_is_private("D:P(D;OICI;FA;;;AU)(A;OICI;FA;;;s-1-5-21-1-2-3-1001)(A;OICI;FA;;;SY)", ME, fake_sid));
+    }
+
+    /// Uživatel = vestavěný Administrator (RID 500, runner GitHub Actions): Windows ho v SDDL
+    /// zapíše jako `LA`. Bez převodu by se ACL přepisovalo při každém startu.
+    #[test]
+    fn builtin_admin_written_as_alias() {
+        let admin = "S-1-5-21-1-2-3-500";
+        assert!(dacl_is_private("D:PAI(A;OICI;FA;;;LA)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", admin, fake_sid));
+        // jiný uživatel než LA → není soukromé
+        assert!(!dacl_is_private("D:PAI(A;OICI;FA;;;LA)(A;OICI;FA;;;SY)", ME, fake_sid));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn canonical_sid_resolves_aliases() {
+        assert_eq!(canonical_sid("SY"), "S-1-5-18");
+        assert_eq!(canonical_sid("BA"), "S-1-5-32-544");
+        assert_eq!(canonical_sid("S-1-5-21-1-2-3-4"), "S-1-5-21-1-2-3-4");
+        let la = canonical_sid("LA");
+        assert!(la.starts_with("S-1-5-21-") && la.ends_with("-500"), "{la}");
     }
 
     /// Na skutečné složce: zděděné ACL z %TEMP% se nahradí chráněným, druhé volání nic nemění,
