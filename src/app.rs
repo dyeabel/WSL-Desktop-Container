@@ -663,6 +663,16 @@ impl App {
                                         ui.label(RichText::new(format!("\u{E4E0} {e}")).small().color(theme::red())).on_hover_text(e);
                                     });
                                 }
+                                // CPU a RAM celé WSL VM (poslední vzorek paměti); klik = Přehled
+                                if distro_running {
+                                    let g = self.shared.memory.lock().ok().and_then(|m| m.glance);
+                                    if let Some(g) = g {
+                                        ui.add_space(4.0);
+                                        if ui::glance(ui, &g).clicked() {
+                                            self.page = Page::Dashboard;
+                                        }
+                                    }
+                                }
                                 if let Some(n) = pick {
                                     ui::engine::ask_primary(self, &n, None);
                                 }

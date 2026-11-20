@@ -391,6 +391,63 @@ pub fn badge(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
         .response
 }
 
+/// Barva vytížení: běžně akcent, od 75 % žlutá, od 90 % červená.
+fn load_color(frac: f32) -> Color32 {
+    if frac >= 0.9 {
+        theme::red()
+    } else if frac >= 0.75 {
+        theme::yellow()
+    } else {
+        theme::accent()
+    }
+}
+
+/// Karta enginu v bočním panelu: dva řádky CPU a RAM celé WSL VM s malým pruhem.
+/// Celý blok je klikací (vrací odezvu), detail v bublině.
+pub fn glance(ui: &mut egui::Ui, g: &crate::memory::Glance) -> egui::Response {
+    const ROW: f32 = 16.0;
+    const INDENT: f32 = 20.0;
+    const LABEL: f32 = 32.0;
+    const VALUE: f32 = 78.0;
+    let w = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, ROW * 2.0 + 2.0), egui::Sense::click());
+    let p = ui.painter_at(rect);
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let mem_frac = if g.total > 0 { (g.used as f64 / g.total as f64) as f32 } else { 0.0 };
+    let rows = [
+        ("CPU", g.cpu.map(|c| (c / 100.0) as f32), g.cpu.map(|c| format!("{c:.0} %")).unwrap_or_else(|| "…".into())),
+        ("RAM", Some(mem_frac), format!("{} / {}", fmt_gb(g.used), fmt_gb(g.total))),
+    ];
+    for (i, (name, frac, value)) in rows.into_iter().enumerate() {
+        let y = rect.top() + i as f32 * (ROW + 2.0) + ROW / 2.0;
+        let x0 = rect.left() + INDENT;
+        p.text(egui::pos2(x0, y), egui::Align2::LEFT_CENTER, name, font.clone(), theme::muted());
+        p.text(egui::pos2(rect.right(), y), egui::Align2::RIGHT_CENTER, value, font.clone(), theme::muted());
+        let bar = egui::Rect::from_min_max(egui::pos2(x0 + LABEL, y - 3.0), egui::pos2((rect.right() - VALUE).max(x0 + LABEL + 10.0), y + 3.0));
+        p.rect_filled(bar, 3.0, theme::card_stroke());
+        if let Some(f) = frac {
+            let f = f.clamp(0.0, 1.0);
+            if f > 0.0 {
+                let fill = egui::Rect::from_min_max(bar.min, egui::pos2(bar.left() + (bar.width() * f).max(3.0), bar.bottom()));
+                p.rect_filled(fill, 3.0, load_color(f));
+            }
+        }
+    }
+    let vmmem = g.vmmem.map(fmt_bytes).unwrap_or_else(|| "?".into());
+    let cpu = g.cpu.map(|c| format!("{c:.1} %")).unwrap_or_else(|| "…".into());
+    let (used, total, cache) = (fmt_bytes(g.used), fmt_bytes(g.total), fmt_bytes(g.cache));
+    resp.on_hover_text(tf!(
+        "Celá WSL VM (všechny distribuce)\nCPU: {cpu}\nPaměť použitá procesy: {used} z {total}\nCache souborů: {cache}\nVmmemWSL ve Windows: {vmmem}\nKlikni pro Přehled",
+        "Whole WSL VM (all distributions)\nCPU: {cpu}\nMemory used by processes: {used} of {total}\nFile cache: {cache}\nVmmemWSL in Windows: {vmmem}\nClick for the Overview"
+    ))
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// GB s jedním desetinným místem (kompaktní pro kartu enginu).
+fn fmt_gb(b: u64) -> String {
+    format!("{:.1} GB", b as f64 / (1024.0 * 1024.0 * 1024.0))
+}
+
 /// Dvouřádková buňka: hlavní text + šedý popisek.
 pub fn two_line(ui: &mut egui::Ui, main: RichText, sub: RichText) {
     stack_v(ui, |ui| {
