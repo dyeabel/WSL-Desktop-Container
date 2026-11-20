@@ -45,10 +45,9 @@ pub struct Config {
     pub tls: bool,
     /// Upozornění „API bez ověření“ na stránce WSL engine bylo zavřeno
     pub security_hint_dismissed: bool,
-    /// Pojmenovaná roura `\\.\pipe\wls_docker_engine` pro nástroje (relay běží jen s aplikací)
+    /// Standardní roura `\\.\pipe\docker_engine` pro nástroje (relay běží jen s aplikací;
+    /// nástroje ji najdou bez DOCKER_HOST)
     pub npipe: bool,
-    /// relay i na standardní rouře `\\.\pipe\docker_engine` (nástroje ji najdou bez DOCKER_HOST)
-    pub npipe_standard: bool,
     /// Publikované porty kontejnerů i na `[::1]` (relay v aplikaci), aby `localhost` odpovídal hned
     pub ipv6_localhost_relay: bool,
     /// Upozornění na prahové hodnoty paměti a disku
@@ -176,7 +175,6 @@ impl Default for Config {
             tls: false,
             security_hint_dismissed: false,
             npipe: false,
-            npipe_standard: true,
             ipv6_localhost_relay: true,
             alerts: AlertsConfig::default(),
             history_on_disk: true,

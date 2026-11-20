@@ -1,4 +1,5 @@
-//! Pojmenovaná roura `\\.\pipe\wls_docker_engine` pro nástroje (`DOCKER_HOST=npipe:////./pipe/wls_docker_engine`).
+//! Standardní pojmenovaná roura Dockeru `\\.\pipe\docker_engine` pro nástroje: Docker CLI,
+//! Testcontainers (Java i .NET), VS Code a SDK ji použijí samy, když DOCKER_HOST není nastavená.
 //!
 //! Aplikace (dokud běží) přijímá spojení na rouře a každé přepošle na API enginu:
 //! v režimu TLS přes rustls s klientským certifikátem aplikace na 127.0.0.1:<port>,
@@ -15,11 +16,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-/// Název roury aplikace (jiný než `docker_engine` Docker Desktopu, aby se nepraly).
-pub const PIPE_NAME: &str = r"\\.\pipe\wls_docker_engine";
-/// Standardní roura Dockeru ve Windows (Docker Desktop): Docker CLI, Testcontainers (Java i .NET),
-/// VS Code a SDK ji zkoušejí, když DOCKER_HOST není nastavená – pak není potřeba vůbec.
-pub const STANDARD_PIPE: &str = r"\\.\pipe\docker_engine";
+/// Standardní roura Dockeru ve Windows (jako Docker Desktop) – DOCKER_HOST pak není potřeba.
+/// Když ji drží Docker Desktop, relay se nespustí (FILE_FLAG_FIRST_PIPE_INSTANCE).
+pub const PIPE_NAME: &str = r"\\.\pipe\docker_engine";
 
 /// Velikost bloku pro přeposílání dat.
 const CHUNK: usize = 64 * 1024;
@@ -36,12 +35,7 @@ pub enum Target {
 /// Zjistí cíl pro nové spojení (čte se při každém spojení – změna režimu se projeví hned).
 pub type TargetFn = Arc<dyn Fn() -> Result<Target, String> + Send + Sync>;
 
-/// `\\.\pipe\x` -> `npipe:////./pipe/x` (tvar, který čekají Docker klienti v DOCKER_HOST).
-pub fn docker_host_url(pipe: &str) -> String {
-    format!("npipe://{}", pipe.replace('\\', "/"))
-}
-
-/// `npipe:////./pipe/x` (i `npipe:///./pipe/x`) -> `\\.\pipe\x`; None, pokud to není místní roura.
+/// `npipe:////./pipe/x` (i `npipe://./pipe/x`) -> `\\.\pipe\x`; None, pokud to není místní roura.
 pub fn pipe_from_docker_host(url: &str) -> Option<String> {
     let rest = url.strip_prefix("npipe:")?.trim_start_matches('/');
     let name = rest.strip_prefix("./pipe/")?;
@@ -581,19 +575,11 @@ pub enum State {
 
 /// Relay aplikace – zamyká jen vlákno z `apply` (start / zastavení může chvíli trvat).
 static APP_RELAY: Mutex<Option<Relay>> = Mutex::new(None);
-/// Relay na standardní rouře `docker_engine`.
-static STD_RELAY: Mutex<Option<Relay>> = Mutex::new(None);
 /// Stav pro UI – drží se jen na okamžik, takže čtení z UI vlákna neblokuje.
 static APP_STATE: Mutex<State> = Mutex::new(State::Off);
-static STD_STATE: Mutex<State> = Mutex::new(State::Off);
 
 pub fn state() -> State {
     APP_STATE.lock().map(|g| g.clone()).unwrap_or(State::Off)
-}
-
-/// Stav standardní roury `\\.\pipe\docker_engine`.
-pub fn state_standard() -> State {
-    STD_STATE.lock().map(|g| g.clone()).unwrap_or(State::Off)
 }
 
 /// Zapne / vypne jednu rouru; vrací nový stav.
@@ -629,22 +615,14 @@ pub fn app_target(cfg: Arc<RwLock<crate::config::Config>>) -> TargetFn {
     })
 }
 
-/// Zapne / vypne roury aplikace na pozadí (neblokuje UI); `done` se zavolá po změně stavu.
-/// Standardní `docker_engine` jen s `npipe_standard` – když ji drží Docker Desktop, zůstane
-/// ve stavu Failed a aplikace běží dál jen na své rouře.
+/// Zapne / vypne rouru aplikace na pozadí (neblokuje UI); `done` se zavolá po změně stavu.
 pub fn apply(on: bool, cfg: Arc<RwLock<crate::config::Config>>, done: impl FnOnce() + Send + 'static) {
     thread::spawn(move || {
-        let std_on = on && cfg.read().map(|c| c.npipe_standard).unwrap_or(false);
-        let st = switch(&APP_RELAY, PIPE_NAME, on, || app_target(cfg.clone()));
-        if let Ok(mut s) = APP_STATE.lock() {
-            *s = st;
-        }
-        let st = switch(&STD_RELAY, STANDARD_PIPE, std_on, || app_target(cfg.clone()));
-        let st = match st {
+        let st = match switch(&APP_RELAY, PIPE_NAME, on, || app_target(cfg.clone())) {
             State::Failed(e) => State::Failed(tf!("{e} (rouru nejspíš drží Docker Desktop)", "{e} (probably held by Docker Desktop)")),
             s => s,
         };
-        if let Ok(mut s) = STD_STATE.lock() {
+        if let Ok(mut s) = APP_STATE.lock() {
             *s = st;
         }
         done();
@@ -657,8 +635,8 @@ pub(crate) mod tests {
 
     #[test]
     fn docker_host_roundtrip() {
-        assert_eq!(docker_host_url(PIPE_NAME), "npipe:////./pipe/wls_docker_engine");
-        assert_eq!(pipe_from_docker_host("npipe:////./pipe/wls_docker_engine").as_deref(), Some(PIPE_NAME));
+        assert_eq!(pipe_from_docker_host("npipe:////./pipe/docker_engine").as_deref(), Some(PIPE_NAME));
+        assert_eq!(pipe_from_docker_host("npipe://./pipe/docker_engine").as_deref(), Some(PIPE_NAME));
         assert_eq!(pipe_from_docker_host("npipe:///./pipe/x").as_deref(), Some(r"\\.\pipe\x"));
         assert_eq!(pipe_from_docker_host("tcp://127.0.0.1:2375"), None);
         assert_eq!(pipe_from_docker_host("npipe:////server/pipe/x"), None);

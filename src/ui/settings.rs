@@ -128,14 +128,14 @@ pub fn add_distro_dialog(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-/// Pojmenovaná roura pro nástroje (relay v aplikaci, DOCKER_HOST=npipe://…).
+/// Standardní pojmenovaná roura pro nástroje (relay v aplikaci, bez DOCKER_HOST).
 fn npipe_section(app: &mut App, ui: &mut egui::Ui) {
-    let url = crate::npipe::docker_host_url(crate::npipe::PIPE_NAME);
+    let pipe = crate::npipe::PIPE_NAME;
     section(ui, t!("Pojmenovaná roura pro nástroje", "Named pipe for tools"));
     card(ui, |ui| {
         ui.set_width(ui.available_width());
         let mut on = app.cfg.read().map(|c| c.npipe).unwrap_or(false);
-        if ui.checkbox(&mut on, tf!("Pojmenovaná roura pro nástroje ({url})", "Named pipe for tools ({url})")).changed() {
+        if ui.checkbox(&mut on, tf!("Pojmenovaná roura pro nástroje {pipe} (jako Docker Desktop)", "Named pipe for tools {pipe} (like Docker Desktop)")).changed() {
             let res = match app.cfg.write() {
                 Ok(mut g) => {
                     g.npipe = on;
@@ -159,56 +159,13 @@ fn npipe_section(app: &mut App, ui: &mut egui::Ui) {
             }
             _ => {}
         }
-        // standardní roura Dockeru – nástroje ji najdou bez DOCKER_HOST
-        ui.add_space(4.0);
-        ui.add_enabled_ui(on, |ui| {
-            let mut std_on = app.cfg.read().map(|c| c.npipe_standard).unwrap_or(true);
-            if ui
-                .checkbox(&mut std_on, tf!("Také standardní roura {} (jako Docker Desktop)", "Also the standard pipe {} (like Docker Desktop)", crate::npipe::STANDARD_PIPE))
-                .on_hover_text(t!(
-                    "Docker CLI, Testcontainers (Java i .NET), VS Code a Docker SDK ji použijí samy, když DOCKER_HOST není nastavená – zápis adresy roury pak nehraje roli.",
-                    "Docker CLI, Testcontainers (Java and .NET), VS Code and Docker SDKs use it on their own when DOCKER_HOST is not set – so the pipe address format does not matter."
-                ))
-                .changed()
-            {
-                let res = match app.cfg.write() {
-                    Ok(mut g) => {
-                        g.npipe_standard = std_on;
-                        g.save()
-                    }
-                    Err(e) => Err(e.to_string()),
-                };
-                if let Err(e) = res {
-                    app.toast(false, tf!("Nastavení nelze uložit: {e}", "Cannot save settings: {e}"));
-                }
-                app.cfg_draft.npipe_standard = std_on;
-                let ctx = ui.ctx().clone();
-                crate::npipe::apply(on, app.cfg.clone(), move || ctx.request_repaint());
-            }
-        });
-        match crate::npipe::state_standard() {
-            crate::npipe::State::Running => {
-                ui.label(
-                    RichText::new(t!(
-                        "\u{E184} Standardní roura běží – nástroje se připojí bez DOCKER_HOST (doporučeno ji nenastavovat).",
-                        "\u{E184} The standard pipe is running – tools connect without DOCKER_HOST (best left unset)."
-                    ))
-                    .color(theme::green())
-                    .small(),
-                );
-            }
-            crate::npipe::State::Failed(e) if on => {
-                ui.label(RichText::new(tf!("\u{E4E0} Standardní rouru nelze použít: {e}", "\u{E4E0} Cannot use the standard pipe: {e}")).color(theme::yellow()).small());
-            }
-            _ => {}
-        }
         ui.label(
             muted(tf!(
                 "Aplikace přijímá spojení na {} (jen aktuální uživatel Windows, bez vzdáleného přístupu) a předává je API enginu – v režimu TLS s certifikátem aplikace, takže nástroje nepotřebují klíč na disku. \
-                 Funguje jen, dokud aplikace běží (stačí schovaná v oznamovací oblasti). DOCKER_HOST na rouru nastavíš na stránce WSL engine.",
+                 Docker CLI, Testcontainers, VS Code a Docker SDK ji použijí samy, DOCKER_HOST nenastavuj. Funguje jen, dokud aplikace běží (stačí schovaná v oznamovací oblasti).",
                 "The app accepts connections on {} (current Windows user only, no remote access) and relays them to the engine API – in TLS mode with the app's certificate, so tools need no key on disk. \
-                 It works only while the app is running (hidden in the tray is enough). Set DOCKER_HOST to the pipe on the WSL engine page.",
-                crate::npipe::PIPE_NAME
+                 Docker CLI, Testcontainers, VS Code and Docker SDKs use it on their own; leave DOCKER_HOST unset. It works only while the app is running (hidden in the tray is enough).",
+                pipe
             ))
             .small(),
         );

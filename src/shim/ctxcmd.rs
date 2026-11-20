@@ -26,7 +26,7 @@ pub struct CtxEnv<'a> {
     pub default: Target,
     /// hodnota DOCKER_CONTEXT
     pub env_ctx: Option<String>,
-    /// hodnota DOCKER_HOST (např. npipe:////./pipe/wls_docker_engine) – výchozí kontext ji
+    /// hodnota DOCKER_HOST (např. npipe:////./pipe/docker_engine) – výchozí kontext ji
     /// ukazuje jako svůj endpoint, stejně jako Docker CLI
     pub docker_host: Option<String>,
     /// seznam WSL distribucí (wsl.exe -l -q)
@@ -512,12 +512,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wls-ctxcmd-dh-{}", std::process::id()));
         let _g = Tmp(dir.clone());
         let mut env = env_in(&dir, None);
-        env.docker_host = Some("npipe:////./pipe/wls_docker_engine".into());
+        env.docker_host = Some("npipe:////./pipe/docker_engine".into());
         let r = run(&s(&["ls", "--format", "{{.Name}} {{.DockerEndpoint}}"]), &env);
-        assert_eq!(r.out, "default npipe:////./pipe/wls_docker_engine\n");
+        assert_eq!(r.out, "default npipe:////./pipe/docker_engine\n");
         assert!(r.err.is_empty(), "{}", r.err);
         let r = run(&s(&["inspect"]), &env);
-        assert!(r.out.contains("\"Host\": \"npipe:////./pipe/wls_docker_engine\""), "{}", r.out);
+        assert!(r.out.contains("\"Host\": \"npipe:////./pipe/docker_engine\""), "{}", r.out);
         // jiný vybraný kontext: varování jako Docker CLI
         assert_eq!(run(&s(&["create", "ubu", "--distro", "Ubuntu", "--port", "2380"]), &env).code, 0);
         let env = CtxEnv { env_ctx: Some("ubu".into()), ..env };

@@ -43,8 +43,6 @@ pub enum Action {
     RemoveFromPath(String),
     /// port a TLS (DOCKER_TLS_VERIFY + DOCKER_CERT_PATH)
     SetDockerHost(u16, bool),
-    /// DOCKER_HOST=npipe:////./pipe/wls_docker_engine (relay aplikace, bez klíče na disku)
-    SetDockerHostPipe,
     ClearDockerHost,
 }
 
@@ -56,7 +54,6 @@ pub fn run(action: Action) -> Option<Result<String, String>> {
         Action::RemoveDuplicates => Some(remove_duplicates()),
         Action::RemoveFromPath(dir) => Some(remove_from_user_path(&dir)),
         Action::SetDockerHost(port, tls) => Some(set_docker_host(Some((port, tls)))),
-        Action::SetDockerHostPipe => Some(set_docker_host_pipe()),
         Action::ClearDockerHost => Some(set_docker_host(None)),
     }
 }
@@ -97,21 +94,6 @@ pub fn set_docker_host(target: Option<(u16, bool)>) -> Result<String, String> {
             Ok(t!("DOCKER_HOST odebráno", "DOCKER_HOST removed").into())
         }
     }
-}
-
-/// DOCKER_HOST na pojmenovanou rouru aplikace. DOCKER_TLS_VERIFY / DOCKER_CERT_PATH se odeberou
-/// a nešifrovaný key.pem smaže – TLS k enginu řeší relay v aplikaci.
-pub fn set_docker_host_pipe() -> Result<String, String> {
-    let v = crate::npipe::docker_host_url(crate::npipe::PIPE_NAME);
-    let _ = crate::docker::export_plain_key(false);
-    powershell(&format!(
-        "[Environment]::SetEnvironmentVariable('DOCKER_HOST', {}, 'User');          [Environment]::SetEnvironmentVariable('DOCKER_TLS_VERIFY', $null, 'User');          [Environment]::SetEnvironmentVariable('DOCKER_CERT_PATH', $null, 'User')",
-        ps_quote(&v)
-    ))?;
-    Ok(tf!(
-        "DOCKER_HOST={v} nastaveno – nástroje je uvidí po restartu (nový terminál / VS Code). Roura funguje, jen když běží WLS Desktop.",
-        "DOCKER_HOST={v} set – tools will see it after a restart (new terminal / VS Code). The pipe works only while WLS Desktop is running."
-    ))
 }
 
 /// Kam patří docker.exe v PATH: v portable režimu přímo složka aplikace (nic se nekopíruje),

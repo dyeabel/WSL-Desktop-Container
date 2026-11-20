@@ -318,45 +318,39 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 // DOCKER_HOST pro nástroje, které mluví přímo s API
                 ui.add_space(8.0);
                 ui.label(RichText::new(t!("DOCKER_HOST pro nástroje", "DOCKER_HOST for tools")).strong());
-                let pipe_url = crate::npipe::docker_host_url(crate::npipe::PIPE_NAME);
-                let want = if npipe_on { pipe_url.clone() } else { format!("tcp://127.0.0.1:{port}") };
+                let want = format!("tcp://127.0.0.1:{port}");
                 let relay = crate::npipe::state();
-                // standardní roura běží: nástroje se připojí samy, DOCKER_HOST není potřeba
-                let std_pipe = npipe_on && crate::npipe::state_standard() == crate::npipe::State::Running;
+                // roura běží: nástroje se připojí samy, DOCKER_HOST není potřeba
+                let pipe_ok = npipe_on && relay == crate::npipe::State::Running;
                 toolbar(ui, |ui| match &st {
                     None => {
                         ui.spinner();
                     }
                     Some(s) => {
                         match s.docker_host.as_deref() {
-                            Some(v) if v == want && !std_pipe => {
-                                badge(ui, &format!("DOCKER_HOST={v}"), theme::green());
-                            }
-                            Some(v) if std_pipe => {
+                            Some(v) if pipe_ok => {
                                 badge(ui, &format!("DOCKER_HOST={v}"), theme::yellow()).on_hover_text(tf!(
-                                    "Se standardní rourou {} není potřeba – některé nástroje (Testcontainers pro .NET) zápis npipe:////… nečtou. Doporučeno odebrat.",
-                                    "Not needed with the standard pipe {} – some tools (Testcontainers for .NET) cannot read the npipe:////… form. Removing it is recommended.",
-                                    crate::npipe::STANDARD_PIPE
+                                    "S rourou {} není potřeba a nástroje by ji použily místo roury. Doporučeno odebrat.",
+                                    "Not needed with the pipe {}, and tools would use it instead of the pipe. Removing it is recommended.",
+                                    crate::npipe::PIPE_NAME
                                 ));
+                            }
+                            Some(v) if v == want => {
+                                badge(ui, &format!("DOCKER_HOST={v}"), theme::green());
                             }
                             Some(v) => {
                                 badge(ui, &format!("DOCKER_HOST={v}"), theme::yellow()).on_hover_text(tf!("Neodpovídá API aplikace ({want})", "Does not match the app API ({want})"));
                             }
-                            None if std_pipe => {
-                                badge(ui, &tf!("nenastaveno – nástroje použijí {}", "not set – tools use {}", crate::npipe::STANDARD_PIPE), theme::green());
+                            None if pipe_ok => {
+                                badge(ui, &tf!("nenastaveno – nástroje použijí {}", "not set – tools use {}", crate::npipe::PIPE_NAME), theme::green());
                             }
                             None => {
                                 badge(ui, t!("nenastaveno", "not set"), theme::grey());
                             }
                         }
-                        ui.add_enabled_ui(!checking && !std_pipe && s.docker_host.as_deref() != Some(want.as_str()), |ui| {
+                        ui.add_enabled_ui(!checking && !pipe_ok && s.docker_host.as_deref() != Some(want.as_str()), |ui| {
                             if ui.button(tf!("\u{E3D4} Nastavit na {want}", "\u{E3D4} Set to {want}")).clicked() {
-                                let action = if npipe_on {
-                                    crate::shim_install::Action::SetDockerHostPipe
-                                } else {
-                                    crate::shim_install::Action::SetDockerHost(port, tls)
-                                };
-                                app.shim_action(ui.ctx(), action);
+                                app.shim_action(ui.ctx(), crate::shim_install::Action::SetDockerHost(port, tls));
                             }
                         });
                         ui.add_enabled_ui(!checking && s.docker_host.is_some(), |ui| {
@@ -372,7 +366,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     .as_ref()
                     .and_then(|s| s.docker_host.as_deref())
                     .and_then(crate::npipe::pipe_from_docker_host)
-                    .is_some_and(|p| p.eq_ignore_ascii_case(crate::npipe::PIPE_NAME));
+                    .is_some();
                 match (&relay, npipe_on) {
                     (crate::npipe::State::Running, _) => {
                         ui.label(
@@ -391,8 +385,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     _ if host_is_pipe => {
                         ui.label(
                             RichText::new(t!(
-                                "\u{E4E0} DOCKER_HOST míří na rouru, ale ta je vypnutá – zapni ji v Nastavení.",
-                                "\u{E4E0} DOCKER_HOST points to the pipe, but it is turned off – enable it in Settings."
+                                "\u{E4E0} DOCKER_HOST míří na pojmenovanou rouru, ale roura aplikace je vypnutá – zapni ji v Nastavení, nebo DOCKER_HOST odeber.",
+                                "\u{E4E0} DOCKER_HOST points to a named pipe, but the app pipe is turned off – enable it in Settings or remove DOCKER_HOST."
                             ))
                             .color(theme::yellow())
                             .small(),

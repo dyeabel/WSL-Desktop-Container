@@ -356,18 +356,15 @@ certificates* creates a new CA and certificates at any time. *Turn TLS off* swit
 certificates are kept and reused). See [docs/SECURITY.md](docs/SECURITY.md) for the security
 review.
 
-**Named pipe for tools:** *Settings → Named pipe for tools* starts a relay on
-`\\.\pipe\wls_docker_engine` (DACL: only the current user and SYSTEM, remote clients rejected)
-that forwards to the engine API – over TLS when enabled. Tools then use
-`DOCKER_HOST=npipe:////./pipe/wls_docker_engine` and never need the client key; the pipe exists
-only while the app runs.
-
-By default the relay also listens on the **standard pipe `\\.\pipe\docker_engine`** (the one
-Docker Desktop uses; *Also the standard pipe* in the same section). Docker CLI, Testcontainers
-(Java and .NET), VS Code and Docker SDKs try it when `DOCKER_HOST` is not set, so with it running
-`DOCKER_HOST` is best left unset – that also avoids the problem that Go tools need the
-`npipe:////./pipe/…` form while Docker.DotNet (Testcontainers for .NET) only reads
-`npipe://./pipe/…`. When Docker Desktop already holds the pipe, the app keeps only its own.
+**Named pipe for tools:** *Settings → Named pipe for tools* starts a relay on the standard
+Docker pipe **`\\.\pipe\docker_engine`** – the same one Docker Desktop uses (DACL: only the
+current user and SYSTEM, remote clients rejected). It forwards to the engine API of the primary
+distribution, over TLS when enabled, so tools never need the client key. Docker CLI,
+Testcontainers (Java and .NET), VS Code and Docker SDKs try this pipe when `DOCKER_HOST` is not
+set, so **`DOCKER_HOST` should stay unset** – that also sidesteps the different pipe URL forms
+(`npipe:////./pipe/…` for Go tools, `npipe://./pipe/…` for Docker.DotNet). The pipe exists only
+while the app runs; when Docker Desktop already holds it, the relay does not start and the app
+says so.
 
 ### `docker` command for Windows (shim)
 
