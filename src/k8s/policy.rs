@@ -46,7 +46,8 @@ impl RuleSet {
         }
     }
 
-    /// Smí `from` na `to:port`? (pro zvýraznění povolených cest v mapě)
+    /// Smí `from` na `to:port`?
+    #[cfg(test)]
     pub fn allows(&self, from: &Peer, to: &str, port: u16) -> bool {
         !self.deny_all || self.rules.iter().any(|r| &r.from == from && r.to == to && r.port == port)
     }

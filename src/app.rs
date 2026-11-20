@@ -18,6 +18,7 @@ pub enum Page {
     Volumes,
     Networks,
     Compose,
+    Kubernetes,
     Files,
     Events,
     Engine,
@@ -25,7 +26,7 @@ pub enum Page {
 }
 
 impl Page {
-    pub const MAIN: [Page; 8] = [Page::Dashboard, Page::Containers, Page::Images, Page::Volumes, Page::Networks, Page::Compose, Page::Files, Page::Events];
+    pub const MAIN: [Page; 9] = [Page::Dashboard, Page::Containers, Page::Images, Page::Volumes, Page::Networks, Page::Compose, Page::Kubernetes, Page::Files, Page::Events];
     pub const BOTTOM: [Page; 2] = [Page::Engine, Page::Settings];
     pub fn label(self) -> &'static str {
         match self {
@@ -35,6 +36,7 @@ impl Page {
             Page::Volumes => t!("\u{E2A0}  Volume", "\u{E2A0}  Volumes"),
             Page::Networks => t!("\u{E408}  Sítě", "\u{E408}  Networks"),
             Page::Compose => "\u{E466}  Compose",
+            Page::Kubernetes => "\u{E1B6}  Kubernetes",
             Page::Files => t!("\u{E260}  Soubory", "\u{E260}  Files"),
             Page::Events => t!("\u{E0CE}  Události", "\u{E0CE}  Events"),
             Page::Engine => "\u{EB02}  WSL engine",
@@ -98,6 +100,8 @@ pub struct App {
     pub compose_dir: String,
     /// stránka Compose: nový stack, editor souborů, škálování
     pub compose: ui::compose::ComposeState,
+    /// stránka Kubernetes (cluster, prostředí, mapa toků, pravidla)
+    pub k8s: ui::k8s::K8sUi,
     pub daemon_json: String,
     pub daemon_loaded: bool,
     pub cfg_draft: Config,
@@ -260,6 +264,7 @@ impl App {
             net: Default::default(),
             compose_dir: String::new(),
             compose: ui::compose::ComposeState::default(),
+            k8s: ui::k8s::K8sUi::default(),
             daemon_json: String::new(),
             daemon_loaded: false,
             cfg_draft,
@@ -500,6 +505,7 @@ impl App {
                 Msg::Inspect(id, r) => ui::detail::on_inspect(self, id, r),
                 Msg::VolumeSizes(s) => self.vol.sizes = s,
                 Msg::Stack(m) => ui::compose::on_msg(self, m),
+                Msg::K8s(m) => ui::k8s::on_msg(self, m),
                 Msg::DistroDisk(name, r) => ui::distros::on_disk(self, name, r),
                 Msg::ContainerFs(view, m) => ui::container_files::on_msg(self, view, m),
                 Msg::MemoryFreed { auto, result } => ui::memory::on_freed(self, auto, result),
@@ -932,6 +938,7 @@ impl eframe::App for App {
                     Page::Volumes => ui::volumes::show(self, ui),
                     Page::Networks => ui::networks::show(self, ui),
                     Page::Compose => ui::compose::show(self, ui),
+                    Page::Kubernetes => ui::k8s::show(self, ui),
                     Page::Files => ui::files::show(self, ui),
                     Page::Events => ui::events::show(self, ui),
                     Page::Engine => ui::engine::show(self, ui),

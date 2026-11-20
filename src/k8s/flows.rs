@@ -110,7 +110,7 @@ pub fn build_edges(pods: &[Pod], svcs: &[Service], entries: &[CtEntry], node_ips
         let live = e.live();
         let backend = by_ip.get(e.reply_src.as_str()).map(|p| Node::Component(p.component.clone()));
         // NodePort z Windows: cíl = uzel a port patří službě v namespace
-        if node_ips.iter().any(|n| *n == e.dst) && !by_ip.contains_key(e.src.as_str()) {
+        if node_ips.contains(&e.dst) && !by_ip.contains_key(e.src.as_str()) {
             if let (Some(svc), Some(b)) = (by_nodeport.get(&e.dport), backend.clone()) {
                 add(Node::Localhost, Node::Service(svc.name.clone()), e.dport, live);
                 add(Node::Service(svc.name.clone()), b, svc.ports.iter().find(|p| p.node_port == Some(e.dport)).map(|p| p.port).unwrap_or(e.dport), live);

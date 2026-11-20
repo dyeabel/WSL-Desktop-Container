@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 pub const NAME: &str = "wslcd-k3s";
 pub const NETWORK: &str = "wslcd-k3s";
 pub const VOLUME: &str = "wslcd-k3s-data";
-pub const DEFAULT_IMAGE: &str = "docker.io/rancher/k3s:v1.33.6-k3s1";
 pub const READY_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,12 +24,6 @@ pub enum ClusterState {
     Starting,
     Running,
     Error(String),
-}
-
-impl ClusterState {
-    pub fn exists(&self) -> bool {
-        !matches!(self, ClusterState::Missing)
-    }
 }
 
 /// Tělo `POST /containers/create` (Docker i kompatibilní API Podmanu).
@@ -263,6 +256,7 @@ pub fn probe_localhost(port: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DEFAULT_K3S_IMAGE as DEFAULT_IMAGE;
 
     #[test]
     fn create_body_shape() {

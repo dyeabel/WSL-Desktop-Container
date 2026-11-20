@@ -13,6 +13,8 @@ pub mod distros;
 pub mod engine;
 pub mod files;
 pub mod images;
+pub mod k8s;
+pub mod k8s_map;
 pub mod logs;
 pub mod memory;
 pub mod net_overview;

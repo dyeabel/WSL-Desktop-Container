@@ -54,6 +54,12 @@ pub struct Config {
     pub alerts: AlertsConfig,
     /// Ukládat historii zdrojů (paměť, CPU, provoz, disk) na disk, aby přežila restart aplikace
     pub history_on_disk: bool,
+    /// Kubernetes laboratoř: image k3s uzlu
+    pub k3s_image: String,
+    /// port API clusteru na 127.0.0.1
+    pub k3s_api_port: u16,
+    /// rozsah NodePort zveřejněný na 127.0.0.1 (zpřístupněné služby)
+    pub k3s_nodeport_range: (u16, u16),
 }
 
 /// Prahy upozornění (paměť WSL, místo na disku). Chybějící klíče doplní výchozí hodnoty.
@@ -178,6 +184,9 @@ impl Default for Config {
             ipv6_localhost_relay: true,
             alerts: AlertsConfig::default(),
             history_on_disk: true,
+            k3s_image: DEFAULT_K3S_IMAGE.into(),
+            k3s_api_port: 6443,
+            k3s_nodeport_range: (30080, 30099),
         }
     }
 }
@@ -207,6 +216,9 @@ pub fn data_dir() -> Option<PathBuf> {
     let base = PathBuf::from(std::env::var_os("APPDATA")?);
     Some(migrate_dir(&base.join(LEGACY_DATA_DIR), &base.join(DATA_DIR)))
 }
+
+/// Výchozí image uzlu Kubernetes laboratoře (ověřeno ve spiku, viz docs/superpowers/specs).
+pub const DEFAULT_K3S_IMAGE: &str = "docker.io/rancher/k3s:v1.33.6-k3s1";
 
 /// Složka dat v %APPDATA% (a %LOCALAPPDATA% pro příkaz docker).
 pub const DATA_DIR: &str = "WSL_Container_Desktop";
