@@ -604,28 +604,22 @@ impl App {
                             .fill(theme::card())
                             .stroke(egui::Stroke::new(1.0_f32, theme::card_stroke()))
                             .corner_radius(8)
-                            .inner_margin(egui::Margin::same(12))
+                            .inner_margin(egui::Margin::same(8))
                             .show(ui, |ui| {
                                 ui.set_width(ui.available_width());
+                                ui.spacing_mut().item_spacing.y = 4.0;
                                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                                // řádek 1: tečka + engine, vpravo štítek stavu
-                                ui.horizontal(|ui| {
-                                    ui::dot(ui, c);
-                                    ui.label(RichText::new(ename).strong());
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        ui::badge(ui, state, c);
-                                    });
-                                });
-                                // řádek 2: distribuce a kontejnery
-                                // klik = přepnutí primární distribuce
+                                // řádek 1: tečka + distribuce (klik = přepnutí primární distribuce),
+                                // vpravo štítek stavu; engine je v řádku kontejnerů a v bublině
                                 let mut pick = None;
                                 let mut sleep = None;
                                 ui.horizontal(|ui| {
-                                    // zarovnat s přehledem pod ním (celá šířka karty)
+                                    ui::dot(ui, c);
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui::badge(ui, state, c).on_hover_text(ename);
+                                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                                     ui.spacing_mut().button_padding.x = 0.0;
-                                    // počet kontejnerů je v přehledu níž – tady jen distribuce
-                                    let label = if distro_running { distro.clone() } else { detail.clone() };
-                                    let btn = egui::Button::new(RichText::new(format!("{label}  \u{E136}")).small().color(theme::muted())).frame(false);
+                                    let btn = egui::Button::new(RichText::new(format!("{distro} \u{E136}")).strong()).frame(false);
                                     egui::menu::menu_custom_button(ui, btn, |ui| {
                                         ui.label(RichText::new(t!("Primární distribuce", "Primary distribution")).small().color(theme::muted()));
                                         let remembered = self.cfg.read().map(|c| c.distro_engines.clone()).unwrap_or_default();
@@ -661,9 +655,11 @@ impl App {
                                     })
                                     .response
                                     .on_hover_text(tf!(
-                                        "{detail}\nAPI: tcp://127.0.0.1:{port}\nKlikni pro přepnutí primární distribuce",
-                                        "{detail}\nAPI: tcp://127.0.0.1:{port}\nClick to switch the primary distribution"
+                                        "{ename} · {detail}\nAPI: tcp://127.0.0.1:{port}\nKlikni pro přepnutí primární distribuce",
+                                        "{ename} · {detail}\nAPI: tcp://127.0.0.1:{port}\nClick to switch the primary distribution"
                                     ));
+                                    });
+                                    });
                                 });
                                 // chyba API při běžícím enginu (dřív ve stavové liště)
                                 if let Some(e) = self.snap.error.as_ref().filter(|_| connected) {
@@ -672,16 +668,19 @@ impl App {
                                     });
                                 }
                                 // CPU a RAM celé WSL VM (poslední vzorek paměti); klik = Přehled
-                                if distro_running {
+                                // v nízkém okně jen stav a tlačítka (navigace nad kartou musí zůstat vidět)
+                                let roomy = ui.ctx().screen_rect().height() >= 700.0;
+                                if distro_running && roomy {
                                     let g = self.shared.memory.lock().ok().and_then(|m| m.glance);
                                     if let Some(g) = g {
                                         let info = self.snap.info.as_ref().filter(|_| connected);
                                         let x = ui::GlanceCtx {
+                                            engine: ename,
                                             containers: info.map(|i| (i.containers_running, i.containers)),
                                             ncpu: info.map(|i| i.ncpu),
                                             k8s: self.snap.containers.iter().find(|c| c.name() == crate::k8s::cluster::NAME).map(|c| c.state == "running"),
                                         };
-                                        ui.add_space(6.0);
+                                        ui.add_space(2.0);
                                         if ui::glance(ui, &g, &x).clicked() {
                                             self.page = Page::Dashboard;
                                         }
@@ -700,8 +699,8 @@ impl App {
                                         Cmd::Wsl(crate::worker::WslCmd::Terminate(n)),
                                     );
                                 }
-                                ui.add_space(6.0);
-                                // řádek 3: stejně široká tlačítka
+                                ui.add_space(4.0);
+                                // stejně široká tlačítka
                                 let w = ui.available_width();
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 6.0;
@@ -752,9 +751,12 @@ impl App {
                     });
                 // název a ikona aplikace jsou v záhlaví okna; panel začíná rovnou navigací
                 ui.add_space(4.0);
-                for p in Page::MAIN {
-                    self.nav_button(ui, p);
-                }
+                // v nízkém okně se hlavní navigace posouvá místo překrytí kartou enginu
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    for p in Page::MAIN {
+                        self.nav_button(ui, p);
+                    }
+                });
             });
     }
 

@@ -407,6 +407,8 @@ fn load_color(frac: f32) -> Color32 {
 /// Co karta enginu ukazuje navíc k vzorku paměti (ze snímku enginu).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GlanceCtx {
+    /// název enginu (popisek řádku kontejnerů)
+    pub engine: &'static str,
     /// běžící / všechny kontejnery (jen když engine odpovídá)
     pub containers: Option<(i64, i64)>,
     /// počet CPU VM (NCPU z /info)
@@ -425,61 +427,63 @@ pub struct GlanceRow {
     pub dot: Option<bool>,
 }
 
+/// Nahoře stavové řádky (kontejnery, Kubernetes), pod nimi metriky s pruhem (CPU, paměť VM,
+/// paměť Windows) – všechny metriky mají pruh, takže rozteč je pravidelná.
 pub fn glance_rows(g: &crate::memory::Glance, x: &GlanceCtx) -> Vec<GlanceRow> {
     let frac = |a: u64, b: u64| (b > 0).then(|| (a as f64 / b as f64) as f32);
-    let row = |label: &str, value: String| GlanceRow { label: label.into(), value, bar: None, dot: None };
+    let row = |label: String, value: String| GlanceRow { label, value, bar: None, dot: None };
     let mut rows = vec![];
     if let Some((r, t)) = x.containers {
-        rows.push(row(t!("Kontejnery", "Containers"), format!("{r} / {t}")));
-    }
-    let cpu = g.cpu.map(|c| format!("{c:.0} %")).unwrap_or_else(|| "…".into());
-    rows.push(row("CPU", match x.ncpu.filter(|n| *n > 0) {
-        Some(n) => format!("{cpu} · {n}"),
-        None => cpu,
-    }));
-    rows.push(GlanceRow { bar: Some(frac(g.used, g.total).unwrap_or(0.0)), ..row(t!("Paměť", "Memory"), format!("{} / {}", fmt_gb(g.used), fmt_gb(g.total))) });
-    if let Some(v) = g.vmmem {
-        let value = if g.ram > 0 { format!("{} / {}", fmt_gb(v), fmt_gb(g.ram)) } else { fmt_gb(v) };
-        rows.push(GlanceRow { bar: frac(v, g.ram), ..row("Windows", value) });
+        let label = if x.engine.is_empty() { t!("Kontejnery", "Containers").to_string() } else { tf!("Kontejnery · {}", "Containers · {}", x.engine) };
+        rows.push(row(label, format!("{r} / {t}")));
     }
     if let Some(on) = x.k8s {
-        rows.push(GlanceRow { dot: Some(on), ..row("Kubernetes", if on { t!("Běží", "Running") } else { t!("Zastaven", "Stopped") }.into()) });
+        rows.push(GlanceRow { dot: Some(on), ..row("Kubernetes".into(), if on { t!("Běží", "Running") } else { t!("Zastaven", "Stopped") }.into()) });
+    }
+    let cpu = g.cpu.map(|c| format!("{c:.0} %")).unwrap_or_else(|| "…".into());
+    let cpu = match x.ncpu.filter(|n| *n > 0) {
+        Some(n) => format!("{cpu} · {n}"),
+        None => cpu,
+    };
+    rows.push(GlanceRow { bar: Some(g.cpu.map(|c| (c / 100.0) as f32).unwrap_or(0.0)), ..row("CPU".into(), cpu) });
+    rows.push(GlanceRow { bar: Some(frac(g.used, g.total).unwrap_or(0.0)), ..row(t!("Paměť", "Memory").into(), format!("{} / {}", fmt_gb(g.used), fmt_gb(g.total))) });
+    if let Some(v) = g.vmmem {
+        let value = if g.ram > 0 { format!("{} / {}", fmt_gb(v), fmt_gb(g.ram)) } else { fmt_gb(v) };
+        rows.push(GlanceRow { bar: Some(frac(v, g.ram).unwrap_or(0.0)), ..row("Windows".into(), value) });
     }
     rows
 }
 
-/// Výška řádku karty enginu: text, u pruhu navíc pruh pod ním.
-const GLANCE_TEXT: f32 = 20.0;
-const GLANCE_BAR: f32 = 4.0;
-const GLANCE_BAR_GAP: f32 = 2.0;
-const GLANCE_BAR_AFTER: f32 = 6.0;
+/// Výška řádku karty enginu: text, u metriky navíc pruh pod ním.
+const GLANCE_TEXT: f32 = 18.0;
+const GLANCE_BAR: f32 = 3.0;
+const GLANCE_BAR_AFTER: f32 = 5.0;
 
 fn glance_row_h(r: &GlanceRow) -> f32 {
-    GLANCE_TEXT + if r.bar.is_some() { GLANCE_BAR_GAP + GLANCE_BAR + GLANCE_BAR_AFTER } else { 0.0 }
+    GLANCE_TEXT + if r.bar.is_some() { GLANCE_BAR + GLANCE_BAR_AFTER } else { 0.0 }
 }
 
-/// Karta enginu v bočním panelu (styl Kiri): kontejnery, CPU, paměť ve VM a ve Windows
-/// (VmmemWSL) s tenkým pruhem, stav Kubernetes. Celý blok je klikací, detail v bublině.
+/// Karta enginu v bočním panelu (styl Kiri): kontejnery, Kubernetes, CPU, paměť ve VM a ve
+/// Windows (VmmemWSL). Celý blok je klikací, detail v bublině.
 pub fn glance(ui: &mut egui::Ui, g: &crate::memory::Glance, x: &GlanceCtx) -> egui::Response {
     let rows = glance_rows(g, x);
     let w = ui.available_width();
-    let h: f32 = rows.iter().map(glance_row_h).sum();
+    let h: f32 = rows.iter().map(glance_row_h).sum::<f32>() - GLANCE_BAR_AFTER;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
     let p = ui.painter_at(rect);
+    // popisek i hodnota stejným písmem → společná účaří
     let font = egui::TextStyle::Small.resolve(ui.style());
-    let strong = egui::FontId::new(font.size + 1.0, font.family.clone());
-    // přes celou šířku karty (zarovnané s tlačítky pod ním)
     let (x0, x1) = (rect.left(), rect.right());
     let mut top = rect.top();
     for r in &rows {
         let y = top + GLANCE_TEXT / 2.0;
         p.text(egui::pos2(x0, y), egui::Align2::LEFT_CENTER, &r.label, font.clone(), theme::muted());
-        let vr = p.text(egui::pos2(x1, y), egui::Align2::RIGHT_CENTER, &r.value, strong.clone(), theme::strong_text());
+        let vr = p.text(egui::pos2(x1, y), egui::Align2::RIGHT_CENTER, &r.value, font.clone(), theme::strong_text());
         if let Some(on) = r.dot {
-            p.circle_filled(egui::pos2(vr.left() - 7.0, y), 3.5, if on { theme::green() } else { theme::muted() });
+            p.circle_filled(egui::pos2(vr.left() - 7.0, y), 3.0, if on { theme::green() } else { theme::muted() });
         }
         if let Some(f) = r.bar {
-            let by = top + GLANCE_TEXT + GLANCE_BAR_GAP;
+            let by = top + GLANCE_TEXT - 1.0;
             let bar = egui::Rect::from_min_max(egui::pos2(x0, by), egui::pos2(x1.max(x0 + 10.0), by + GLANCE_BAR));
             p.rect_filled(bar, 2.0, theme::card_stroke());
             let f = f.clamp(0.0, 1.0);
@@ -493,8 +497,8 @@ pub fn glance(ui: &mut egui::Ui, g: &crate::memory::Glance, x: &GlanceCtx) -> eg
     let cpu = g.cpu.map(|c| format!("{c:.1} %")).unwrap_or_else(|| "…".into());
     let (used, total, cache, ram) = (fmt_bytes(g.used), fmt_bytes(g.total), fmt_bytes(g.cache), fmt_bytes(g.ram));
     resp.on_hover_text(tf!(
-        "Celá WSL VM (všechny distribuce)\nCPU: {cpu} (· počet procesorů VM)\nPaměť – použitá procesy v Linuxu: {used} z {total}\nCache souborů: {cache}\nWindows – kolik si VM bere z RAM Windows (VmmemWSL): {vmmem} z {ram}\n(obsahuje i cache a paměť, kterou Linux ještě nevrátil)\nKlikni pro Přehled",
-        "Whole WSL VM (all distributions)\nCPU: {cpu} (· number of VM processors)\nMemory – used by Linux processes: {used} of {total}\nFile cache: {cache}\nWindows – Windows RAM taken by the VM (VmmemWSL): {vmmem} of {ram}\n(includes cache and memory Linux has not returned yet)\nClick for the Overview"
+        "Celá WSL VM (všechny distribuce)\nCPU: {cpu} ze všech procesorů VM (· jejich počet)\nPaměť – použitá procesy v Linuxu: {used} z {total}\nCache souborů: {cache}\nWindows – kolik si VM bere z RAM Windows (VmmemWSL): {vmmem} z {ram}\n(obsahuje i cache a paměť, kterou Linux ještě nevrátil)\nKlikni pro Přehled",
+        "Whole WSL VM (all distributions)\nCPU: {cpu} of all VM processors (· their count)\nMemory – used by Linux processes: {used} of {total}\nFile cache: {cache}\nWindows – Windows RAM taken by the VM (VmmemWSL): {vmmem} of {ram}\n(includes cache and memory Linux has not returned yet)\nClick for the Overview"
     ))
     .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -736,29 +740,28 @@ mod tests {
         use super::{GlanceCtx, GlanceRow};
         const G: u64 = 1024 * 1024 * 1024;
         let g = crate::memory::Glance { used: 2 * G, total: 16 * G, cache: G, vmmem: Some(6 * G), ram: 32 * G, cpu: Some(12.0) };
-        let x = GlanceCtx { containers: Some((3, 5)), ncpu: Some(8), k8s: Some(true) };
+        let x = GlanceCtx { engine: "Podman", containers: Some((3, 5)), ncpu: Some(8), k8s: Some(true) };
         let rows = super::glance_rows(&g, &x);
-        assert_eq!(rows.len(), 5, "kontejnery, CPU, paměť, Windows, Kubernetes");
-        assert_eq!((rows[0].value.as_str(), rows[0].bar), ("3 / 5", None));
-        assert_eq!((rows[1].label.as_str(), rows[1].value.as_str(), rows[1].bar), ("CPU", "12 % · 8", None), "CPU bez pruhu, s počtem jader");
-        assert_eq!((rows[2].value.as_str(), rows[2].bar), ("2.0 GB / 16.0 GB", Some(2.0 / 16.0)));
-        assert_eq!((rows[3].label.as_str(), rows[3].value.as_str(), rows[3].bar), ("Windows", "6.0 GB / 32.0 GB", Some(6.0 / 32.0)));
-        assert_eq!((rows[4].label.as_str(), rows[4].dot), ("Kubernetes", Some(true)));
-        // bez enginu, VmmemWSL a clusteru jen CPU a paměť; neznámá RAM Windows → bez pruhu
+        assert_eq!(rows.len(), 5, "kontejnery, Kubernetes, CPU, paměť, Windows");
+        assert!(rows[0].label.ends_with("Podman") && rows[0].value == "3 / 5" && rows[0].bar.is_none());
+        assert_eq!((rows[1].label.as_str(), rows[1].dot, rows[1].bar), ("Kubernetes", Some(true), None));
+        assert_eq!((rows[2].label.as_str(), rows[2].value.as_str(), rows[2].bar), ("CPU", "12 % · 8", Some(0.12)));
+        assert_eq!((rows[3].value.as_str(), rows[3].bar), ("2.0 GB / 16.0 GB", Some(2.0 / 16.0)));
+        assert_eq!((rows[4].label.as_str(), rows[4].value.as_str(), rows[4].bar), ("Windows", "6.0 GB / 32.0 GB", Some(6.0 / 32.0)));
+        // bez enginu, VmmemWSL a clusteru jen metriky CPU a paměť; neznámá RAM Windows → prázdný pruh
         let min = super::glance_rows(&crate::memory::Glance { vmmem: None, ..g }, &GlanceCtx::default());
-        assert_eq!(min.iter().map(|r| r.label.as_str()).filter(|l| *l == "CPU" || *l == "Windows").count(), 1);
-        assert_eq!((min.len(), min[0].value.as_str()), (2, "12 %"));
+        assert_eq!((min.len(), min[0].label.as_str(), min[0].value.as_str()), (2, "CPU", "12 %"));
         let r: Vec<GlanceRow> = super::glance_rows(&crate::memory::Glance { ram: 0, ..g }, &GlanceCtx::default());
-        assert_eq!((r[2].bar, r[2].value.as_str()), (None, "6.0 GB"));
+        assert_eq!((r[2].bar, r[2].value.as_str()), (Some(0.0), "6.0 GB"));
 
-        // vykreslení bez okna: 5 řádků textu, pod dvěma pruh – nic se nepřekrývá
+        // vykreslení bez okna: 5 řádků textu, pod třemi metrikami pruh – nic se nepřekrývá
         use super::egui;
         let ctx = egui::Context::default();
         let mut h = 0.0;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| h = super::glance(ui, &g, &x).rect.height());
         });
-        assert_eq!(h, 5.0 * 20.0 + 2.0 * 12.0);
+        assert_eq!(h, 5.0 * 18.0 + 3.0 * 8.0 - 5.0);
     }
 }
 

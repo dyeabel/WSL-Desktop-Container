@@ -56,7 +56,10 @@ pub fn create_body(image: &str, api_port: u16, range: (u16, u16)) -> Value {
         "ExposedPorts": exposed,
         "HostConfig": {
             "Privileged": true,
-            "CgroupnsMode": "host",
+            // vlastní cgroup namespace: k3s i pody zůstanou v cgroupě kontejneru, takže statistiky
+            // enginu (CPU, paměť) počítají celý cluster – s „host“ si k3s zakládal /k3s a
+            // /kubepods v kořeni a kontejner vypadal skoro nečinně
+            "CgroupnsMode": "private",
             // po restartu WSL se cluster rozběhne sám, ručně zastavený zůstane stát
             "RestartPolicy": { "Name": RESTART },
             "NetworkMode": NETWORK,
@@ -177,6 +180,24 @@ pub fn create(d: &Docker, image: &str, api_port: u16, range: (u16, u16), mut pro
     start(d)
 }
 
+/// Uzel založený starší verzí s `CgroupnsMode: host` (statistiky by cluster nezapočítaly) –
+/// je potřeba ho založit znovu; data clusteru ve svazku zůstanou.
+pub fn needs_recreate(d: &Docker) -> bool {
+    d.get::<Value>(&format!("/containers/{}/json", enc(NAME)))
+        .ok()
+        .and_then(|v| v.pointer("/HostConfig/CgroupnsMode").and_then(|m| m.as_str()).map(|m| m == "host"))
+        .unwrap_or(false)
+}
+
+/// Smaže jen kontejner uzlu (svazek s daty a síť zůstanou) a založí ho znovu podle `create_body`.
+pub fn recreate(d: &Docker, image: &str, api_port: u16, range: (u16, u16), progress: impl FnMut(&str)) -> Result<(), String> {
+    match d.delete(&format!("/containers/{}?force=1", enc(NAME))) {
+        Err(e) if !e.is_not_found() => return Err(e.to_string()),
+        _ => {}
+    }
+    create(d, image, api_port, range, progress)
+}
+
 pub fn start(d: &Docker) -> Result<(), String> {
     // cluster založený starší verzí měl RestartPolicy „no“ – sjednotit (chyba nevadí)
     let _ = d.post_json(&format!("/containers/{}/update", enc(NAME)), json!({ "RestartPolicy": { "Name": RESTART } }));
@@ -278,7 +299,7 @@ mod tests {
     fn create_body_shape() {
         let b = create_body(DEFAULT_IMAGE, 6443, (30080, 30099));
         assert_eq!(b["HostConfig"]["Privileged"], true);
-        assert_eq!(b["HostConfig"]["CgroupnsMode"], "host");
+        assert_eq!(b["HostConfig"]["CgroupnsMode"], "private", "statistiky enginu musí počítat i pody");
         assert_eq!(b["HostConfig"]["RestartPolicy"]["Name"], "unless-stopped", "po restartu WSL se rozběhne sám");
         assert_eq!(b["HostConfig"]["NetworkMode"], NETWORK);
         assert_eq!(b["HostConfig"]["PortBindings"]["6443/tcp"][0], json!({ "HostIp": "127.0.0.1", "HostPort": "6443" }));

@@ -78,7 +78,7 @@ volitelný režim.
 
 - Kontejner `wslcd-k3s` z image `rancher/k3s:<pinned>`. Verzi drží konstanta v kódu a jde
   přepsat v `config.json`.
-- Parametry: `--privileged`, `--cgroupns=host` (k3s v kontejneru to vyžaduje s cgroup v2),
+- Parametry: `--privileged`, `--cgroupns=private` (k3s i pody zůstanou v cgroupě kontejneru, takže statistiky enginu počítají celý cluster; původní `host` je nechával v kořeni – opraveno 2026-11-21),
   `--restart=no`, vlastní síť `wslcd-k3s` (bridge), svazek `wslcd-k3s-data` →
   `/var/lib/rancher/k3s` (cluster přežije restart), tmpfs `/run` a `/var/run`.
   Příkaz: `server --disable=traefik --tls-san=127.0.0.1 --write-kubeconfig-mode=600`.

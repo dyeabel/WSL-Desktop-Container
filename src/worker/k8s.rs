@@ -115,7 +115,13 @@ impl Worker {
             }
             K8sOp::Start => {
                 self.k8s_progress(Some(t!("Spouštím uzel…", "Starting the node…").into()));
-                let r = cluster::start(&d).and_then(|_| cluster::wait_ready(&d, |p| self.k8s_progress(Some(p.to_string())))).map(|_| self.k8s_after_start(&d));
+                let started = if cluster::needs_recreate(&d) {
+                    self.k8s_progress(Some(t!("Převádím uzel na novější nastavení (data zůstanou)…", "Updating the node to the newer settings (data is kept)…").into()));
+                    cluster::recreate(&d, &cfg.k3s_image, cfg.k3s_api_port, cfg.k3s_nodeport_range, |p| self.k8s_progress(Some(p.to_string())))
+                } else {
+                    cluster::start(&d)
+                };
+                let r = started.and_then(|_| cluster::wait_ready(&d, |p| self.k8s_progress(Some(p.to_string())))).map(|_| self.k8s_after_start(&d));
                 self.k8s_progress(None);
                 r.map(|kc| tf!("Cluster běží. {kc}", "The cluster is running. {kc}"))
             }
