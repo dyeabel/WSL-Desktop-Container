@@ -9,6 +9,8 @@ pub struct Status {
     pub installed: bool,
     /// cílová složka je v uživatelském PATH
     pub in_path: bool,
+    /// vedle nainstalovaného docker.exe chybí docker-compose.exe nebo wslcd.exe (po aktualizaci ze starší verze)
+    pub missing_copies: bool,
     /// jiný docker, který má v PATH přednost (je před naší složkou; když naše složka
     /// v PATH není, každý nalezený)
     pub other_docker: Vec<OtherDocker>,
@@ -96,6 +98,18 @@ pub fn set_docker_host(target: Option<(u16, bool)>) -> Result<String, String> {
     }
 }
 
+/// Soubory shimu (kopie jedné binárky): `docker.exe`, `docker-compose.exe` a `wslcd.exe`
+/// (příkaz `wslcd` se chová jako `docker`, ale vždy míří na engine aplikace).
+const SHIM_FILES: [&str; 3] = ["docker.exe", "docker-compose.exe", "wslcd.exe"];
+
+/// Soubory, které vedle `docker.exe` v portable balíčku přibývají (kopie shimu).
+const SHIM_COPIES: &[&str] = SHIM_FILES.split_at(1).1;
+
+/// Chybí vedle docker.exe některá kopie shimu? (chybí např. wslcd.exe po aktualizaci ze starší verze)
+fn missing_copies(dir: &std::path::Path) -> bool {
+    dir.join("docker.exe").exists() && !SHIM_COPIES.iter().all(|n| dir.join(n).is_file())
+}
+
 /// Kam patří docker.exe v PATH: v portable režimu přímo složka aplikace (nic se nekopíruje),
 /// jinak %LOCALAPPDATA%\WSL_Container_Desktop\bin.
 pub fn bin_dir() -> PathBuf {
@@ -165,6 +179,7 @@ pub fn shadowing(entries: &[String], ours: &str, exts: &[String], exists: impl F
 pub fn status() -> Status {
     let dir = bin_dir();
     let installed = dir.join("docker.exe").exists();
+    let missing_copies = missing_copies(&dir);
     let (entries, user_path) = registry_path();
     let d = dir.display().to_string();
     let in_path = user_path.split(';').any(|p| norm(p) == norm(&d));
@@ -184,7 +199,7 @@ pub fn status() -> Status {
     let docker_host = powershell("[Environment]::GetEnvironmentVariable('DOCKER_HOST','User')")
         .ok()
         .filter(|s| !s.trim().is_empty());
-    Status { installed, in_path, other_docker, duplicates, source_ok: source().is_some(), docker_host }
+    Status { installed, in_path, missing_copies, other_docker, duplicates, source_ok: source().is_some(), docker_host }
 }
 
 /// Značka v binárce shimu (User-Agent rychlé cesty) – pozná kopii shimu WSL Container Desktop.
@@ -210,7 +225,7 @@ fn wls_dir(dir: &std::path::Path) -> bool {
 /// Jsou ve výchozí instalační složce soubory shimu?
 fn legacy_files() -> bool {
     let d = legacy_dir();
-    is_wls_shim(&d.join("docker.exe")) || d.join("docker-compose.exe").is_file()
+    is_wls_shim(&d.join("docker.exe")) || SHIM_COPIES.iter().any(|n| d.join(n).is_file())
 }
 
 /// Výchozí instalační složka (mimo portable režim): %LOCALAPPDATA%\WSL_Container_Desktop\bin.
@@ -231,7 +246,7 @@ fn old_name_dir() -> PathBuf {
 /// Doplní složku z doby před přejmenováním mezi duplicity (soubory smazat).
 fn with_old_name_dir(mut dups: Vec<Dup>) -> Vec<Dup> {
     let old = old_name_dir();
-    let has_files = is_wls_shim(&old.join("docker.exe")) || old.join("docker-compose.exe").is_file();
+    let has_files = is_wls_shim(&old.join("docker.exe")) || SHIM_COPIES.iter().any(|n| old.join(n).is_file());
     let n = norm(&old.display().to_string());
     match dups.iter_mut().find(|d| norm(&d.path) == n) {
         Some(d) => d.delete_files = has_files,
@@ -312,7 +327,7 @@ fn remove_duplicates_for(ours: &str) -> Result<String, String> {
     let mut failed = Vec::new();
     for d in dups.iter().filter(|d| d.delete_files) {
         let dir = std::path::Path::new(&d.path);
-        for name in ["docker.exe", "docker-compose.exe"] {
+        for name in SHIM_FILES {
             let f = dir.join(name);
             if f.exists() && std::fs::remove_file(&f).is_err() {
                 failed.push(f.display().to_string());
@@ -339,21 +354,35 @@ pub fn install() -> Result<String, String> {
         "docker.exe (shim) was not found next to the application – build the project (cargo build --release)"
     ))?;
     let dir = bin_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    for name in ["docker.exe", "docker-compose.exe"] {
-        // portable: docker.exe už ve složce je – zkopírovat jen docker-compose.exe
-        if dir.join(name) == src {
-            continue;
-        }
-        std::fs::copy(&src, dir.join(name))
-            .map_err(|e| tf!("{name}: {e} (neběží zrovna nějaký docker příkaz?)", "{name}: {e} (is a docker command currently running?)"))?;
-    }
+    copy_shim_files(&src, &dir)?;
     add_to_user_path(&dir.display().to_string())?;
     Ok(tf!(
         "Příkaz docker nainstalován do {} – otevři nový terminál",
         "The docker command was installed to {} – open a new terminal",
         dir.display()
     ))
+}
+
+/// Zkopíruje shim jako docker.exe, docker-compose.exe a wslcd.exe do `dir`
+/// (soubor, který je zároveň zdrojem – portable `docker.exe` – se přeskočí).
+fn copy_shim_files(src: &std::path::Path, dir: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    for name in SHIM_FILES {
+        if dir.join(name) == src {
+            continue;
+        }
+        std::fs::copy(src, dir.join(name))
+            .map_err(|e| tf!("{name}: {e} (neběží zrovna nějaký docker příkaz?)", "{name}: {e} (is a docker command currently running?)"))?;
+    }
+    Ok(())
+}
+
+/// Smaže soubory shimu z `dir`; v portable režimu zůstává `docker.exe` (je součást balíčku).
+fn remove_shim_files(dir: &std::path::Path, portable: bool) {
+    let names: &[&str] = if portable { SHIM_COPIES } else { &SHIM_FILES };
+    for name in names {
+        let _ = std::fs::remove_file(dir.join(name));
+    }
 }
 
 /// Přidá složku na konec uživatelského PATH (pokud tam ještě není).
@@ -391,11 +420,7 @@ pub fn uninstall() -> Result<String, String> {
            $n = ($p -split ';' | Where-Object {{ $_ -and ($_.TrimEnd('\\') -ne $d) }}) -join ';'; \
            [Environment]::SetEnvironmentVariable('Path', $n, 'User') }}"
     ))?;
-    // portable: docker.exe je součást balíčku – smazat jen kopii docker-compose.exe
-    let names: &[&str] = if crate::config::portable_dir().is_some() { &["docker-compose.exe"] } else { &["docker.exe", "docker-compose.exe"] };
-    for name in names {
-        let _ = std::fs::remove_file(dir.join(name));
-    }
+    remove_shim_files(&dir, crate::config::portable_dir().is_some());
     Ok(t!("Příkaz docker odebrán z PATH", "The docker command was removed from PATH").into())
 }
 
@@ -449,6 +474,58 @@ mod tests {
         assert!(duplicates(&v(&[r"C:\WLS\WLS-0.5.0"]), r"C:\WLS\WLS-0.5.0", legacy, false, has).is_empty());
         // výchozí instalace je ta aktuální -> nic
         assert!(duplicates(&v(&[legacy]), legacy, legacy, true, has).is_empty());
+    }
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("wslcd-shim-install-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn exists(dir: &std::path::Path) -> Vec<bool> {
+        SHIM_FILES.iter().map(|n| dir.join(n).is_file()).collect()
+    }
+
+    #[test]
+    fn install_copies_wslcd_and_uninstall_removes_it() {
+        let root = temp_dir("copy");
+        let src = root.join("src").join("docker.exe");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, b"shim").unwrap();
+        let bin = root.join("bin");
+        copy_shim_files(&src, &bin).unwrap();
+        assert_eq!(exists(&bin), vec![true, true, true]);
+        assert_eq!(std::fs::read(bin.join("wslcd.exe")).unwrap(), b"shim");
+        remove_shim_files(&bin, false);
+        assert_eq!(exists(&bin), vec![false, false, false]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn status_reports_missing_copies() {
+        let dir = temp_dir("complete");
+        std::fs::write(dir.join("docker.exe"), b"shim").unwrap();
+        assert!(missing_copies(&dir));
+        copy_shim_files(&dir.join("docker.exe"), &dir).unwrap();
+        assert!(!missing_copies(&dir));
+        std::fs::remove_file(dir.join("wslcd.exe")).unwrap();
+        assert!(missing_copies(&dir));
+        std::fs::remove_file(dir.join("docker.exe")).unwrap();
+        assert!(!missing_copies(&dir), "bez docker.exe není co aktualizovat");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn portable_keeps_docker_exe() {
+        let dir = temp_dir("portable");
+        let src = dir.join("docker.exe");
+        std::fs::write(&src, b"shim").unwrap();
+        copy_shim_files(&src, &dir).unwrap();
+        assert_eq!(exists(&dir), vec![true, true, true]);
+        remove_shim_files(&dir, true);
+        assert_eq!(exists(&dir), vec![true, false, false]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

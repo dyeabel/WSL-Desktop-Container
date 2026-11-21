@@ -3,7 +3,8 @@
 //! `docker ps` ve Windows = `wsl.exe -d <distribuce> --cd <aktuální složka> -e docker ps`.
 //! Distribuce se bere z konfigurace WSL Container Desktop (případně z proměnné WSLCD_DISTRO).
 //! Windows cesty v argumentech se přeloží (C:\x -> /mnt/c/x). Pokud se binárka
-//! jmenuje `docker-compose.exe`, chová se jako `docker compose`.
+//! jmenuje `docker-compose.exe`, chová se jako `docker compose`. `wslcd.exe` je stejná binárka a chová se
+//! přesně jako `docker`, jen vždy míří na engine aplikace (ignoruje DOCKER_CONTEXT a DOCKER_HOST z prostředí).
 //!
 //! Jednoduché příkazy jen pro čtení (`ps`, `images`, `volume ls`, `network ls`, `inspect`,
 //! `logs` bez `-f`, `version --format`, `info --format`) odpoví rychlá cesta (`fast.rs`) přímo z API enginu
@@ -44,13 +45,37 @@ mod podmanfix;
 use std::io::Write;
 use std::process::{Command, ExitCode};
 
+/// Jméno spustitelného souboru shimu (bez přípony, malými písmeny) podle `current_exe`.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum Invoked {
+    /// `docker.exe` (a jakékoli jiné jméno)
+    Docker,
+    /// `docker-compose.exe` – chová se jako `docker compose`
+    Compose,
+    /// `wslcd.exe` – totéž co `docker`, ale vždy míří na engine aplikace (ignoruje DOCKER_CONTEXT / DOCKER_HOST)
+    Wslcd,
+}
+
+fn invoked_as(file_stem: &str) -> Invoked {
+    match file_stem.to_ascii_lowercase().as_str() {
+        "docker-compose" => Invoked::Compose,
+        "wslcd" => Invoked::Wslcd,
+        _ => Invoked::Docker,
+    }
+}
+
+/// Hodnota proměnné DOCKER_CONTEXT / DOCKER_HOST, kterou shim bere v úvahu: wslcd je ignoruje.
+fn env_for(who: Invoked, value: Option<String>) -> Option<String> {
+    if who == Invoked::Wslcd { None } else { value }
+}
+
 fn main() -> ExitCode {
     let exe = std::env::current_exe().ok();
     let exe_name = exe
         .as_ref()
         .and_then(|p| p.file_stem())
-        .map(|s| s.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
+        .map(|s| invoked_as(&s.to_string_lossy()))
+        .unwrap_or(Invoked::Docker);
 
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
 
@@ -62,7 +87,7 @@ fn main() -> ExitCode {
             return ExitCode::from(125);
         }
     };
-    if exe_name == "docker-compose" && args.first().map(|a| a != "compose").unwrap_or(true) {
+    if exe_name == Invoked::Compose && args.first().map(|a| a != "compose").unwrap_or(true) {
         args.insert(0, "compose".into());
     }
 
@@ -79,7 +104,10 @@ fn main() -> ExitCode {
     let distro = std::env::var("WSLCD_DISTRO").ok().filter(|d| !d.is_empty()).unwrap_or(cfg.distro.clone());
     let default_target = contexts::Target { distro, engine: cfg.engine, port: cfg.port, tls: cfg.tls };
     let debug = std::env::var("WSLCD_SHIM_DEBUG").is_ok();
-    let env_ctx = std::env::var("DOCKER_CONTEXT").ok();
+    // wslcd míří vždy na engine aplikace: DOCKER_CONTEXT / DOCKER_HOST z prostředí (cizí engine) ignoruje,
+    // `wslcd --context <kontext aplikace>` a `wslcd context use` dál fungují
+    let env_ctx = env_for(exe_name, std::env::var("DOCKER_CONTEXT").ok());
+    let env_host = env_for(exe_name, std::env::var("DOCKER_HOST").ok());
     let store_path = contexts::path();
 
     // docker context … – vyřídí shim sám
@@ -88,7 +116,7 @@ fn main() -> ExitCode {
             eprintln!("wslcd-docker: APPDATA is not set, cannot store contexts");
             return ExitCode::from(1);
         };
-        let env = ctxcmd::CtxEnv { store_path, default: default_target, env_ctx: env_ctx.clone(), docker_host: std::env::var("DOCKER_HOST").ok(), distros: &contexts::wsl_distros };
+        let env = ctxcmd::CtxEnv { store_path, default: default_target, env_ctx: env_ctx.clone(), docker_host: env_host, distros: &contexts::wsl_distros };
         let r = ctxcmd::run(&args[1..], &env);
         let _ = std::io::stdout().lock().write_all(r.out.as_bytes());
         let _ = std::io::stderr().lock().write_all(r.err.as_bytes());
@@ -129,7 +157,7 @@ fn main() -> ExitCode {
     }
 
     // rychlá cesta: odpověď přímo z API, bez wsl.exe
-    if exe_name != "docker-compose" && std::env::var("WSLCD_SHIM_FAST").map(|v| v != "0").unwrap_or(true) {
+    if exe_name != Invoked::Compose && std::env::var("WSLCD_SHIM_FAST").map(|v| v != "0").unwrap_or(true) {
         // Podman: `docker events` z API ve schématu Dockeru (podman events má vlastní)
         if target.engine == engine::Engine::Podman {
             if let Some(t) = fast::try_podman_version(&args, target.port, target.tls, &ctx_name) {
@@ -250,5 +278,33 @@ fn main() -> ExitCode {
             eprintln!("wslcd-docker: nelze spustit wsl.exe: {e}");
             ExitCode::from(127)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wslcd_ignores_docker_env() {
+        let v = Some("remote".to_string());
+        assert_eq!(env_for(Invoked::Wslcd, v.clone()), None);
+        assert_eq!(env_for(Invoked::Docker, v.clone()), v);
+        assert_eq!(env_for(Invoked::Compose, v.clone()), v);
+        assert_eq!(env_for(Invoked::Docker, None), None);
+    }
+
+    #[test]
+    fn invoked_name_detection() {
+        assert_eq!(invoked_as("docker"), Invoked::Docker);
+        assert_eq!(invoked_as("Docker"), Invoked::Docker);
+        assert_eq!(invoked_as("docker-compose"), Invoked::Compose);
+        assert_eq!(invoked_as("DOCKER-COMPOSE"), Invoked::Compose);
+        assert_eq!(invoked_as("wslcd"), Invoked::Wslcd);
+        assert_eq!(invoked_as("WSLCD"), Invoked::Wslcd);
+        assert_eq!(invoked_as("Wslcd"), Invoked::Wslcd);
+        // wslcd se nechová jako docker-compose; jiné jméno = docker
+        assert_ne!(invoked_as("wslcd"), Invoked::Compose);
+        assert_eq!(invoked_as("something-else"), Invoked::Docker);
     }
 }

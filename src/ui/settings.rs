@@ -528,10 +528,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui.label(t!(
                 "Malý docker.exe, který příkazy předává Dockeru ve WSL (docker ps, docker compose up, docker run -it …). \
                  Windows cesty v argumentech (C:\\…, .\\data) se přeloží automaticky a příkaz běží v aktuální složce. \
-                 Nejde o Docker Desktop ani o Docker CLI pro Windows.",
+                 Stejný příkaz je i jako wslcd (wslcd ps = docker ps, ale vždy na engine této aplikace). Nejde o Docker Desktop ani o Docker CLI pro Windows.",
                 "A small docker.exe that forwards commands to Docker in WSL (docker ps, docker compose up, docker run -it …). \
                  Windows paths in arguments (C:\\…, .\\data) are translated automatically and the command runs in the current folder. \
-                 This is neither Docker Desktop nor the Docker CLI for Windows."
+                 The same command is also available as wslcd (wslcd ps = docker ps, but always against this app's engine). This is neither Docker Desktop nor the Docker CLI for Windows."
             ));
             ui.add_space(6.0);
             let checking = app.shim_checking.load(std::sync::atomic::Ordering::Relaxed);

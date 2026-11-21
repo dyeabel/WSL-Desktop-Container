@@ -447,6 +447,15 @@ translated (`-v D:\data:/data`, `--mount source=C:\x`, `-f C:\p\compose.yml`, `.
 `\\wsl.localhost\Debian\…`) and the exit code of the command is returned. When named
 `docker-compose.exe` it behaves like `docker compose`.
 
+#### The `wslcd` command
+
+`wslcd.exe` is the same binary as `docker.exe` (it is told apart by its file name), so
+`wslcd <args>` behaves exactly like `docker <args>` – including the API fast path, auto-start, contexts,
+path translation and `wslcd compose …` – but it always targets the WSL Container Desktop engine:
+`DOCKER_CONTEXT` and `DOCKER_HOST` from the environment are ignored, so `wslcd ps` never lands on Docker Desktop
+or another engine. `wslcd --context <app context>` still works. It is installed next to `docker.exe`
+(*Add to PATH*, portable package: already in the app folder) and removed together with it.
+
 Install it from *WSL engine → Install & setup* (or *Settings*): it is copied to
 `%LOCALAPPDATA%\WSL_Container_Desktop\bin` and that folder is added to the user PATH (no admin rights).
 The check reads PATH from the registry (machine, then user – what a new terminal sees) and warns
