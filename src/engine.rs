@@ -49,7 +49,7 @@ if [ "$R" = "1" ] && systemctl is-active -q docker 2>/dev/null; then systemctl r
 /// Uvolní TCP port API v distribuci, která přestává být primární: vypne TLS proxy,
 /// Podman API na TCP a `-H tcp://` u dockerd. Engine i kontejnery běží dál (unix socket);
 /// po návratu distribuce na místo primární vše znovu nastaví `setup_script`.
-pub const API_RELEASE: &str = r#"if [ ! -d /run/systemd/system ]; then exit 0; fi
+pub const API_RELEASE: &str = r#"if [ ! -d /run/systemd/system ] && [ ! -d /run/wslcd-init ]; then exit 0; fi
 if [ -f /etc/systemd/system/wslcd-tls-proxy.service ]; then
   systemctl disable --now wslcd-tls-proxy >/dev/null 2>&1 || true
   systemctl reset-failed wslcd-tls-proxy >/dev/null 2>&1 || true
@@ -213,7 +213,7 @@ echo "Podman odinstalován"
 
 const DOCKER_SETUP: &str = concat!(
     "set -e\n",
-    r#"if [ ! -d /run/systemd/system ]; then echo "Distribuce nebezi se systemd. Pridej do /etc/wsl.conf: [boot] systemd=true a restartuj WSL (wsl --terminate <distro>)." >&2; exit 3; fi
+    r#"if [ ! -d /run/systemd/system ] && [ ! -d /run/wslcd-init ]; then echo "Distribuce nebezi se systemd. Pridej do /etc/wsl.conf: [boot] systemd=true a restartuj WSL (wsl --terminate <distro>)." >&2; exit 3; fi
 D=$(command -v dockerd || true)
 if [ -z "$D" ]; then echo "dockerd nenalezen - pouzij Nainstalovat engine (nebo: curl -fsSL https://get.docker.com | sh)." >&2; exit 2; fi
 # Podman API by blokovalo port
@@ -281,7 +281,7 @@ fi
 
 const PODMAN_SETUP: &str = concat!(
     "set -e\n",
-    r#"if [ ! -d /run/systemd/system ]; then echo "Distribuce nebezi se systemd. Pridej do /etc/wsl.conf: [boot] systemd=true a restartuj WSL (wsl --terminate <distro>)." >&2; exit 3; fi
+    r#"if [ ! -d /run/systemd/system ] && [ ! -d /run/wslcd-init ]; then echo "Distribuce nebezi se systemd. Pridej do /etc/wsl.conf: [boot] systemd=true a restartuj WSL (wsl --terminate <distro>)." >&2; exit 3; fi
 P=$(command -v podman || true)
 if [ -z "$P" ]; then echo "podman nenalezen - pouzij Nainstalovat engine (nebo: apt install podman)." >&2; exit 2; fi
 # Docker by blokoval port
@@ -427,14 +427,16 @@ const PKG: &str = r#"pkg_install() {
   elif command -v dnf >/dev/null; then dnf install -y -q "$@";
   elif command -v zypper >/dev/null; then zypper --non-interactive install -y "$@";
   elif command -v pacman >/dev/null; then pacman -Sy --noconfirm --needed "$@";
-  else echo "Nepodporovaný správce balíčků (umím apt, dnf, zypper, pacman)." >&2; return 2; fi
+  elif command -v apk >/dev/null; then apk add -q --no-cache "$@";
+  else echo "Nepodporovaný správce balíčků (umím apt, dnf, zypper, pacman, apk)." >&2; return 2; fi
 }
 pkg_remove() {
   if command -v apt-get >/dev/null; then export DEBIAN_FRONTEND=noninteractive; apt-get purge -y -qq "$@" && apt-get autoremove -y -qq;
   elif command -v dnf >/dev/null; then dnf remove -y -q "$@";
   elif command -v zypper >/dev/null; then zypper --non-interactive remove "$@";
   elif command -v pacman >/dev/null; then pacman -Rns --noconfirm "$@";
-  else echo "Nepodporovaný správce balíčků (umím apt, dnf, zypper, pacman)." >&2; return 2; fi
+  elif command -v apk >/dev/null; then apk del -q "$@";
+  else echo "Nepodporovaný správce balíčků (umím apt, dnf, zypper, pacman, apk)." >&2; return 2; fi
 }
 pkg_installed() {
   for p in "$@"; do
@@ -444,6 +446,8 @@ pkg_installed() {
       rpm -q "$p" >/dev/null 2>&1 && printf ' %s' "$p"
     elif command -v pacman >/dev/null; then
       pacman -Q "$p" >/dev/null 2>&1 && printf ' %s' "$p"
+    elif command -v apk >/dev/null; then
+      apk info -e "$p" >/dev/null 2>&1 && printf ' %s' "$p"
     fi
   done
   return 0
@@ -451,7 +455,10 @@ pkg_installed() {
 "#;
 
 const DOCKER_INSTALL_BODY: &str = r#"set -e
-if command -v pacman >/dev/null; then
+if command -v apk >/dev/null; then
+  # Alpine (WSLCD Lite): balíčky distribuce, compose a buildx jako pluginy CLI
+  pkg_install docker docker-cli-compose docker-cli-buildx
+elif command -v pacman >/dev/null; then
   pkg_install docker docker-compose docker-buildx
 elif command -v zypper >/dev/null; then
   pkg_install docker docker-compose
@@ -483,7 +490,12 @@ docker --version
 const PODMAN_INSTALL_BODY: &str = r#"set -e
 pkg_install podman
 # compose provider pro `podman compose` (mluví se stejným API přes DOCKER_HOST z podman --url)
-pkg_install docker-compose || echo "docker-compose se nepodařilo nainstalovat – podman compose nebude fungovat" >&2
+if command -v apk >/dev/null; then
+  # Alpine: docker compose je plugin CLI – odkaz jako samostatný docker-compose pro podman compose
+  pkg_install docker-cli-compose && ln -sf /usr/libexec/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose     || echo "docker-compose se nepodařilo nainstalovat – podman compose nebude fungovat" >&2
+else
+  pkg_install docker-compose || echo "docker-compose se nepodařilo nainstalovat – podman compose nebude fungovat" >&2
+fi
 podman --version
 docker-compose version 2>/dev/null || true
 "#;

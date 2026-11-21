@@ -370,7 +370,7 @@ impl Worker {
 
         // 2) systemd
         step(log, t!("Kontrola systemd", "Checking systemd"));
-        if wsl::run(&distro, Some("root"), None, &["test", "-d", "/run/systemd/system"]).is_err() {
+        if wsl::run(&distro, Some("root"), None, &["sh", "-c", crate::lite::HAS_INIT]).is_err() {
             log.push_str(t!(
                 "systemd neběží – zapínám v /etc/wsl.conf a restartuji distribuci\n",
                 "systemd is not running – enabling it in /etc/wsl.conf and restarting the distribution\n"
@@ -389,7 +389,7 @@ impl Worker {
                 wsl::start(&distro)?;
             }
             thread::sleep(Duration::from_secs(3));
-            if wsl::run(&distro, Some("root"), None, &["test", "-d", "/run/systemd/system"]).is_err() {
+            if wsl::run(&distro, Some("root"), None, &["sh", "-c", crate::lite::HAS_INIT]).is_err() {
                 log.push_str(t!(
                     "systemd stále neběží – zkus „Vypnout celé WSL“ a znovu.\n",
                     "systemd is still not running – try “Shut down all of WSL” and retry.\n"

@@ -92,3 +92,13 @@ pub fn k8s(cfg: Config, op: super::K8sOp) -> (Result<String, String>, Vec<super:
     let msgs = rx.try_iter().filter_map(|m| if let super::Msg::K8s(k) = m { Some(k) } else { None }).collect();
     (r, msgs)
 }
+
+/// Přidání distribuce (jako dialog „Přidat distribuci“); vrací výsledek, log a konfiguraci po něm.
+pub fn add_distro(cfg: Config, spec: super::AddDistroSpec) -> (Result<String, String>, String, Config) {
+    let w = worker(cfg);
+    let mut log = String::new();
+    let r = w.add_distro(spec, &mut log);
+    w.kill_keepalive();
+    let cfg = w.cfg();
+    (r, log, cfg)
+}

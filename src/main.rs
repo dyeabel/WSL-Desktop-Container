@@ -22,6 +22,7 @@ mod npipe;
 mod inspect;
 mod k8s;
 mod limits;
+mod lite;
 mod logbuf;
 mod memory;
 mod netinfo;
