@@ -6,7 +6,8 @@
 //! - odpověď bez délky a bez `chunked` (tělo do zavření) se do poolu nevrací nikdy;
 //! - spojení nečinné déle než [`IDLE_TTL`] se zahodí, v poolu je nejvýš [`MAX_IDLE`] spojení;
 //! - selže-li spojení z poolu dřív, než přijde první bajt odpovědi, zopakuje se požadavek
-//!   jednou na novém spojení – jen u GET a HEAD;
+//!   jednou na novém spojení – jen u GET, HEAD, DELETE, PUT, OPTIONS a TRACE bez těla
+//!   (jako dřívější ureq);
 //! - odpověď `101 Switching Protocols` se nevrací nikdy: tělo je surový proud až do zavření.
 
 use super::conn::{Connect, Stream};
@@ -15,8 +16,10 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Jak dlouho smí spojení čekat v poolu.
-const IDLE_TTL: Duration = Duration::from_secs(2);
+/// Jak dlouho smí spojení čekat v poolu. Musí bezpečně pokrýt interval obnovy aplikace
+/// (výchozí 3 s, s událostmi až 30 s), jinak by se při každé obnově navazovalo nové spojení
+/// včetně TLS handshake.
+const IDLE_TTL: Duration = Duration::from_secs(60);
 /// Nejvýš tolik nečinných spojení v poolu.
 const MAX_IDLE: usize = 8;
 /// Velikost čtecího bufferu spojení.
@@ -28,13 +31,18 @@ type Conn = BufReader<Box<dyn Stream>>;
 
 // ---------------------------------------------------------------- pool
 
-#[derive(Default)]
 struct Pool {
     /// nečinná spojení, nejnovější na konci
     idle: Mutex<Vec<(Conn, Instant)>>,
+    /// jak dlouho smí spojení čekat (v aplikaci vždy [`IDLE_TTL`])
+    ttl: Duration,
 }
 
 impl Pool {
+    fn new(ttl: Duration) -> Self {
+        Pool { idle: Mutex::new(Vec::new()), ttl }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<(Conn, Instant)>> {
         self.idle.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -43,7 +51,7 @@ impl Pool {
     fn take(&self) -> Option<Conn> {
         let (got, _stale) = {
             let mut g = self.lock();
-            let stale = drain_stale(&mut g);
+            let stale = drain_stale(&mut g, self.ttl);
             (g.pop().map(|(c, _)| c), stale)
         };
         got
@@ -56,7 +64,7 @@ impl Pool {
         }
         let _drop = {
             let mut g = self.lock();
-            let mut stale = drain_stale(&mut g);
+            let mut stale = drain_stale(&mut g, self.ttl);
             if g.len() >= MAX_IDLE {
                 stale.push(g.remove(0).0);
             }
@@ -71,12 +79,12 @@ impl Pool {
     }
 }
 
-/// Vyjme spojení, která v poolu čekají déle než [`IDLE_TTL`].
-fn drain_stale(v: &mut Vec<(Conn, Instant)>) -> Vec<Conn> {
+/// Vyjme spojení, která v poolu čekají déle než `ttl`.
+fn drain_stale(v: &mut Vec<(Conn, Instant)>, ttl: Duration) -> Vec<Conn> {
     let mut stale = Vec::new();
     let mut i = 0;
     while i < v.len() {
-        if v[i].1.elapsed() > IDLE_TTL {
+        if v[i].1.elapsed() > ttl {
             stale.push(v.remove(i).0);
         } else {
             i += 1;
@@ -102,7 +110,16 @@ struct Inner {
 
 impl Client {
     pub fn new(conn: Arc<dyn Connect>, connect_timeout: Duration, read_timeout: Duration) -> Self {
-        Self { inner: Arc::new(Inner { conn, connect_timeout, read_timeout, pool: Arc::new(Pool::default()) }) }
+        Self { inner: Arc::new(Inner { conn, connect_timeout, read_timeout, pool: Arc::new(Pool::new(IDLE_TTL)) }) }
+    }
+
+    /// Jiná doba nečinnosti v poolu (testy, aby nemusely čekat [`IDLE_TTL`]).
+    /// Jen na čerstvě vytvořeném klientovi.
+    #[cfg(test)]
+    fn with_idle_ttl(mut self, ttl: Duration) -> Self {
+        let inner = Arc::get_mut(&mut self.inner).expect("klient se ještě nesdílí");
+        inner.pool = Arc::new(Pool::new(ttl));
+        self
     }
 
     pub fn request(&self, method: &str, path: &str) -> Request<'_> {
@@ -135,7 +152,8 @@ enum Payload<'b> {
 
 /// Jak selhala výměna na jednom spojení.
 enum Fail {
-    /// spojení zaniklo dřív, než přišel první bajt odpovědi – u GET/HEAD z poolu se zkusí znovu
+    /// spojení zaniklo dřív, než přišel první bajt odpovědi – u idempotentní metody bez těla
+    /// a spojení z poolu se zkusí znovu
     Early(io::Error),
     Late(ApiError),
 }
@@ -236,6 +254,14 @@ impl Request<'_> {
 
     fn execute(self, mut payload: Payload) -> Result<Response, ApiError> {
         let client = self.client;
+        // metoda a cesta jdou do stavového řádku: mezera nebo CR/LF by ho rozbily
+        let bad = |s: &str| s.is_empty() || s.contains(['\r', '\n', ' ']);
+        if bad(&self.method) {
+            return Err(ApiError::Decode(format!("invalid HTTP method {:?}", self.method)));
+        }
+        if bad(&self.path) {
+            return Err(ApiError::Decode(format!("invalid HTTP path {:?}", self.path)));
+        }
         if let Some(name) = &self.bad_header {
             return Err(ApiError::Decode(format!("invalid HTTP header {name:?}")));
         }
@@ -247,8 +273,14 @@ impl Request<'_> {
             _ => None,
         };
         let head = self.head(&payload);
-        let idempotent = self.method.eq_ignore_ascii_case("GET") || self.is_head();
-        let retryable = idempotent && !matches!(payload, Payload::Stream(_));
+        // stejně jako ureq: idempotentní metody a jen bez těla
+        let idempotent = ["GET", "HEAD", "DELETE", "PUT", "OPTIONS", "TRACE"].iter().any(|m| self.method.eq_ignore_ascii_case(m));
+        let no_body = match &payload {
+            Payload::None => true,
+            Payload::Bytes(b) => b.is_empty(),
+            Payload::Stream(_) => false,
+        };
+        let retryable = idempotent && no_body;
         let read_timeout = self.timeout.unwrap_or(client.inner.read_timeout);
         let mut use_pool = true;
         loop {
@@ -894,6 +926,66 @@ mod tests {
         assert_eq!(c.request("GET", "/g").call().unwrap().into_string().unwrap(), "ok");
         assert_eq!(f.conns(), 2);
         assert_eq!(f.count("GET /g"), 2);
+    }
+
+    #[test]
+    fn stale_pooled_delete_without_body_is_retried_once() {
+        let f = fake(one_and_close);
+        let c = client(f.port);
+        assert_eq!(c.request("DELETE", "/d").call().unwrap().into_string().unwrap(), "ok");
+        assert_eq!(c.idle(), 1);
+        assert_eq!(c.request("DELETE", "/d").call().unwrap().into_string().unwrap(), "ok");
+        assert_eq!(f.conns(), 2);
+        assert_eq!(f.count("DELETE /d"), 2);
+        // PUT s prázdným tělem se opakuje také
+        assert_eq!(c.idle(), 1);
+        assert_eq!(c.request("PUT", "/e").send_bytes(b"").unwrap().into_string().unwrap(), "ok");
+        assert_eq!(f.conns(), 3);
+    }
+
+    #[test]
+    fn stale_pooled_put_with_body_is_not_retried() {
+        let f = fake(one_and_close);
+        let c = client(f.port);
+        assert_eq!(c.request("PUT", "/u").send_bytes(b"x").unwrap().into_string().unwrap(), "ok");
+        assert_eq!(c.idle(), 1);
+        let e = c.request("PUT", "/u").send_bytes(b"x").err().unwrap();
+        assert!(matches!(e, ApiError::Transport(_)), "{e:?}");
+        assert_eq!(f.conns(), 1);
+    }
+
+    #[test]
+    fn idle_connection_expires_after_ttl() {
+        let f = fake(serve_all(OK));
+        let c = client(f.port).with_idle_ttl(Duration::from_millis(300));
+        assert_eq!(c.request("GET", "/x").call().unwrap().into_string().unwrap(), "ok");
+        // nečinné kratší dobu než TTL: znovu použité
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(c.request("GET", "/x").call().unwrap().into_string().unwrap(), "ok");
+        assert_eq!(f.conns(), 1);
+        // nečinné déle než TTL: zahozené, nové spojení
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(c.request("GET", "/x").call().unwrap().into_string().unwrap(), "ok");
+        assert_eq!(f.conns(), 2);
+        assert_eq!(c.idle(), 1);
+    }
+
+    #[test]
+    fn default_idle_ttl_covers_refresh_interval() {
+        // aplikace obnovuje po 3 s (s událostmi až po 30 s) – spojení musí v poolu vydržet
+        assert!(IDLE_TTL >= Duration::from_secs(30));
+    }
+
+    #[test]
+    fn method_or_path_with_space_or_cr_lf_is_rejected_before_sending() {
+        let f = fake(serve_all(OK));
+        let c = client(f.port);
+        for (m, p) in [("GET", "/a b"), ("GET", "/a\r\nX-Evil: 1"), ("GET", "/a\nb"), ("GET", ""), ("GE T", "/a"), ("GET\r\n", "/a"), ("", "/a")] {
+            let e = c.request(m, p).call().err().unwrap();
+            assert!(matches!(e, ApiError::Decode(_)), "{m:?} {p:?}: {e:?}");
+        }
+        assert_eq!(f.conns(), 0);
+        assert_eq!(c.request("GET", "/a?x=%20").call().unwrap().into_string().unwrap(), "ok");
     }
 
     #[test]
