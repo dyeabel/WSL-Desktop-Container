@@ -622,7 +622,9 @@ impl App {
                                 let mut sleep = None;
                                 ui.horizontal(|ui| {
                                     ui.add_space(20.0);
-                                    let btn = egui::Button::new(RichText::new(format!("{detail}  \u{E136}")).small().color(theme::muted())).frame(false);
+                                    // počet kontejnerů je v přehledu níž – tady jen distribuce
+                                    let label = if distro_running { distro.clone() } else { detail.clone() };
+                                    let btn = egui::Button::new(RichText::new(format!("{label}  \u{E136}")).small().color(theme::muted())).frame(false);
                                     egui::menu::menu_custom_button(ui, btn, |ui| {
                                         ui.label(RichText::new(t!("Primární distribuce", "Primary distribution")).small().color(theme::muted()));
                                         let remembered = self.cfg.read().map(|c| c.distro_engines.clone()).unwrap_or_default();
@@ -673,8 +675,14 @@ impl App {
                                 if distro_running {
                                     let g = self.shared.memory.lock().ok().and_then(|m| m.glance);
                                     if let Some(g) = g {
-                                        ui.add_space(4.0);
-                                        if ui::glance(ui, &g).clicked() {
+                                        let info = self.snap.info.as_ref().filter(|_| connected);
+                                        let x = ui::GlanceCtx {
+                                            containers: info.map(|i| (i.containers_running, i.containers)),
+                                            ncpu: info.map(|i| i.ncpu),
+                                            k8s: self.snap.containers.iter().find(|c| c.name() == crate::k8s::cluster::NAME).map(|c| c.state == "running"),
+                                        };
+                                        ui.add_space(6.0);
+                                        if ui::glance(ui, &g, &x).clicked() {
                                             self.page = Page::Dashboard;
                                         }
                                     }
