@@ -710,7 +710,7 @@ cpu  1 2 3 4
         let rows: Vec<crate::docker::StatRow> =
             snap.containers.iter().filter(|c| c.running()).filter_map(|c| d.stats(&c.id, &c.name())).collect();
         let t0 = Instant::now();
-        let out = crate::wsl::run(&cfg.distro, None, None, &["sh", "-c", SAMPLE_SCRIPT]).expect("wsl");
+        let out = crate::host::HostExt::run(&*crate::host::current(&cfg), crate::host::Privilege::User, None, &["sh", "-c", SAMPLE_SCRIPT]).expect("wsl");
         let t_wsl = t0.elapsed();
         let (mi, engine) = parse_sample(&out).expect("meminfo");
         let t1 = Instant::now();

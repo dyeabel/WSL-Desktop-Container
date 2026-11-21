@@ -3,6 +3,7 @@
 
 use super::{Msg, Worker};
 use crate::docker::Docker;
+use crate::host::Host;
 use crate::k8s::cluster::{self, ClusterState};
 use crate::k8s::flows::{self, Edge};
 use crate::k8s::model::{self, Pod, Service};
@@ -130,7 +131,7 @@ impl Worker {
             K8sOp::Kubeconfig => self.k8s_kubeconfig(&d),
             K8sOp::LoadImage(image) => {
                 self.k8s_progress(Some(tf!("Načítám {image} do clusteru…", "Loading {image} into the cluster…")));
-                let r = cluster::load_image(&cfg.distro, cfg.engine, &image);
+                let r = cluster::load_image(&*self.host(), cfg.engine, &image);
                 self.k8s_progress(None);
                 r.map(|_| tf!("Image {image} je v clusteru", "Image {image} is in the cluster"))
             }
@@ -138,13 +139,13 @@ impl Worker {
                 valid_ns(&ns)?;
                 let text = read_manifests(std::path::Path::new(&folder))?;
                 self.k8s_ensure_ns(&d, &ns)?;
-                cluster::apply(&cfg.distro, cfg.engine, &ns, &text).map(|out| tf!("Nasazeno do {ns}:\n{}", "Deployed to {ns}:\n{}", out.trim()))
+                cluster::apply(&*self.host(), cfg.engine, &ns, &text).map(|out| tf!("Nasazeno do {ns}:\n{}", "Deployed to {ns}:\n{}", out.trim()))
             }
             K8sOp::DeployDemo { ns, with_rules } => {
                 valid_ns(&ns)?;
                 self.k8s_ensure_ns(&d, &ns)?;
                 let pw = crate::compose_templates::password(20);
-                cluster::apply(&cfg.distro, cfg.engine, &ns, &template::demo_manifests(&pw))?;
+                cluster::apply(&*self.host(), cfg.engine, &ns, &template::demo_manifests(&pw))?;
                 let url = self.k8s_expose(&d, &ns, "fe")?;
                 if with_rules {
                     self.k8s_apply_rules(&d, &ns, &RuleSet::demo())?;
@@ -161,7 +162,7 @@ impl Worker {
             K8sOp::Expose { ns, svc } => self.k8s_expose(&d, &ns, &svc).map(|url| tf!("Služba {svc} je na {url}", "Service {svc} is at {url}")),
             K8sOp::ApplyRules { ns, set } => self.k8s_apply_rules(&d, &ns, &set).map(|n| tf!("Pravidla použita ({n} politik)", "Rules applied ({n} policies)")),
             K8sOp::Probe { ns, from, to, port } => {
-                let result = self.k8s_probe(&d, &cfg.distro, &ns, &from, &to, port);
+                let result = self.k8s_probe(&d, &*self.host(), &ns, &from, &to, port);
                 self.send(Msg::K8s(K8sMsg::Probe { from, to, port, result }));
                 return Ok(String::new());
             }
@@ -220,12 +221,12 @@ impl Worker {
         cluster::kubectl(d, &["delete", "networkpolicy", "-n", ns, "-l", &format!("{MANAGED_LABEL}=1"), "--ignore-not-found"])?;
         if !manifests.is_empty() {
             let cfg = self.cfg();
-            cluster::apply(&cfg.distro, cfg.engine, ns, &policy::as_list(&manifests))?;
+            cluster::apply(&*self.host(), cfg.engine, ns, &policy::as_list(&manifests))?;
         }
         Ok(manifests.len())
     }
 
-    fn k8s_probe(&self, d: &Docker, distro: &str, ns: &str, from: &Peer, to: &str, port: u16) -> Result<bool, String> {
+    fn k8s_probe(&self, d: &Docker, host: &dyn Host, ns: &str, from: &Peer, to: &str, port: u16) -> Result<bool, String> {
         let pods = model::parse_pods(&cluster::kubectl(d, &["get", "pods", "-n", ns, "-o", "json"])?)?;
         let target = pods.iter().find(|p| p.component == to && p.ip.is_some()).ok_or_else(|| tf!("Komponenta {to} nemá běžící pod", "Component {to} has no running pod"))?;
         match from {
@@ -243,7 +244,7 @@ impl Worker {
                 let src = pods.iter().find(|p| &p.component == c && p.ready.0 > 0).ok_or_else(|| tf!("Komponenta {c} nemá připravený pod", "Component {c} has no ready pod"))?;
                 let netns = cluster::pod_netns(d, ns, &src.name)?;
                 let pid = cluster::node_pid(d).ok_or("node pid")?;
-                cluster::probe(distro, pid, &netns, target.ip.as_deref().unwrap_or_default(), port)
+                cluster::probe(host, pid, &netns, target.ip.as_deref().unwrap_or_default(), port)
             }
         }
     }

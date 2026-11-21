@@ -507,7 +507,7 @@ mod tests {
         let podman = |args: &[&str]| {
             let mut a = vec!["podman", "--url", "unix:///run/wslcd-podman/podman.sock"];
             a.extend_from_slice(args);
-            crate::wsl::run(&cfg.distro, Some("root"), None, &a)
+            crate::host::HostExt::run(&*crate::host::current(&cfg), crate::host::Privilege::Engine, None, &a)
         };
         let _ = podman(&["rm", "-f", NAME]);
         podman(&["run", "-d", "--name", NAME, "-p", &format!("{P}:80"), "docker.io/library/nginx:alpine"]).expect("podman run");

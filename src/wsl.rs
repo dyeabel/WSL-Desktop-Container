@@ -1,6 +1,5 @@
 //! Ovládání WSL přes wsl.exe (bez Docker CLI na Windows).
 
-use std::io::Write;
 use std::process::{Child, Command, Stdio};
 
 #[cfg(windows)]
@@ -106,25 +105,10 @@ pub fn run(distro: &str, user: Option<&str>, cwd: Option<&str>, args: &[&str]) -
     r
 }
 
+#[cfg(test)]
 pub fn run_owned(distro: &str, user: Option<&str>, cwd: Option<&str>, args: &[String]) -> Result<String, WslError> {
     let a: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     run(distro, user, cwd, &a)
-}
-
-/// Spustí program a pošle mu `input` na stdin.
-pub fn run_stdin(distro: &str, user: Option<&str>, args: &[&str], input: &str) -> Result<String, WslError> {
-    let _g = track(distro, user, args);
-    let mut child = base(distro, user, None)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    if let Some(mut si) = child.stdin.take() {
-        si.write_all(input.as_bytes()).map_err(|e| e.to_string())?;
-    }
-    finish(child.wait_with_output().map_err(|e| e.to_string())?)
 }
 
 /// Společná logika streamování: spustí `cmd` (stdin null), předává řádky a vrací kód.

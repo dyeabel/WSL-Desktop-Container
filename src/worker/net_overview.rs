@@ -6,6 +6,7 @@
 
 use crate::config::Config;
 use crate::docker::{Container, Docker};
+use crate::host::{Host, HostExt, Privilege};
 use crate::netinfo::{self, NsDump, RateTracker, Sock, WinListen};
 use crate::wsl;
 use serde_json::Value;
@@ -177,10 +178,11 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
             if pb.active() && !scanning.load(Ordering::SeqCst) && last_scan.is_none_or(|t| t.elapsed() >= DISTRO_EVERY) {
                 last_scan = Some(Instant::now());
                 scanning.store(true, Ordering::SeqCst);
-                let engine = cfg.read().map(|c| c.distro.clone()).unwrap_or_default();
+                let c = cfg.read().map(|c| c.clone()).unwrap_or_default();
+                let (host, engine) = (crate::host::current(&c), c.distro.clone());
                 let (fl, cx, out) = (scanning.clone(), ctx.clone(), buf.clone());
                 thread::spawn(move || {
-                    let r = scan_distros(&engine);
+                    let r = scan_distros(&*host, &engine);
                     if let Ok(mut g) = out.lock() {
                         g.distros = r;
                     }
@@ -200,10 +202,11 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
                 continue;
             }
             paused = false;
-            let (distro, port) = cfg.read().map(|c| (c.distro.clone(), c.port)).unwrap_or_default();
+            let c = cfg.read().map(|c| c.clone()).unwrap_or_default();
+            let (host, port) = (crate::host::current(&c), c.port);
             let mut next = NetData::default();
             let t = started.elapsed().as_secs_f64();
-            match wsl::run(&distro, Some("root"), None, &["sh", "-c", OVERVIEW_SCRIPT]) {
+            match host.run(Privilege::Root, None, &["sh", "-c", OVERVIEW_SCRIPT]) {
                 Ok(out) => {
                     let mut parts = out.split(netinfo::MARK);
                     let dev = parts.next().unwrap_or("");
@@ -252,7 +255,7 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
 /// (paralelně). Zastavené distribuce se přeskočí – `wsl -d` by je spustil.
 /// Spouští se jako root: distribuce sdílejí síťový prostor VM a vlastníka socketu
 /// (proces) `ss -p` ukáže jen s právy roota; nic se nemění.
-pub fn scan_distros(engine: &str) -> DistroScan {
+pub fn scan_distros(host: &dyn Host, engine: &str) -> DistroScan {
     let mut out = DistroScan { at: Some(Instant::now()), ..Default::default() };
     let list = match wsl::list() {
         Ok(l) => l,
@@ -266,8 +269,9 @@ pub fn scan_distros(engine: &str) -> DistroScan {
     for d in list {
         if d.name.eq_ignore_ascii_case(engine) {
             if d.running() {
-                let name = d.name.clone();
-                engine_ns = Some(thread::spawn(move || wsl::run(&name, Some("root"), None, &["readlink", "/proc/self/ns/net"]).map(|s| s.trim().to_string()).unwrap_or_default()));
+                if let Some(h) = host.wsl().map(|w| w.for_distro(&d.name)) {
+                    engine_ns = Some(thread::spawn(move || h.run(Privilege::Root, None, &["readlink", "/proc/self/ns/net"]).map(|s| s.trim().to_string()).unwrap_or_default()));
+                }
             }
             continue;
         }
@@ -275,10 +279,12 @@ pub fn scan_distros(engine: &str) -> DistroScan {
             out.skipped.push(d.name);
             continue;
         }
+        // bez WSL hostitele není kde skript spustit
+        let Some(h) = host.wsl().map(|w| w.for_distro(&d.name)) else { continue };
         handles.push(thread::spawn(move || {
-            let run = |user| wsl::run(&d.name, user, None, &["sh", "-c", netinfo::DISTRO_SCRIPT]);
+            let run = |p| h.run(p, None, &["sh", "-c", netinfo::DISTRO_SCRIPT]);
             // distribuce bez uživatele root (neobvyklé): aspoň jako výchozí uživatel
-            let r = run(Some("root")).or_else(|_| run(None));
+            let r = run(Privilege::Root).or_else(|_| run(Privilege::User));
             match r {
                 Ok(text) => {
                     let (netns, listen) = netinfo::parse_distro_listen(&text);
@@ -381,7 +387,7 @@ fn container_pid(d: &Docker, id: &str) -> Result<u32, String> {
 
 /// Jedno kolo sběru: sockety pro dané kontejnery (ID -> PID) přes `nsenter` v distribuci.
 /// PID se předávají jako argumenty skriptu, nikdy jako jeho text.
-pub fn collect_ns(distro: &str, pids: &[(String, u32)], mode: NsMode) -> Result<HashMap<String, NsDump>, String> {
+pub fn collect_ns(host: &dyn Host, pids: &[(String, u32)], mode: NsMode) -> Result<HashMap<String, NsDump>, String> {
     let valid: Vec<&(String, u32)> = pids.iter().filter(|(_, p)| *p > 0).collect();
     if valid.is_empty() {
         return Ok(HashMap::new());
@@ -392,7 +398,7 @@ pub fn collect_ns(distro: &str, pids: &[(String, u32)], mode: NsMode) -> Result<
         NsMode::Detail => "detail".into(),
     });
     args.extend(valid.iter().map(|(_, p)| p.to_string()));
-    let out = wsl::run_owned(distro, Some("root"), None, &args).map_err(String::from)?;
+    let out = host.run_owned(Privilege::Root, None, &args).map_err(String::from)?;
     let mut dump = netinfo::parse_ns_dump(&out);
     Ok(valid.iter().filter_map(|(id, p)| dump.remove(p).map(|d| (id.clone(), d))).collect())
 }
@@ -417,7 +423,8 @@ pub fn start_ns_feed(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>, id: O
                 wait(t0, Duration::from_millis(500), &st);
                 continue;
             }
-            let (distro, port) = cfg.read().map(|c| (c.distro.clone(), c.port)).unwrap_or_default();
+            let c = cfg.read().map(|c| c.clone()).unwrap_or_default();
+            let (host, port) = (crate::host::current(&c), c.port);
             let d = Docker::new(port);
             let ids: Result<Vec<String>, String> = match &id {
                 Some(i) => Ok(vec![i.clone()]),
@@ -437,7 +444,7 @@ pub fn start_ns_feed(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>, id: O
                         }
                     }
                     next.pid = pids.iter().cloned().collect();
-                    match collect_ns(&distro, &pids, mode) {
+                    match collect_ns(&*host, &pids, mode) {
                         Ok(m) => next.by_id = m,
                         Err(e) => next.error = Some(e),
                     }

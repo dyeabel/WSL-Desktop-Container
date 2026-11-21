@@ -4,7 +4,7 @@
 //! předávají jako samostatné argumenty – nikdy se nevkládají do textu shellového skriptu.
 
 use super::{Msg, Worker};
-use crate::wsl;
+use crate::host::{Host, HostExt, Privilege};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -142,14 +142,14 @@ pub fn parse_du(out: &str, by_path: &HashMap<String, String>) -> HashMap<String,
 }
 
 /// Velikosti přes `du -sb` jako root (jedno volání pro všechny cesty; `by_path`: mountpoint -> název).
-pub fn du_sizes(distro: &str, by_path: &HashMap<String, String>) -> HashMap<String, u64> {
+pub fn du_sizes(host: &dyn Host, by_path: &HashMap<String, String>) -> HashMap<String, u64> {
     if by_path.is_empty() {
         return HashMap::new();
     }
     // cesty jako argumenty skriptu; chyby (smazaný volume apod.) se ignorují
     let mut a: Vec<String> = vec!["sh".into(), "-c".into(), r#"du -sb -- "$@" 2>/dev/null; true"#.into(), "sh".into()];
     a.extend(by_path.keys().cloned());
-    wsl::run_owned(distro, Some("root"), None, &a).map(|out| parse_du(&out, by_path)).unwrap_or_default()
+    host.run_owned(Privilege::Engine, None, &a).map(|out| parse_du(&out, by_path)).unwrap_or_default()
 }
 
 impl Worker {
@@ -167,7 +167,7 @@ impl Worker {
                 by_path.insert(mp.to_string(), name.to_string());
             }
         }
-        sizes.extend(du_sizes(&self.cfg().distro, &by_path));
+        sizes.extend(du_sizes(&*self.host(), &by_path));
         self.send(Msg::VolumeSizes(sizes));
         Ok(String::new())
     }
@@ -207,9 +207,9 @@ impl Worker {
     }
 
     pub(super) fn backup_volume(&self, volume: String, target: String, stop: bool) -> Result<String, String> {
-        let distro = self.cfg().distro;
+        let host = self.host();
         let (dir, file) = split_target(&target)?;
-        let ldir = wsl::to_linux_path(&distro, &dir)?;
+        let ldir = host.to_guest_path(&dir)?;
         check_mount_dir(&ldir)?;
         self.send(Msg::Toast(true, tf!("Zálohuji volume {volume}…", "Backing up volume {volume}…")));
         let mut stopped = Vec::new();
@@ -222,7 +222,7 @@ impl Worker {
                 stopped.push(id);
             }
         }
-        let res = wsl::run_owned(&distro, None, None, &backup_args(&self.cli(), &volume, &ldir, &file));
+        let res = host.run_owned(Privilege::User, None, &backup_args(&self.cli(), &volume, &ldir, &file));
         // zastavené kontejnery spustit znovu i při chybě zálohy
         let mut restart_err = String::new();
         for id in &stopped {
@@ -237,9 +237,9 @@ impl Worker {
     }
 
     pub(super) fn restore_volume(&self, source: String, volume: String, create: bool, clear: bool) -> Result<String, String> {
-        let distro = self.cfg().distro;
+        let host = self.host();
         let (dir, file) = split_target(&source)?;
-        let ldir = wsl::to_linux_path(&distro, &dir)?;
+        let ldir = host.to_guest_path(&dir)?;
         check_mount_dir(&ldir)?;
         if create {
             self.create_volume(&volume)?;
@@ -247,7 +247,7 @@ impl Worker {
             return Err(tf!("Volume {volume} neexistuje", "Volume {volume} does not exist"));
         }
         self.send(Msg::Toast(true, tf!("Obnovuji volume {volume} z {file}…", "Restoring volume {volume} from {file}…")));
-        match wsl::run_owned(&distro, None, None, &restore_args(&self.cli(), &volume, &ldir, &file, clear)) {
+        match host.run_owned(Privilege::User, None, &restore_args(&self.cli(), &volume, &ldir, &file, clear)) {
             Ok(_) => {
                 let _ = self.volume_sizes();
                 Ok(tf!("Volume {volume} obnoven z {file}", "Volume {volume} restored from {file}"))
@@ -262,10 +262,10 @@ impl Worker {
     }
 
     pub(super) fn clone_volume(&self, from: String, to: String) -> Result<String, String> {
-        let distro = self.cfg().distro;
+        let host = self.host();
         self.create_volume(&to)?;
         self.send(Msg::Toast(true, tf!("Klonuji volume {from} do {to}…", "Cloning volume {from} into {to}…")));
-        match wsl::run_owned(&distro, None, None, &clone_args(&self.cli(), &from, &to)) {
+        match host.run_owned(Privilege::User, None, &clone_args(&self.cli(), &from, &to)) {
             Ok(_) => {
                 let _ = self.volume_sizes();
                 Ok(tf!("Volume {from} naklonován do {to}", "Volume {from} cloned into {to}"))

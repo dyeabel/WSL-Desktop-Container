@@ -5,7 +5,7 @@ use super::{Msg, Worker};
 use crate::docker::StatRow;
 use crate::history::Sample;
 use crate::memory::{self, FreeEvent, MemNow, MemPoint};
-use crate::wsl;
+use crate::host::{HostExt, Privilege};
 use std::sync::atomic::Ordering;
 use std::thread;
 
@@ -33,9 +33,8 @@ impl Worker {
     /// Jeden vzorek. `rows` = statistiky kontejnerů (plný vzorek s rozpadem), None = jen
     /// /proc/meminfo a VmmemWSL do historie.
     pub(super) fn memory_sample(&self, rows: Option<&[StatRow]>) {
-        let distro = self.cfg().distro;
         let script = if rows.is_some() { memory::SAMPLE_SCRIPT } else { memory::SAMPLE_SCRIPT_MIN };
-        let Ok(out) = wsl::run(&distro, None, None, &["sh", "-c", script]) else { return };
+        let Ok(out) = self.host().run(Privilege::User, None, &["sh", "-c", script]) else { return };
         let Some((mi, engine)) = memory::parse_sample(&out) else { return };
         let vmmem = self.shared.mem_probe.lock().ok().and_then(|mut p| p.get());
         self.alerts_memory(super::alerts::mem_input(&mi, vmmem));

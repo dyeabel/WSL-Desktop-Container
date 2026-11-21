@@ -46,6 +46,7 @@ pub use containers::run_for_test;
 use crate::config::Config;
 use crate::engine::Engine;
 use crate::docker::{Docker, DfSummary, Snapshot, StatRow};
+use crate::host::{HostExt, Privilege};
 use crate::wsl::{self, Distro};
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -468,7 +469,7 @@ impl Worker {
 
     fn check_engine(&self) {
         let c = self.cfg();
-        let ok = wsl::run(&c.distro, Some("root"), None, &["test", "-f", c.engine.api_marker()]).is_ok();
+        let ok = crate::host::current(&c).run(Privilege::Engine, None, &["test", "-f", c.engine.api_marker()]).is_ok();
         self.send(Msg::EngineInfo { tcp_configured: ok });
     }
 
@@ -662,7 +663,7 @@ impl Worker {
                 // by soubor rovnou otevřel přidruženým programem (F-05). Kontrola v Linuxu nestačí:
                 // Win32 jinak normalizuje názvy (`x.hta.` → `x.hta`, N-02) – proto ještě ve Windows
                 // na výsledné UNC cestě těsně před spuštěním.
-                if wsl::run(&distro, None, None, &["test", "-d", &p]).is_err() {
+                if self.host().run(Privilege::User, None, &["test", "-d", &p]).is_err() {
                     return Err(tf!("{p} není složka v {distro}", "{p} is not a folder in {distro}"));
                 }
                 let unc = wsl::explorer_dir(&distro, &p)?;

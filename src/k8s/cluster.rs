@@ -6,7 +6,7 @@
 use crate::container_fs;
 use crate::docker::{enc, Docker};
 use crate::engine::Engine;
-use crate::wsl;
+use crate::host::{Host, HostExt, Privilege};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
@@ -246,14 +246,14 @@ fn cli(engine: Engine) -> &'static str {
 }
 
 /// `kubectl apply -n <ns> -f -` s manifestem na stdin (CLI enginu jako root v distribuci).
-pub fn apply(distro: &str, engine: Engine, ns: &str, manifest: &str) -> Result<String, String> {
-    wsl::run_stdin(distro, Some("root"), &[cli(engine), "exec", "-i", NAME, "kubectl", "apply", "-n", ns, "-f", "-"], manifest).map_err(|e| e.to_string())
+pub fn apply(host: &dyn Host, engine: Engine, ns: &str, manifest: &str) -> Result<String, String> {
+    host.run_stdin(Privilege::Engine, &[cli(engine), "exec", "-i", NAME, "kubectl", "apply", "-n", ns, "-f", "-"], manifest).map_err(|e| e.to_string())
 }
 
 /// Načte image z enginu do containerd clusteru (bez registry).
-pub fn load_image(distro: &str, engine: Engine, image: &str) -> Result<String, String> {
+pub fn load_image(host: &dyn Host, engine: Engine, image: &str) -> Result<String, String> {
     let script = r#"set -e; "$1" save "$2" | "$1" exec -i wslcd-k3s ctr -n k8s.io images import -"#;
-    wsl::run(distro, Some("root"), None, &["sh", "-c", script, "_", cli(engine), image]).map_err(|e| e.to_string())
+    host.run(Privilege::Engine, None, &["sh", "-c", script, "_", cli(engine), image]).map_err(|e| e.to_string())
 }
 
 /// Cesta k síťovému namespace podu uvnitř uzlu (`/var/run/netns/cni-…`).
@@ -279,9 +279,9 @@ else
 fi"#;
 
 /// Zkusí TCP spojení z podu (v jeho síťovém namespace, takže platí jeho politiky).
-pub fn probe(distro: &str, node_pid: u32, netns: &str, ip: &str, port: u16) -> Result<bool, String> {
+pub fn probe(host: &dyn Host, node_pid: u32, netns: &str, ip: &str, port: u16) -> Result<bool, String> {
     let (pid, port) = (node_pid.to_string(), port.to_string());
-    let out = wsl::run(distro, Some("root"), None, &["sh", "-c", PROBE_SCRIPT, "_", &pid, netns, ip, &port]).map_err(|e| e.to_string())?;
+    let out = host.run(Privilege::Root, None, &["sh", "-c", PROBE_SCRIPT, "_", &pid, netns, ip, &port]).map_err(|e| e.to_string())?;
     Ok(out.trim_end().ends_with("OPEN"))
 }
 

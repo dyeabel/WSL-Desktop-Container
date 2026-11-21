@@ -74,6 +74,7 @@ pub struct ExecOut {
 }
 
 pub trait Host: Send + Sync {
+    #[allow(dead_code)] // použije se u dalších hostitelů (Linux, Windows)
     fn label(&self) -> String;
 
     /// `Err` jen když se proces nespustil; nenulový kód je `Ok`.
@@ -91,6 +92,7 @@ pub trait Host: Send + Sync {
 
     fn to_guest_path(&self, path: &str) -> Result<String, HostError>;
 
+    #[allow(dead_code)] // použije se u dalších hostitelů (Linux, Windows)
     fn engine_endpoint(&self, cfg: &Config) -> crate::http::Endpoint;
 
     /// Konkrétní WSL hostitel (pro kód, který potřebuje věci mimo trait).
@@ -105,6 +107,7 @@ pub fn current(cfg: &Config) -> Arc<dyn Host> {
 }
 
 /// Kudy se z aplikace dostaneme k API enginu aktuálního hostitele.
+#[allow(dead_code)] // použije se u dalších hostitelů (Linux, Windows)
 pub fn endpoint(cfg: &Config) -> crate::http::Endpoint {
     current(cfg).engine_endpoint(cfg)
 }

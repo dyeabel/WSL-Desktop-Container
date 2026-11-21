@@ -216,7 +216,7 @@ pub fn collect_disk(cfg: &Config, docker: Option<&crate::docker::Docker>) -> Dis
     let vhd = crate::wsl::vhd_path(&distro);
     let vhdx = vhd.as_ref().and_then(|p| std::fs::metadata(p).ok().map(|m| (p.display().to_string(), m.len())));
     let drive = vhd.as_ref().and_then(|p| p.parent()).and_then(drive_space);
-    let (inside, engine_free) = crate::wsl::run(&distro, None, None, &["sh", "-c", &df_script(&engine_path)])
+    let (inside, engine_free) = crate::host::HostExt::run(&*crate::host::current(cfg), crate::host::Privilege::User, None, &["sh", "-c", &df_script(&engine_path)])
         .map(|o| parse_df_pair(&o))
         .unwrap_or((None, None));
     let engine_used = if cfg.alerts.engine_size {
@@ -814,7 +814,7 @@ mod tests {
         crate::docker::configure_tls(cfg.tls).expect("TLS");
         let d = crate::docker::Docker::new(cfg.port);
         // paměť: stejně jako `memory_sample` (minimální vzorek + VmmemWSL) -> `mem_input`
-        let out = crate::wsl::run(&cfg.distro, None, None, &["sh", "-c", crate::memory::SAMPLE_SCRIPT_MIN]).expect("wsl");
+        let out = crate::host::HostExt::run(&*crate::host::current(&cfg), crate::host::Privilege::User, None, &["sh", "-c", crate::memory::SAMPLE_SCRIPT_MIN]).expect("wsl");
         let (mi, _) = crate::memory::parse_sample(&out).expect("meminfo");
         let vmmem = crate::memory::VmmemProbe::default().get();
         let m = mem_input(&mi, vmmem);

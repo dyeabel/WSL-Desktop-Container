@@ -19,11 +19,11 @@ impl<F: Fn(&[&str]) -> Result<String, String>> Drop for Cleanup<F> {
 /// CLI enginu v distribuci jako funkce (pro `Cleanup`).
 fn engine_cli(cfg: &Config) -> impl Fn(&[&str]) -> Result<String, String> + use<> {
     let cli = cfg.engine.cli(cfg.port, cfg.tls);
-    let distro = cfg.distro.clone();
+    let host = crate::host::current(cfg);
     move |args: &[&str]| {
         let mut v = cli.clone();
         v.extend(args.iter().map(|s| s.to_string()));
-        wsl::run_owned(&distro, None, None, &v).map_err(String::from)
+        crate::host::HostExt::run_owned(&*host, crate::host::Privilege::User, None, &v).map_err(String::from)
     }
 }
 
@@ -140,7 +140,7 @@ fn live_net_conn_traffic() {
 
     // ostatní distribuce WSL: skutečné běžící distribuce, nepoužitý port bez konfliktu
     let t0 = Instant::now();
-    let scan = scan_distros(&cfg.distro);
+    let scan = scan_distros(&*crate::host::current(&cfg), &cfg.distro);
     eprintln!(
         "distribuce: engine netns {:?}, zkontrolováno {:?}, přeskočeno {:?}, chyba {:?} ({} ms)",
         scan.engine_netns,
@@ -199,7 +199,7 @@ fn live_net_ports_in_out() {
     let pc = container_pid(&d, &client_id).expect("pid client");
     eprintln!("PID web {pw}, client {pc}");
     assert!(pw > 0 && pc > 0);
-    let dump = collect_ns(&cfg.distro, &[(web_id.clone(), pw), (client_id.clone(), pc)], NsMode::Conns).expect("nsenter ss");
+    let dump = collect_ns(&*crate::host::current(&cfg), &[(web_id.clone(), pw), (client_id.clone(), pc)], NsMode::Conns).expect("nsenter ss");
     let w = &dump[&web_id];
     let c = &dump[&client_id];
     assert!(w.error.is_none() && c.error.is_none(), "{:?} {:?}", w.error, c.error);
@@ -227,7 +227,7 @@ fn live_net_ports_in_out() {
     assert!(w.conns.iter().any(|s| s.local_port == 9999), "příchozí spojení na webu");
 
     // 4) provoz VM, naslouchající sockety v distribuci a ve Windows
-    let out = wsl::run(&cfg.distro, Some("root"), None, &["sh", "-c", OVERVIEW_SCRIPT]).expect("overview script");
+    let out = crate::host::HostExt::run(&*crate::host::current(&cfg), crate::host::Privilege::Root, None, &["sh", "-c", OVERVIEW_SCRIPT]).expect("overview script");
     let mut parts = out.split(netinfo::MARK);
     let eth = netinfo::parse_proc_net_dev(parts.next().unwrap()).into_iter().find(|i| i.name == "eth0").expect("eth0");
     let wsl_ip = netinfo::parse_ip_addr(parts.next().unwrap());

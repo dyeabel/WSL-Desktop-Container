@@ -648,7 +648,7 @@ fn live_volume_backup_restore() {
     assert!(sizes.get(src).is_some_and(|s| *s > 0), "{sizes:?}");
     let mp: serde_json::Value = d.get(&format!("/volumes/{src}")).unwrap();
     let mp = mp["Mountpoint"].as_str().unwrap().to_string();
-    let du = crate::worker::du_sizes(&cfg.distro, &[(mp.clone(), src.to_string())].into());
+    let du = crate::worker::du_sizes(&*crate::host::current(&cfg), &[(mp.clone(), src.to_string())].into());
     eprintln!("du -sb {mp}: {:?}", du.get(src));
     assert!(du.get(src).is_some_and(|s| *s > 0), "{du:?}");
 
