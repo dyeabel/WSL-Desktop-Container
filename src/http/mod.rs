@@ -7,4 +7,7 @@ pub mod conn;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Endpoint {
     Tcp { port: u16 },
+    /// Unix socket enginu (Linux); zatím ho konstruuje jen hledání enginu.
+    #[allow(dead_code)]
+    Unix(std::path::PathBuf),
 }
