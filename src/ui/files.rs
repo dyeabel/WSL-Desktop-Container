@@ -127,7 +127,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
         });
         if let Some(p) = go {
-            if p.starts_with("/var/lib/docker") && !app.files.root {
+            if p.starts_with("/var/lib/docker") && !app.files.root && app.caps().files_root {
                 app.files.root = true;
                 app.toast(true, t!("Docker data patří rootovi – přepnuto na režim root", "Docker data belongs to root – switched to root mode"));
             }
@@ -189,10 +189,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         .collect();
                     ui.close_menu();
                 }
+                if app.caps().files_root {
                 ui.separator();
                 if ui.checkbox(&mut app.files.root, t!("Pracovat jako root", "Work as root")).on_hover_text(t!("Operace poběží pod uživatelem root (wsl -u root)", "Operations will run as the root user (wsl -u root)")).changed() {
                     reload(app);
                     ui.close_menu();
+                }
                 }
             });
             filter_field(ui, &mut app.files.filter);

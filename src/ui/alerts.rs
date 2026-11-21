@@ -53,7 +53,7 @@ pub fn banner(app: &mut App, ui: &mut egui::Ui) {
                         }
                     }
                     _ => {
-                        ui.add_enabled_ui(app.snap.connected, |ui| cleanup = super::dashboard::cleanup_menu(ui));
+                        ui.add_enabled_ui(app.snap.connected, |ui| cleanup = super::dashboard::cleanup_menu(ui, app.caps().vm_memory));
                         if ui.button(t!("\u{EB02} Disk distribuce…", "\u{EB02} Distribution disk…")).clicked() {
                             nav = Some(Target::Engine);
                         }

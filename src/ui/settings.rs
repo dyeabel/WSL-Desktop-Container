@@ -11,6 +11,9 @@ fn default_user() -> String {
 
 /// Otevře dialog „Přidat distribuci“ (a načte seznam dostupných distribucí).
 pub fn open_add_distro(app: &mut App) {
+    if !app.caps().distros {
+        return;
+    }
     let engine = app.cfg.read().map(|c| c.engine).ok();
     // TLS je pro nové instalace výchozí
     app.add_distro = Some(AddDistroSpec { user: default_user(), engine, use_for_app: true, tls: true, ..Default::default() });
@@ -42,6 +45,7 @@ pub fn add_distro_dialog(app: &mut App, ctx: &egui::Context) {
     let Some(mut spec) = app.add_distro.take() else { return };
     let existing: Vec<String> = app.distros.iter().map(|d| d.name.to_lowercase()).collect();
     let online = app.online.clone();
+    let caps_lite = app.caps().lite;
     let mut submit = false;
     let mut cancel = false;
     let (_, esc) = modal(ctx, "add-distro", t!("Přidat distribuci", "Add distribution"), 520.0, |ui| {
@@ -67,7 +71,7 @@ pub fn add_distro_dialog(app: &mut App, ctx: &egui::Context) {
                 Some(Err(e)) => {
                     ui.vertical(|ui| {
                         ui.label(RichText::new(format!("\u{E4E0} {e}")).color(theme::red()));
-                        if ui.button(&lite_label).on_hover_text(lite_hint()).clicked() {
+                        if caps_lite && ui.button(&lite_label).on_hover_text(lite_hint()).clicked() {
                             spec.distro = crate::lite::LITE_ID.into();
                         }
                     });
@@ -75,7 +79,7 @@ pub fn add_distro_dialog(app: &mut App, ctx: &egui::Context) {
                 Some(Ok(list)) => {
                     let shown = list.iter().find(|(n, _)| *n == spec.distro).map(|(_, f)| f.clone()).unwrap_or_else(|| t!("vyber…", "choose…").to_string());
                     egui::ComboBox::from_id_salt("online-distro").width(300.0).selected_text(shown).show_ui(ui, |ui| {
-                        if ui.selectable_label(false, &lite_label).on_hover_text(lite_hint()).clicked() {
+                        if caps_lite && ui.selectable_label(false, &lite_label).on_hover_text(lite_hint()).clicked() {
                             spec.distro = crate::lite::LITE_ID.into();
                         }
                         for (n, f) in list {
@@ -276,6 +280,12 @@ pub enum Tab {
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     header(ui, t!("Nastavení", "Settings"), "");
+    let caps = app.caps();
+    // karty, které by byly bez WSL prázdné, se nezobrazí
+    let tools_visible = caps.shim || caps.npipe || caps.ipv6_relay;
+    if (app.settings_tab == Tab::Tools && !tools_visible) || (app.settings_tab == Tab::Wsl && !caps.wslconfig) {
+        app.settings_tab = Tab::General;
+    }
     ui.horizontal(|ui| {
         for (t, label) in [
             (Tab::General, t!("Obecné", "General")),
@@ -284,6 +294,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             (Tab::Tools, t!("Nástroje ve Windows", "Tools in Windows")),
             (Tab::Wsl, "WSL"),
         ] {
+            if (t == Tab::Tools && !tools_visible) || (t == Tab::Wsl && !caps.wslconfig) {
+                continue;
+            }
             ui.selectable_value(&mut app.settings_tab, t, label);
         }
     });
@@ -353,6 +366,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui.set_width(ui.available_width());
             let d = &mut app.cfg_draft;
             egui::Grid::new("appcfg").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                if caps.distros {
                 ui.label(t!("Primární distribuce", "Primary distribution"));
                 let mut add = false;
                 ui.horizontal(|ui| {
@@ -373,6 +387,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     add_distro_requested = true;
                 }
                 ui.end_row();
+                }
                 ui.label(t!("Port API enginu", "Engine API port"));
                 ui.add(egui::DragValue::new(&mut d.port).range(1024..=65535));
                 ui.end_row();
@@ -397,6 +412,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 ui.label("");
                 ui.checkbox(&mut d.autostart_engine, t!("Při spuštění aplikace nastartovat engine", "Start the engine when the app starts"));
                 ui.end_row();
+                if caps.vm_memory {
                 ui.label("");
                 ui.checkbox(
                     &mut d.shutdown_wsl_on_quit,
@@ -407,6 +423,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     "Quitting the app runs wsl --shutdown: stops all distributions (including ones the app does not manage) and VmmemWSL returns memory to Windows. The tray menu item “Quit and shut down WSL” does this one time."
                 ));
                 ui.end_row();
+                }
+                if caps.shim {
                 ui.label("");
                 ui.checkbox(
                     &mut d.shim_autostart,
@@ -420,6 +438,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     "The first command through the docker shim (docker ps, docker compose …) boots WSL, starts the app hidden in the tray, starts the engine and waits for the API. Can also be disabled with WSLCD_SHIM_AUTOSTART=0."
                 ));
                 ui.end_row();
+                }
                 ui.label("");
                 ui.checkbox(
                     &mut d.restore_containers,
@@ -521,7 +540,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         super::alerts::settings_section(app, ui);
     }
 
-    if tab == Tab::Tools {
+    if tab == Tab::Tools && tools_visible {
+        if caps.shim {
         section(ui, t!("Příkaz docker ve Windows", "The docker command in Windows"));
         card(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -581,12 +601,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         });
+        }
 
-        npipe_section(app, ui);
-        ipv6_relay_section(app, ui);
+        if caps.npipe {
+            npipe_section(app, ui);
+        }
+        if caps.ipv6_relay {
+            ipv6_relay_section(app, ui);
+        }
     }
 
-    if tab == Tab::Wsl {
+    if tab == Tab::Wsl && caps.wslconfig {
         section(ui, t!("WSL – globální nastavení (%USERPROFILE%\\.wslconfig)", "WSL – global settings (%USERPROFILE%\\.wslconfig)"));
         card(ui, |ui| {
             ui.set_width(ui.available_width());
