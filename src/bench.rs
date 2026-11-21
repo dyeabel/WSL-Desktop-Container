@@ -111,6 +111,9 @@ pub struct EngineResult {
     pub temp_proxy: bool,
     /// doba přepnutí primární distribuce na tento engine (s); 0 = už byla primární
     pub switch_s: f64,
+    /// latence holého `wsl::run(distro, None, None, ["true"])` – výchozí bod pro abstrakci hostitele
+    #[serde(default)]
+    pub exec_true: Stat,
     pub checks: Vec<Check>,
     pub latency: Vec<Latency>,
     pub load: Vec<Load>,
@@ -619,6 +622,9 @@ fn bench_engine(distro: &str, engine: Engine, cfg_port: u16, bench_port: u16, sh
     std::thread::sleep(Duration::from_secs(3));
     r.daemon_rss_mb = daemon_rss_mb(distro, engine);
     eprintln!("-- RSS démona v klidu: {} MB", r.daemon_rss_mb);
+    eprintln!("-- exec true (30×)");
+    r.exec_true = measure(30, 1, || wsl::run(distro, None, None, &["true"]).map(|_| ()).map_err(|e| e.to_string()));
+    eprintln!("  exec_true  p50 {:>8.1} ms  p95 {:>8.1} ms  err {}", r.exec_true.p50, r.exec_true.p95, r.exec_true.errors);
     eprintln!("-- latence");
     r.latency = if quick { latency(&t, shim, 5, 3) } else { latency(&t, shim, 20, 8) };
     eprintln!("-- zátěž API");
@@ -941,6 +947,11 @@ pub fn render(r: &Report) -> String {
     for e in &r.engines {
         let what = if e.engine == "Docker" { "dockerd + containerd" } else { "podman API service" };
         let _ = writeln!(w, "| {} daemon RSS while idle ({what}) | {} MB |", e.engine, f1(e.daemon_rss_mb));
+    }
+    for e in &r.engines {
+        if e.exec_true.n > 0 {
+            let _ = writeln!(w, "| `wsl.exe -d {}` exec `true` ({}), p50 / p95 | {} ms / {} ms |", e.distro, e.engine, f1(e.exec_true.p50), f1(e.exec_true.p95));
+        }
     }
     for e in &r.engines {
         if e.switch_s > 0.0 {
