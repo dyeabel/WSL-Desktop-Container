@@ -5,8 +5,14 @@
 # Procesy hlídá jednoduchý supervisor (restart po pádu), logy jsou v /var/log/wslcd/.
 # Při startu distribuce ho spouští /etc/wsl.conf: [boot] command = systemctl --boot
 set -u
-# [boot] command z wsl.conf běží s minimálním PATH (dockerd by nenašel docker-proxy)
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# služby jako v systemd: pracovní adresář / a čisté prostředí – jinak by zdědily adresář
+# a proměnné volajícího (wsl.exe z Windows: PWD=/mnt/c/…, WSLg), Podman pak zakládal
+# volume relativně k tomu adresáři; [boot] command má navíc minimální PATH (docker-proxy)
+if [ -z "${WSLCD_SYSTEMCTL_CLEAN:-}" ]; then
+  cd / && exec env -i WSLCD_SYSTEMCTL_CLEAN=1 HOME=/root LANG=C.UTF-8 \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/sh "$0" "$@"
+fi
+unset WSLCD_SYSTEMCTL_CLEAN
 UNITS=/etc/systemd/system
 STATE=/etc/wslcd-init/enabled
 RUN=/run/wslcd-init
@@ -79,7 +85,9 @@ start_unit() {
   (
     trap '' HUP
     while :; do
-      sh -c "exec $cmd" >> "$log" 2>&1 < /dev/null &
+      # vlastní relace jako v systemd: konec relace wsl.exe pošle SIGHUP a Podman 5.8 na něj
+      # znovu načte konfiguraci a ztratí volume_path (svazky pak vznikají s relativní cestou)
+      setsid sh -c "exec $cmd" >> "$log" 2>&1 < /dev/null &
       echo $! > "$RUN/$u.pid"
       wait $!
       code=$?

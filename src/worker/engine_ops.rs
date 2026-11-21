@@ -320,6 +320,7 @@ impl Worker {
 
     fn setup_api_with(&self, cfg: &Config, regen: bool) -> Result<(String, bool), String> {
         let port = cfg.port.to_string();
+        crate::lite::refresh_shim(&cfg.distro);
         // výchozí uživatel distribuce – v režimu TLS dostane přístup k unix socketu enginu
         let user = wsl::run(&cfg.distro, None, None, &["id", "-un"]).map(|u| u.trim().to_string()).unwrap_or_default();
         let out = wsl::run(

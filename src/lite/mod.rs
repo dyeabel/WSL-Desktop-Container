@@ -103,6 +103,17 @@ pub fn prepare(name: &str) -> Result<String, String> {
     wsl::run_stdin(name, Some("root"), &["sh", "-c", PREPARE], SYSTEMCTL).map_err(|e| e.to_string())
 }
 
+/// Obnoví náhradu systemctl v už existující distribuci WSLCD Lite (opravy skriptu se tak
+/// dostanou i do starších instalací – volá se před nastavením API). V jiné distribuci nic nedělá.
+const REFRESH: &str = r#"S=$(cat)
+if [ -d /run/systemd/system ] || ! grep -qs 'WSL Container Desktop' /usr/local/bin/systemctl; then exit 0; fi
+printf '%s\n' "$S" > /usr/local/bin/systemctl.new && chmod 755 /usr/local/bin/systemctl.new && mv -f /usr/local/bin/systemctl.new /usr/local/bin/systemctl
+"#;
+
+pub fn refresh_shim(distro: &str) {
+    let _ = wsl::run_stdin(distro, Some("root"), &["sh", "-c", REFRESH], SYSTEMCTL);
+}
+
 /// Shell test „běží systemd, nebo náhrada WSLCD Lite“ (pro `sh -c`); `/run/wslcd-init`
 /// vytváří náhrada systemctl při startu distribuce.
 pub const HAS_INIT: &str = "test -d /run/systemd/system || test -d /run/wslcd-init";
@@ -128,6 +139,7 @@ mod tests {
             assert!(SYSTEMCTL.contains(cmd), "{cmd}");
         }
         assert!(!SYSTEMCTL.contains("[["), "jen POSIX sh (busybox ash)");
+        assert!(SYSTEMCTL.contains("cd / && exec env -i"), "služby z / s čistým prostředím jako v systemd");
         assert!(PREPARE.contains("command = /usr/local/bin/systemctl --boot"));
         assert!(!SYSTEMCTL.contains('\r') && !PREPARE.contains('\r'), "bez CRLF");
     }
