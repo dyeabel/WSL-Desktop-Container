@@ -43,6 +43,8 @@ mod bench;
 mod live_docker;
 #[cfg(test)]
 mod live_tests;
+#[cfg(test)]
+mod glyph_check;
 
 /// Vytvoří pojmenovaný mutex pro aktuální relaci; false = aplikace už běží.
 /// Handle se záměrně nezavírá – mutex patří procesu až do jeho konce.

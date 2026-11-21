@@ -115,10 +115,23 @@ pub fn set_mode(ctx: &egui::Context, mode: &str) {
     style(ctx);
 }
 
+/// Segoe UI Symbol z Windows jako poslední záložní písmo: výchozí Ubuntu-Light nemá šipky
+/// (→), geometrické tvary a další symboly z textů – bez něj se kreslí čtvereček. Soubor je
+/// součástí Windows 10/11; když chybí, zůstanou jen výchozí písma.
+fn add_symbol_fallback(fonts: &mut egui::FontDefinitions) {
+    let dir = std::env::var_os("WINDIR").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
+    let Ok(data) = std::fs::read(dir.join("Fonts").join("seguisym.ttf")) else { return };
+    fonts.font_data.insert("segoe-ui-symbol".into(), std::sync::Arc::new(egui::FontData::from_owned(data)));
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts.families.entry(family).or_default().push("segoe-ui-symbol".into());
+    }
+}
+
 pub fn apply(ctx: &egui::Context, mode: &str) {
     // ikonový font Phosphor jako záložní font – ikony se pak dají psát přímo do textu
     let mut fonts = egui::FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    add_symbol_fallback(&mut fonts);
     ctx.set_fonts(fonts);
     set_mode(ctx, mode);
 }
