@@ -202,10 +202,21 @@ fn cluster_tab(app: &mut App, ui: &mut egui::Ui) {
     card(ui, |ui| {
         ui.set_width(ui.available_width());
         let path = crate::k8s::kubeconfig::path().map(|p| p.display().to_string()).unwrap_or_default();
-        ui.label(tf!(
-            "Kubeconfig je ve složce aplikace (portable, nic se nepíše do ~/.kube): {path}",
-            "The kubeconfig lives in the app folder (portable, nothing is written to ~/.kube): {path}"
-        ));
+        if crate::config::portable_dir().is_some() {
+            ui.label(tf!(
+                "Kubeconfig je ve složce aplikace (portable, nic se nepíše do ~/.kube): {path}",
+                "The kubeconfig lives in the app folder (portable, nothing is written to ~/.kube): {path}"
+            ));
+        } else {
+            ui.label(tf!(
+                "Kubeconfig je v datové složce aplikace (nic se nepíše do ~/.kube): {path}",
+                "The kubeconfig lives in the app's data folder (nothing is written to ~/.kube): {path}"
+            ));
+            ui.label(RichText::new(t!(
+                "Aplikace neběží v portable režimu (vedle EXE chybí PORTABLE.txt), proto jsou data v %APPDATA%.",
+                "The app is not running in portable mode (no PORTABLE.txt next to the EXE), so the data is in %APPDATA%."
+            )).small().color(theme::muted()));
+        }
         let cmd = format!("$env:KUBECONFIG = \"{path}\"; kubectl get pods -A");
         ui.horizontal(|ui| {
             ui.label(RichText::new(&cmd).monospace());

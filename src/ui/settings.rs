@@ -32,8 +32,8 @@ fn valid_user(s: &str) -> bool {
 
 fn lite_hint() -> &'static str {
     t!(
-        "Lehká distribuce po vzoru Kiri Linux: Alpine minirootfs (ověřený SHA-256), jen root, bez systemd – služby enginu startuje malá náhrada systemctl. Startuje za zlomek sekundy a leží v datové složce aplikace (portable).",
-        "A light distribution modelled on Kiri Linux: Alpine minirootfs (verified SHA-256), root only, no systemd – a small systemctl replacement starts the engine services. Starts in a fraction of a second and lives in the app's data folder (portable)."
+        "Lehká distribuce po vzoru Kiri Linux: Alpine minirootfs (ověřený SHA-256), jen root, bez systemd – služby enginu startuje malá náhrada systemctl. Startuje za zlomek sekundy a leží v datové složce aplikace (u portable verze ve složce data vedle EXE).",
+        "A light distribution modelled on Kiri Linux: Alpine minirootfs (verified SHA-256), root only, no systemd – a small systemctl replacement starts the engine services. Starts in a fraction of a second and lives in the app's data folder (in the portable version, the data folder next to the EXE)."
     )
 }
 
