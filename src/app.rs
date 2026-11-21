@@ -66,6 +66,8 @@ const NAV_GAP: f32 = 2.0;
 pub struct App {
     /// historie celkového CPU kontejnerů (čas s, % všech CPU WSL) – dlaždice CPU
     pub cpu_hist: std::collections::VecDeque<(f64, f64)>,
+    /// historie vytížení celé WSL VM (čas s, % všech CPU – /proc/stat, stejně jako karta enginu)
+    pub vm_cpu_hist: std::collections::VecDeque<(f64, f64)>,
     pub cfg: Arc<RwLock<Config>>,
     tx: Sender<Cmd>,
     rx: Receiver<Msg>,
@@ -235,6 +237,7 @@ impl App {
         let page = if std::env::var_os("WSLCD_DEBUG_NETWORK").is_some() { Page::Networks } else { page };
         Self {
             cpu_hist: Default::default(),
+            vm_cpu_hist: Default::default(),
             cfg,
             tx,
             rx,
@@ -471,6 +474,10 @@ impl App {
                     // fold od 0.0: `sum()` prázdného seznamu dává -0.0 („-0.0 %“ bez kontejnerů)
                     let total = rows.iter().fold(0.0, |a, r| a + r.cpu);
                     ui::dashboard::push_cpu(&mut self.cpu_hist, total / ncpu);
+                    // celá VM ze stejného vzorku jako karta enginu (ve stejném okamžiku jako kontejnery)
+                    if let Some(vm) = self.shared.memory.lock().ok().and_then(|m| m.glance).and_then(|g| g.cpu) {
+                        ui::dashboard::push_cpu(&mut self.vm_cpu_hist, vm);
+                    }
                     self.stats = rows;
                     if df.is_some() {
                         self.df = df;

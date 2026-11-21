@@ -336,26 +336,39 @@ fn cpu_tile(app: &mut App, ui: &mut egui::Ui) {
         ui.set_width(ui.available_width());
         ui.set_min_height(TILE_H);
         let ncpu = app.snap.info.as_ref().map(|i| i.ncpu.max(1)).unwrap_or(1);
-        let now_pct = app.cpu_hist.back().map(|p| p.1).unwrap_or(0.0);
-        tile_head(
-            ui,
-            t!("CPU kontejnerů", "Container CPU"),
-            &format!("{now_pct:.1} %"),
-            &tf!("z {ncpu} CPU ve WSL", "of {ncpu} CPUs in WSL"),
-        );
+        let containers = app.cpu_hist.back().map(|p| p.1).unwrap_or(0.0);
+        // velké číslo = celá WSL VM (jako karta enginu); kontejnery jsou jeho část – rozdíl je
+        // engine (API, TLS proxy), Kubernetes mimo kontejnery a systém
+        let vm = app.vm_cpu_hist.back().map(|p| p.1);
+        let (title, big) = match vm {
+            Some(v) => (t!("CPU WSL", "WSL CPU"), format!("{v:.1} %")),
+            None => (t!("CPU kontejnerů", "Container CPU"), format!("{containers:.1} %")),
+        };
+        let sub = match vm {
+            Some(_) => tf!("z {ncpu} CPU · kontejnery {containers:.1} %", "of {ncpu} CPUs · containers {containers:.1} %"),
+            None => tf!("z {ncpu} CPU ve WSL", "of {ncpu} CPUs in WSL"),
+        };
+        tile_head(ui, title, &big, &sub);
         let pts: Vec<(f64, f64)> = app.cpu_hist.iter().copied().collect();
-        let max = pts.iter().map(|p| p.1).fold(0.0, f64::max);
+        let vm_pts: Vec<(f64, f64)> = app.vm_cpu_hist.iter().copied().collect();
+        let max = pts.iter().chain(vm_pts.iter()).map(|p| p.1).fold(0.0, f64::max);
         let ymax = (max * 1.3).clamp(5.0, 100.0);
-        super::chart::line_chart_gaps(
-            ui,
-            &[super::chart::Series { name: "CPU", color: theme::accent(), pts: &pts }],
-            crate::memory::now_secs(),
-            CPU_WINDOW,
-            ymax,
-            |v| format!("{v:.0} %"),
-            &[],
-            CHART_GAP,
-        );
+        let (vm_name, ct_name) = (t!("celá WSL VM", "whole WSL VM"), t!("kontejnery", "containers"));
+        let mut series = vec![];
+        if !vm_pts.is_empty() {
+            series.push(super::chart::Series { name: vm_name, color: theme::accent(), pts: &vm_pts });
+        }
+        series.push(super::chart::Series { name: ct_name, color: theme::hue(0.57), pts: &pts });
+        super::chart::line_chart_gaps(ui, &series, crate::memory::now_secs(), CPU_WINDOW, ymax, |v| format!("{v:.0} %"), &[], CHART_GAP);
+        if !vm_pts.is_empty() {
+            ui.horizontal(|ui| {
+                for s in &series {
+                    ui.label(RichText::new("\u{25CF}").color(s.color).small());
+                    ui.label(muted(s.name).small());
+                    ui.add_space(8.0);
+                }
+            });
+        }
     });
 }
 
