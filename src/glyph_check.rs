@@ -22,17 +22,34 @@ fn literal_chars() -> std::collections::BTreeMap<char, String> {
                 if t.starts_with("//") || t.starts_with("#[") {
                     continue;
                 }
-                // jen obsah uvozovek (hrubě, stačí pro texty UI); \u{…} escapy se nekontrolují –
-                // to jsou ikony Phosphor
+                // jen obsah uvozovek (hrubě, stačí pro texty UI); escapy \u{…} se dekódují,
+                // kromě ikon Phosphor (soukromá oblast U+E000–U+F8FF – obstará ikonové písmo)
+                let at = || format!("{}:{}", p.strip_prefix(env!("CARGO_MANIFEST_DIR")).unwrap().display(), n + 1);
                 let mut inside = false;
                 let mut prev = ' ';
-                for c in line.chars() {
+                let chars: Vec<char> = line.chars().collect();
+                let mut i = 0;
+                while i < chars.len() {
+                    let c = chars[i];
                     if c == '"' && prev != '\\' {
                         inside = !inside;
+                    } else if inside && c == '\\' && chars.get(i + 1) == Some(&'u') && chars.get(i + 2) == Some(&'{') {
+                        if let Some(end) = chars[i..].iter().position(|x| *x == '}') {
+                            let hex: String = chars[i + 3..i + end].iter().collect();
+                            if let Some(e) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                                if !e.is_ascii() && !(0xE000..=0xF8FF).contains(&(e as u32)) {
+                                    found.entry(e).or_insert_with(at);
+                                }
+                            }
+                            i += end + 1;
+                            prev = '}';
+                            continue;
+                        }
                     } else if inside && !c.is_ascii() {
-                        found.entry(c).or_insert_with(|| format!("{}:{}", p.strip_prefix(env!("CARGO_MANIFEST_DIR")).unwrap().display(), n + 1));
+                        found.entry(c).or_insert_with(at);
                     }
-                    prev = c;
+                    prev = if prev == '\\' && c == '\\' { ' ' } else { c };
+                    i += 1;
                 }
             }
         }
@@ -47,7 +64,9 @@ fn ui_text_glyphs_exist_in_app_fonts() {
     crate::theme::apply(&ctx, "dark");
     let _ = ctx.run(egui::RawInput::default(), |_| {});
     let font = egui::FontId::proportional(14.0);
-    let missing: Vec<String> = literal_chars()
+    let chars = literal_chars();
+    assert!(chars.contains_key(&'\u{2514}') && chars.contains_key(&'→'), "kontrola musí vidět i escapy (└ v mapě sítí) a přímé znaky");
+    let missing: Vec<String> = chars
         .into_iter()
         // kombinující diakritika (testovací data vyhledávání) nemá vlastní glyf
         .filter(|(c, _)| !(0x300..=0x36F).contains(&(*c as u32)))
