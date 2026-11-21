@@ -1252,6 +1252,32 @@ mod tests {
         assert!(!link_target_canonical("S/../../x"));
     }
 
+    /// N-01 (všechny platformy): řetěz symlinků mířící přes `..` ven a soubor zapsaný skrz něj
+    /// se musí zablokovat, mimo cílovou složku se nesmí nic vytvořit.
+    #[test]
+    fn extraction_blocks_symlink_escape() {
+        let root = tmp_dir("escape");
+        let dest = root.join("dest");
+        std::fs::create_dir_all(&dest).unwrap();
+        let data = tar_of(&[
+            ("d/", tar::EntryType::Directory, b"", ""),
+            ("d/esc", tar::EntryType::Symlink, b"", "../.."),
+            ("d/esc/evil.txt", tar::EntryType::Regular, b"x", ""),
+            ("d/chain", tar::EntryType::Symlink, b"", "esc"),
+            ("d/chain/evil2.txt", tar::EntryType::Regular, b"x", ""),
+            ("d/chain/sub/", tar::EntryType::Directory, b"", ""),
+            ("d/hard", tar::EntryType::Link, b"", "d/esc/../x"),
+            ("d/ok.txt", tar::EntryType::Regular, b"ok", ""),
+        ]);
+        let rep = extract_tar(std::io::Cursor::new(data), &dest).unwrap();
+        assert_eq!(std::fs::read(dest.join("d").join("ok.txt")).unwrap(), b"ok");
+        for n in ["evil.txt", "evil2.txt", "sub", "x"] {
+            assert!(!root.join(n).exists(), "mimo cíl vzniklo {n}: {:?}", rep.skipped);
+        }
+        assert!(!rep.skipped.is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     /// N-01: řetěz symlinků + kolize velikosti písmen (`S` vs `s` na NTFS) nesmí zapsat mimo cíl.
     /// Bez oprávnění k symlinkům (Developer Mode) se symlinky jen přeskočí – test platí v obou případech.
     #[cfg(windows)]

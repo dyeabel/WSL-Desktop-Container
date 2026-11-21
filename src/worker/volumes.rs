@@ -359,6 +359,10 @@ mod tests {
         );
         assert_eq!(split_target(r"D:\a.tar").unwrap(), (r"D:\".to_string(), "a.tar".to_string()));
         assert!(split_target("").is_err());
+    }
+
+    #[test]
+    fn volume_names_and_paths() {
         assert_eq!(backup_file_name("db_data", (2026, 3, 7, 9, 5)), "db_data-20260307-0905.tar.gz");
         assert!(valid_volume_name("a.b_c-1"));
         assert!(!valid_volume_name(""));

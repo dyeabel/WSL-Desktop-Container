@@ -8,6 +8,12 @@ repo="${2:-}"
 [ -n "$mode" ] && [ -n "$repo" ] || { echo "použití: $0 <check|test|live> <repo> [cargo args]" >&2; exit 2; }
 shift 2
 
+# live míří na skutečný engine WSLCD-Lite – bez filtru testů se odmítne.
+if [ "$mode" = live ] && [ -z "${1:-}" ]; then
+    echo "live vyžaduje filtr testů, např.: linux-test.ps1 live -- host::local" >&2
+    exit 2
+fi
+
 here=$(cd "$(dirname "$0")" && pwd)
 image=wslcd-rust-dev
 # Cílový adresář cargo je pro každý worktree zvlášť (souběžné běhy); registr je sdílený.
@@ -24,6 +30,7 @@ run() {
         -v "$target_vol:/target" \
         -v wslcd-cargo-registry:/usr/local/cargo/registry \
         -e CARGO_TARGET_DIR=/target \
+        -e "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}" \
         -w /src \
         "$@"
 }
@@ -38,11 +45,20 @@ test)
 live)
     sockdir=/run/wslcd-dev
     sock=$sockdir/podman.sock
+    svc=
+    cleanup() {
+        [ -z "$svc" ] || { kill "$svc" 2>/dev/null || true; wait "$svc" 2>/dev/null || true; }
+        rm -f "$sock"
+    }
+    trap cleanup EXIT
+    trap "exit 130" INT TERM HUP
     mkdir -p "$sockdir"
+    # zapomenutá služba z dřívějšího běhu (jen ta, co obsluhuje náš socket)
+    for p in $(pgrep -f "podman system service.*$sock" || true); do kill "$p" 2>/dev/null || true; done
+    sleep 0.3
     rm -f "$sock"
     podman system service --time=0 "unix://$sock" &
     svc=$!
-    trap 'kill "$svc" 2>/dev/null || true; wait "$svc" 2>/dev/null || true; rm -f "$sock"' EXIT INT TERM
     i=0
     while [ ! -S "$sock" ]; do
         i=$((i + 1))
