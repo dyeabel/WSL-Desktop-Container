@@ -502,7 +502,7 @@ mod tests {
         const P: u16 = 18290;
         let cfg = crate::config::Config::load();
         crate::docker::configure_tls(cfg.tls).unwrap();
-        let d = Docker::new(cfg.port);
+        let d = Docker::new(&crate::host::endpoint(&cfg));
         assert!(d.ping(), "API na {} neodpovídá", cfg.port);
         let podman = |args: &[&str]| {
             let mut a = vec!["podman", "--url", "unix:///run/wslcd-podman/podman.sock"];

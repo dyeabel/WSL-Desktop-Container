@@ -23,8 +23,8 @@ impl Worker {
     fn events_loop(self) {
         let mut wait = Duration::from_secs(2);
         loop {
-            let port = self.cfg().port;
-            let d = Docker::new(port);
+            let ep = crate::host::endpoint(&self.cfg());
+            let d = Docker::new(&ep);
             if !d.ping() {
                 self.set_events_live(false);
                 thread::sleep(Duration::from_secs(3));
@@ -38,8 +38,8 @@ impl Worker {
                 },
                 |ev| {
                     self.on_event(&ev);
-                    // změna portu v nastavení -> připojit se znovu
-                    self.cfg().port == port
+                    // změna endpointu (portu) v nastavení -> připojit se znovu
+                    crate::host::endpoint(&self.cfg()) == ep
                 },
             );
             let was_live = self.shared.events_live.load(Ordering::SeqCst);

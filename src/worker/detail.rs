@@ -41,13 +41,13 @@ impl Drop for StatsFeed {
 
 /// Spustí vzorkování statistik kontejneru (~každé 2 s, historie 5 min) ve vlastním vlákně.
 /// Běží jen dokud existuje vrácený `StatsFeed` (tj. dokud je otevřený detail).
-pub fn start_stats(ctx: eframe::egui::Context, port: u16, id: String) -> StatsFeed {
+pub fn start_stats(ctx: eframe::egui::Context, ep: crate::http::Endpoint, id: String) -> StatsFeed {
     let samples = Arc::new(Mutex::new(VecDeque::new()));
     let stop = Arc::new(AtomicBool::new(false));
     let started = Instant::now();
     let (buf, st) = (samples.clone(), stop.clone());
     thread::spawn(move || {
-        let d = Docker::new(port);
+        let d = Docker::new(&ep);
         let mut prev: Option<(u64, Instant)> = None;
         while !st.load(Ordering::SeqCst) {
             let t0 = Instant::now();

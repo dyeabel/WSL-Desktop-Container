@@ -55,22 +55,6 @@ impl From<ApiError> for String {
     }
 }
 
-impl From<ureq::Error> for ApiError {
-    fn from(e: ureq::Error) -> Self {
-        match e {
-            ureq::Error::Status(code, r) => {
-                let body = r.into_string().unwrap_or_default();
-                let message = serde_json::from_str::<serde_json::Value>(&body)
-                    .ok()
-                    .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
-                    .unwrap_or(body);
-                ApiError::Status { code, message: message.trim().to_string() }
-            }
-            ureq::Error::Transport(t) => ApiError::Transport(t.to_string()),
-        }
-    }
-}
-
 impl From<std::io::Error> for ApiError {
     fn from(e: std::io::Error) -> Self {
         ApiError::Decode(e.to_string())

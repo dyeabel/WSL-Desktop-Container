@@ -35,7 +35,7 @@ pub struct LogView {
     /// názvy zdrojů (služeb) podle indexu zdroje
     pub sources: Vec<String>,
     ids: Vec<String>,
-    port: u16,
+    ep: crate::http::Endpoint,
     tail: u32,
     buf: Arc<Mutex<LogBuf>>,
     streams: Streams,
@@ -63,20 +63,20 @@ pub struct LogView {
 
 impl LogView {
     /// Logy jednoho kontejneru (posledních `tail` řádků a dál živě).
-    pub fn single(port: u16, id: String, name: String, tail: u32) -> Self {
-        Self::new(port, id.clone(), name.clone(), None, vec![(id, name)], tail)
+    pub fn single(ep: crate::http::Endpoint, id: String, name: String, tail: u32) -> Self {
+        Self::new(ep, id.clone(), name.clone(), None, vec![(id, name)], tail)
     }
 
     /// Sloučené logy kontejnerů compose projektu; `targets` = (id, služba).
-    pub fn stack(port: u16, project: String, targets: Vec<(String, String)>) -> Self {
-        Self::new(port, String::new(), project.clone(), Some(project), targets, STACK_TAIL)
+    pub fn stack(ep: crate::http::Endpoint, project: String, targets: Vec<(String, String)>) -> Self {
+        Self::new(ep, String::new(), project.clone(), Some(project), targets, STACK_TAIL)
     }
 
-    fn new(port: u16, id: String, name: String, stack: Option<String>, targets: Vec<(String, String)>, tail: u32) -> Self {
+    fn new(ep: crate::http::Endpoint, id: String, name: String, stack: Option<String>, targets: Vec<(String, String)>, tail: u32) -> Self {
         let reorder = stack.is_some().then_some(REORDER);
         let buf = Arc::new(Mutex::new(LogBuf::new(MAX_LINES, reorder)));
         let (ids, sources): (Vec<String>, Vec<String>) = targets.into_iter().unzip();
-        let streams = Streams::start(port, buf.clone(), &ids, tail);
+        let streams = Streams::start(&ep, buf.clone(), &ids, tail);
         Self {
             id,
             name,
@@ -84,7 +84,7 @@ impl LogView {
             hidden: vec![false; sources.len()],
             sources,
             ids,
-            port,
+            ep,
             tail,
             buf,
             streams,
@@ -121,7 +121,7 @@ impl LogView {
             self.sources.push(label);
             self.hidden.push(hidden);
             // nový kontejner: celý jeho log (je krátký), u ostatních STACK_TAIL
-            self.streams.add(self.port, self.buf.clone(), &id, src, self.tail);
+            self.streams.add(&self.ep, self.buf.clone(), &id, src, self.tail);
             n += 1;
         }
         if n > 0 {
@@ -143,7 +143,7 @@ impl LogView {
         let reorder = self.stack.is_some().then_some(REORDER);
         // nový buffer: vlákna starých streamů, která ještě dobíhají, zapisují do starého
         self.buf = Arc::new(Mutex::new(LogBuf::new(MAX_LINES, reorder)));
-        self.streams = Streams::start(self.port, self.buf.clone(), &self.ids, self.tail);
+        self.streams = Streams::start(&self.ep, self.buf.clone(), &self.ids, self.tail);
         self.cache = ViewCache::default();
         self.cur = None;
         self.reload = false;

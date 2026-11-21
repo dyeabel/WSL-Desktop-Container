@@ -67,10 +67,10 @@ pub fn open(app: &mut App, ctx: &egui::Context, id: String, name: String) {
 }
 
 fn new_view(app: &App, ctx: &egui::Context, id: String, name: String, tab: Tab) -> DetailView {
-    let (port, podman) = app.cfg.read().map(|c| (c.port, c.engine == crate::engine::Engine::Podman)).unwrap_or((2375, true));
+    let podman = app.cfg.read().map(|c| c.engine == crate::engine::Engine::Podman).unwrap_or(true);
     app.send(Cmd::Inspect(id.clone()));
     DetailView {
-        stats: crate::worker::start_stats(ctx.clone(), port, id.clone()),
+        stats: crate::worker::start_stats(ctx.clone(), app.engine_endpoint(), id.clone()),
         id,
         name,
         tab,

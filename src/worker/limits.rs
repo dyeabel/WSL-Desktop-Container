@@ -84,7 +84,7 @@ mod live {
         use crate::limits::LimitForm;
         let cfg = crate::config::Config::load();
         crate::docker::configure_tls(cfg.tls).expect("TLS");
-        let d = Docker::new(cfg.port);
+        let d = Docker::new(&crate::host::endpoint(&cfg));
         assert!(d.ping(), "API na {} neodpovídá", cfg.port);
         let ver: Value = d.get("/version").unwrap();
         let engine = if ver.to_string().contains("Podman") { Engine::Podman } else { Engine::Docker };

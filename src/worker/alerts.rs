@@ -812,7 +812,7 @@ mod tests {
     fn live_alerts() {
         let mut cfg = crate::config::Config::load();
         crate::docker::configure_tls(cfg.tls).expect("TLS");
-        let d = crate::docker::Docker::new(cfg.port);
+        let d = crate::docker::Docker::new(&crate::host::endpoint(&cfg));
         // paměť: stejně jako `memory_sample` (minimální vzorek + VmmemWSL) -> `mem_input`
         let out = crate::host::HostExt::run(&*crate::host::current(&cfg), crate::host::Privilege::User, None, &["sh", "-c", crate::memory::SAMPLE_SCRIPT_MIN]).expect("wsl");
         let (mi, _) = crate::memory::parse_sample(&out).expect("meminfo");

@@ -1,13 +1,27 @@
-//! Minimální klient Docker Engine API přes TCP (http://127.0.0.1:<port>).
+//! Minimální klient Docker Engine API nad [`crate::http`] (endpoint hostitele, keep-alive pool).
 
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::Read;
+use std::sync::Arc;
 use std::time::Duration;
 pub use crate::error::ApiError;
-use crate::http::client::http_response;
+use crate::http::client::{http_response, Client, Request};
+use crate::http::conn::{Connect, TcpConnect};
+use crate::http::Endpoint;
+
+/// Časový limit navázání spojení s API.
+const CONNECT_TIMEOUT: Duration = Duration::from_millis(800);
+/// Výchozí časový limit jednoho čtení (pull, build, export).
+const READ_TIMEOUT: Duration = Duration::from_secs(600);
+/// Časový limit `ping`.
+const PING_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Časový limit navázání spojení pro proudy (logy, události).
+const STREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+/// Po takové době ticha v `/events` se proud ukončí a volající se připojí znovu.
+const EVENTS_IDLE: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Port {
@@ -283,6 +297,21 @@ pub struct HubTag {
     pub updated: String,
 }
 
+/// Chyba volání Docker Hubu (internet přes ureq – ne API enginu) ve tvaru [`ApiError`].
+fn hub_err(e: ureq::Error) -> ApiError {
+    match e {
+        ureq::Error::Status(code, r) => {
+            let body = r.into_string().unwrap_or_default();
+            let message = serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
+                .unwrap_or(body);
+            ApiError::Status { code, message: message.trim().to_string() }
+        }
+        ureq::Error::Transport(t) => ApiError::Transport(t.to_string()),
+    }
+}
+
 /// Načte tagy z Docker Hubu (nejnovější první). Funguje jen pro image z docker.io.
 pub fn hub_tags(repo: &str) -> Result<Vec<HubTag>, String> {
     let path = if repo.contains('/') { repo.to_string() } else { format!("library/{repo}") };
@@ -291,7 +320,7 @@ pub fn hub_tags(repo: &str) -> Result<Vec<HubTag>, String> {
     let v: Value = agent
         .get(&url)
         .call()
-        .map_err(|e| format!("Docker Hub: {}", Docker::err(e)))?
+        .map_err(|e| format!("Docker Hub: {}", hub_err(e)))?
         .into_json()
         .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
@@ -471,92 +500,82 @@ pub fn current_tls() -> Option<std::sync::Arc<rustls::ClientConfig>> {
     tls()
 }
 
-fn agent_builder(tls: &Option<std::sync::Arc<rustls::ClientConfig>>) -> ureq::AgentBuilder {
-    let b = ureq::AgentBuilder::new();
-    match tls {
-        Some(c) => b.tls_config(c.clone()),
-        None => b,
-    }
-}
-
 #[derive(Clone)]
 pub struct Docker {
-    agent: ureq::Agent,
-    base: String,
-    port: u16,
-    tls: Option<std::sync::Arc<rustls::ClientConfig>>,
+    client: Client,
+    conn: Arc<dyn Connect>,
 }
 
 impl Docker {
-    /// Klient pro aktuální TLS nastavení. HTTP agent (a jeho pool spojení s keep-alive) se
-    /// sdílí mezi všemi voláními – dřív se pro každý požadavek otevíralo nové TCP/TLS spojení.
-    pub fn new(port: u16) -> Self {
-        static SHARED: std::sync::Mutex<Option<(u16, usize, Docker)>> = std::sync::Mutex::new(None);
+    /// Klient pro endpoint a aktuální TLS nastavení. Klient (a jeho pool spojení s keep-alive)
+    /// se sdílí mezi všemi voláními se stejným endpointem a TLS klíčem.
+    pub fn new(ep: &Endpoint) -> Self {
+        static SHARED: std::sync::Mutex<Option<(Endpoint, usize, Docker)>> = std::sync::Mutex::new(None);
         let tls = tls();
-        let key = tls.as_ref().map(|c| std::sync::Arc::as_ptr(c) as usize).unwrap_or(0);
+        let key = tls.as_ref().map(|c| Arc::as_ptr(c) as usize).unwrap_or(0);
         if let Ok(mut g) = SHARED.lock() {
-            if let Some((p, k, d)) = g.as_ref() {
-                if *p == port && *k == key {
+            if let Some((e, k, d)) = g.as_ref() {
+                if e == ep && *k == key {
                     return d.clone();
                 }
             }
-            let d = Self::with_tls(port, tls);
-            *g = Some((port, key, d.clone()));
+            let d = Self::for_endpoint(ep, tls);
+            *g = Some((ep.clone(), key, d.clone()));
             return d;
         }
-        Self::with_tls(port, tls)
+        Self::for_endpoint(ep, tls)
     }
 
-    pub fn with_tls(port: u16, tls: Option<std::sync::Arc<rustls::ClientConfig>>) -> Self {
-        let agent = agent_builder(&tls)
-            .timeout_connect(Duration::from_millis(800))
-            .timeout_read(Duration::from_secs(600))
-            .build();
-        let scheme = if tls.is_some() { "https" } else { "http" };
-        Self { agent, base: format!("{scheme}://127.0.0.1:{port}"), port, tls }
+    /// Vlastní (nesdílený) klient na `127.0.0.1:port` s danou TLS konfigurací.
+    pub fn with_tls(port: u16, tls: Option<Arc<rustls::ClientConfig>>) -> Self {
+        Self::with_connect(Arc::new(TcpConnect { port, tls }))
     }
 
-    fn url(&self, p: &str) -> String {
-        format!("{}{}", self.base, p)
+    fn for_endpoint(ep: &Endpoint, tls: Option<Arc<rustls::ClientConfig>>) -> Self {
+        match ep {
+            Endpoint::Tcp { port } => Self::with_tls(*port, tls),
+        }
     }
 
-    fn err(e: ureq::Error) -> ApiError {
-        ApiError::from(e)
+    fn with_connect(conn: Arc<dyn Connect>) -> Self {
+        Self { client: Client::new(conn.clone(), CONNECT_TIMEOUT, READ_TIMEOUT), conn }
+    }
+
+    /// Kam se klient připojuje – pro hlášky (u TCP `127.0.0.1:<port>`).
+    pub fn describe(&self) -> String {
+        self.conn.describe()
     }
 
     pub fn get<T: DeserializeOwned>(&self, p: &str) -> Result<T, ApiError> {
-        Ok(self.agent.get(&self.url(p)).call()?.into_json()?)
+        self.client.request("GET", p).call()?.into_json()
     }
 
     pub fn post(&self, p: &str) -> Result<String, ApiError> {
-        Ok(self.agent.post(&self.url(p)).call()?.into_string()?)
+        self.client.request("POST", p).call()?.into_string()
     }
 
     pub fn post_json(&self, p: &str, body: Value) -> Result<String, ApiError> {
-        Ok(self.agent.post(&self.url(p)).send_json(body)?.into_string()?)
+        self.client.request("POST", p).send_json(body)?.into_string()
     }
 
     pub fn delete(&self, p: &str) -> Result<String, ApiError> {
-        Ok(self.agent.delete(&self.url(p)).call()?.into_string()?)
+        self.client.request("DELETE", p).call()?.into_string()
     }
 
     /// Obecný požadavek (HEAD, PUT s tělem, čtení proudu) – soubory v kontejneru (`container_fs`).
-    pub fn request(&self, method: &str, p: &str) -> ureq::Request {
-        self.agent.request(method, &self.url(p))
+    pub fn request(&self, method: &str, p: &str) -> Request<'_> {
+        self.client.request(method, p)
     }
 
     pub fn ping(&self) -> bool {
-        self.agent
-            .get(&self.url("/_ping"))
-            .timeout(Duration::from_millis(1500))
-            .call()
-            .is_ok()
+        // tělo dočíst, ať se spojení vrátí do poolu
+        self.client.request("GET", "/_ping").timeout(PING_TIMEOUT).call().and_then(|r| r.into_string()).is_ok()
     }
 
     pub fn snapshot(&self) -> Snapshot {
         if !self.ping() {
             return Snapshot {
-                error: Some(tf!("API enginu není dostupné na 127.0.0.1:{}", "Engine API is not available on 127.0.0.1:{}", self.port)),
+                error: Some(tf!("API enginu není dostupné na {}", "Engine API is not available on {}", self.describe())),
                 ..Default::default()
             };
         }
@@ -677,8 +696,8 @@ impl Docker {
     /// `opts.closer.close()`. `on_chunk(text, celé_řádky)`: u kontejnerů bez TTY je každý rámec
     /// ukončený řádek, u TTY jde o surové bloky (řádek může pokračovat v dalším bloku).
     ///
-    /// Spojení se otevírá přímo (ne přes ureq), aby ho šlo z jiného vlákna zavřít
-    /// (`shutdown` socketu) – jinak by vlákno viselo na čtení, dokud kontejner nic nevypíše.
+    /// Spojení se otevírá zvlášť (mimo pool), aby ho šlo z jiného vlákna zavřít
+    /// (`shutdown` spojení) – jinak by vlákno viselo na čtení, dokud kontejner nic nevypíše.
     pub fn stream_logs(&self, id: &str, opts: &LogOpts, mut on_chunk: impl FnMut(&str, bool) -> bool) -> Result<(), String> {
         let tty = self.is_tty(id);
         let path = format!(
@@ -686,7 +705,7 @@ impl Docker {
             opts.follow as u8, opts.tail, opts.timestamps as u8
         );
         let res = (|| {
-            let mut r = self.open_stream(&path, &opts.closer)?;
+            let mut r = self.open_stream(&path, Some(&opts.closer), None)?;
             if tty {
                 let mut buf = [0u8; 8192];
                 // nedokončený UTF-8 znak na konci bloku počká na další blok
@@ -740,22 +759,16 @@ impl Docker {
         res
     }
 
-    /// GET na vlastním spojení (HTTP/1.1, případně TLS); vrací čtečku těla odpovědi.
-    fn open_stream(&self, path: &str, closer: &StreamCloser) -> Result<Box<dyn Read + Send>, String> {
+    /// GET na vlastním spojení mimo pool (`Connection: close`); vrací čtečku těla odpovědi.
+    /// `closer` dostane funkci, která spojení zavře; `read_timeout` = limit jednoho čtení.
+    fn open_stream(&self, path: &str, closer: Option<&StreamCloser>, read_timeout: Option<Duration>) -> Result<Box<dyn Read + Send>, String> {
         use std::io::Write;
-        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], self.port));
-        let sock = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)).map_err(|e| e.to_string())?;
-        let _ = sock.set_nodelay(true);
-        closer.attach(sock.try_clone().map_err(|e| e.to_string())?)?;
-        let mut io: Box<dyn ReadWriteSend> = match &self.tls {
-            None => Box::new(sock),
-            Some(cfg) => {
-                let name = rustls_pki_types::ServerName::try_from("127.0.0.1").map_err(|e| e.to_string())?;
-                let conn = rustls::ClientConnection::new(cfg.clone(), name).map_err(|e| e.to_string())?;
-                Box::new(rustls::StreamOwned::new(conn, sock))
-            }
-        };
-        write!(io, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUser-Agent: wsl-container-desktop\r\nConnection: close\r\n\r\n", self.port)
+        let mut io = self.conn.connect(STREAM_CONNECT_TIMEOUT).map_err(|e| e.to_string())?;
+        if let Some(c) = closer {
+            c.attach(io.shutdown_handle().map_err(|e| e.to_string())?)?;
+        }
+        io.set_read_timeout(read_timeout).map_err(|e| e.to_string())?;
+        write!(io, "GET {path} HTTP/1.1\r\nHost: {}\r\nUser-Agent: wsl-container-desktop\r\nConnection: close\r\n\r\n", self.conn.host_header())
             .and_then(|_| io.flush())
             .map_err(|e| e.to_string())?;
         let (status, body) = http_response(std::io::BufReader::new(io))?;
@@ -776,13 +789,9 @@ impl Docker {
     /// aby se nezasekl na spojení, které zaniklo bez ukončení (např. vypnuté WSL).
     pub fn stream_events(&self, on_connected: impl FnOnce(), mut on_event: impl FnMut(Event) -> bool) -> Result<(), String> {
         use std::io::BufRead;
-        let agent = agent_builder(&self.tls)
-            .timeout_connect(Duration::from_secs(2))
-            .timeout_read(Duration::from_secs(120))
-            .build();
-        let resp = agent.get(&self.url("/events")).call().map_err(Self::err)?;
+        let body = self.open_stream("/events", None, Some(EVENTS_IDLE))?;
         on_connected();
-        let r = std::io::BufReader::new(resp.into_reader());
+        let r = std::io::BufReader::new(body);
         for line in r.lines() {
             let line = match line {
                 Ok(l) => l,
@@ -883,18 +892,26 @@ impl LogOpts {
     }
 }
 
-/// Umožní zavřít probíhající stream z jiného vlákna (`shutdown` socketu odblokuje čtení).
+/// Funkce, která zavře spojení (z `Stream::shutdown_handle`).
+type Shutdown = Box<dyn Fn() + Send + Sync>;
+
+/// Umožní zavřít probíhající stream z jiného vlákna (`shutdown` spojení odblokuje čtení).
 #[derive(Clone, Default)]
-pub struct StreamCloser(std::sync::Arc<std::sync::Mutex<(bool, Option<std::net::TcpStream>)>>);
+pub struct StreamCloser(Arc<std::sync::Mutex<(bool, Option<Shutdown>)>>);
 
 impl StreamCloser {
     /// Zavře spojení (i budoucí – `attach` po zavření vrátí chybu).
     pub fn close(&self) {
-        if let Ok(mut g) = self.0.lock() {
-            g.0 = true;
-            if let Some(s) = g.1.take() {
-                let _ = s.shutdown(std::net::Shutdown::Both);
+        // funkci zavolat až mimo zámek
+        let f = match self.0.lock() {
+            Ok(mut g) => {
+                g.0 = true;
+                g.1.take()
             }
+            Err(_) => None,
+        };
+        if let Some(f) = f {
+            f();
         }
     }
 
@@ -902,19 +919,17 @@ impl StreamCloser {
         self.0.lock().map(|g| g.0).unwrap_or(true)
     }
 
-    fn attach(&self, s: std::net::TcpStream) -> Result<(), String> {
+    fn attach(&self, f: Shutdown) -> Result<(), String> {
         let mut g = self.0.lock().map_err(|e| e.to_string())?;
         if g.0 {
-            let _ = s.shutdown(std::net::Shutdown::Both);
+            drop(g);
+            f();
             return Err("closed".into());
         }
-        g.1 = Some(s);
+        g.1 = Some(f);
         Ok(())
     }
 }
-
-trait ReadWriteSend: Read + std::io::Write + Send {}
-impl<T: Read + std::io::Write + Send> ReadWriteSend for T {}
 
 #[cfg(test)]
 mod tests {
@@ -922,13 +937,26 @@ mod tests {
 
     #[test]
     fn closer_rejects_attach_after_close() {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let s = std::net::TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let f = || -> Shutdown {
+            let n = calls.clone();
+            Box::new(move || {
+                n.fetch_add(1, Ordering::SeqCst);
+            })
+        };
         let c = StreamCloser::default();
         assert!(!c.is_closed());
+        c.attach(f()).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
         c.close();
         assert!(c.is_closed());
-        assert!(c.attach(s).is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // po zavření se nové spojení hned zavře
+        assert!(c.attach(f()).is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        c.close();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]

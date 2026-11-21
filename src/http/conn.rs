@@ -1,9 +1,6 @@
 //! Spojení, po kterém jde HTTP: zatím TCP na 127.0.0.1 (volitelně TLS). Další druhy
 //! (unix socket, stream agenta v hostu) přibudou jako další implementace [`Connect`].
 
-// Spojení zatím používají jen testy klienta; docker.rs na ně přejde v dalším kroku (Task 6).
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::Arc;

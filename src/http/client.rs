@@ -6,10 +6,8 @@
 //! - odpověď bez délky a bez `chunked` (tělo do zavření) se do poolu nevrací nikdy;
 //! - spojení nečinné déle než [`IDLE_TTL`] se zahodí, v poolu je nejvýš [`MAX_IDLE`] spojení;
 //! - selže-li spojení z poolu dřív, než přijde první bajt odpovědi, zopakuje se požadavek
-//!   jednou na novém spojení – jen u GET a HEAD.
-
-// Klienta zatím používají jen testy; docker.rs na něj přejde v dalším kroku (Task 6).
-#![cfg_attr(not(test), allow(dead_code))]
+//!   jednou na novém spojení – jen u GET a HEAD;
+//! - odpověď `101 Switching Protocols` se nevrací nikdy: tělo je surový proud až do zavření.
 
 use super::conn::{Connect, Stream};
 use crate::error::ApiError;
@@ -67,6 +65,7 @@ impl Pool {
         };
     }
 
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.lock().len()
     }
@@ -107,7 +106,7 @@ impl Client {
     }
 
     pub fn request(&self, method: &str, path: &str) -> Request<'_> {
-        Request { client: self, method: method.to_string(), path: path.to_string(), headers: Vec::new(), timeout: None }
+        Request { client: self, method: method.to_string(), path: path.to_string(), headers: Vec::new(), timeout: None, bad_header: None }
     }
 
     /// Počet nečinných spojení v poolu.
@@ -153,10 +152,19 @@ pub struct Request<'a> {
     path: String,
     headers: Vec<(String, String)>,
     timeout: Option<Duration>,
+    /// hlavička s CR/LF (nebo prázdným názvem) – požadavek se neodešle, `call`/`send…` vrátí chybu
+    bad_header: Option<String>,
 }
 
 impl Request<'_> {
+    /// Přidá hlavičku. Název nebo hodnota s CR/LF (vložení dalších hlaviček) se odmítne:
+    /// požadavek se pak vůbec neodešle a odesílací metoda vrátí `ApiError::Decode`.
     pub fn set(mut self, name: &str, value: &str) -> Self {
+        let bad = |s: &str| s.contains(['\r', '\n']);
+        if name.trim().is_empty() || name.contains(':') || bad(name) || bad(value) {
+            self.bad_header.get_or_insert_with(|| name.escape_debug().to_string());
+            return self;
+        }
         self.headers.push((name.to_string(), value.to_string()));
         self
     }
@@ -179,17 +187,25 @@ impl Request<'_> {
         self.execute(Payload::Bytes(&body))
     }
 
+    // aplikace posílá jen JSON (`send_json`) a proudy (`send`); syrové bajty zatím jen testy
+    #[cfg(test)]
     pub fn send_bytes(self, body: &[u8]) -> Result<Response, ApiError> {
         self.execute(Payload::Bytes(body))
     }
 
-    /// Tělo se posílá jako `Transfer-Encoding: chunked`.
+    /// Tělo z čtečky. S hlavičkou `Content-Length` (nastavenou přes [`Request::set`]) se pošle
+    /// přesně tolik bajtů bez kódování, jinak jako `Transfer-Encoding: chunked`.
     pub fn send(self, mut body: impl Read) -> Result<Response, ApiError> {
         self.execute(Payload::Stream(&mut body))
     }
 
     fn has_header(&self, name: &str) -> bool {
         self.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(name))
+    }
+
+    /// Délka těla z hlavičky `Content-Length` nastavené volajícím.
+    fn content_length(&self) -> Option<&str> {
+        self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("content-length")).map(|(_, v)| v.trim())
     }
 
     fn is_head(&self) -> bool {
@@ -211,6 +227,7 @@ impl Request<'_> {
             Payload::None if self.method.eq_ignore_ascii_case("GET") || self.is_head() => {}
             Payload::None => h.push_str("Content-Length: 0\r\n"),
             Payload::Bytes(b) => h.push_str(&format!("Content-Length: {}\r\n", b.len())),
+            Payload::Stream(_) if self.content_length().is_some() => {}
             Payload::Stream(_) => h.push_str("Transfer-Encoding: chunked\r\n"),
         }
         h.push_str("\r\n");
@@ -219,6 +236,16 @@ impl Request<'_> {
 
     fn execute(self, mut payload: Payload) -> Result<Response, ApiError> {
         let client = self.client;
+        if let Some(name) = &self.bad_header {
+            return Err(ApiError::Decode(format!("invalid HTTP header {name:?}")));
+        }
+        // proud s výslovnou délkou: tolik bajtů bez chunked
+        let raw_len = match (&payload, self.content_length()) {
+            (Payload::Stream(_), Some(v)) => {
+                Some(v.parse::<u64>().map_err(|_| ApiError::Decode(format!("invalid Content-Length {v:?}")))?)
+            }
+            _ => None,
+        };
         let head = self.head(&payload);
         let idempotent = self.method.eq_ignore_ascii_case("GET") || self.is_head();
         let retryable = idempotent && !matches!(payload, Payload::Stream(_));
@@ -231,7 +258,7 @@ impl Request<'_> {
                 Some(c) => c,
                 None => client.fresh()?,
             };
-            match self.exchange(conn, &head, &mut payload, read_timeout) {
+            match self.exchange(conn, &head, &mut payload, raw_len, read_timeout) {
                 Ok((conn, h)) => return self.finish(conn, h),
                 // jen jednou a jen na novém spojení
                 Err(Fail::Early(_)) if from_pool && retryable => use_pool = false,
@@ -242,7 +269,7 @@ impl Request<'_> {
     }
 
     /// Pošle požadavek a přečte hlavičky odpovědi.
-    fn exchange(&self, mut c: Conn, head: &[u8], payload: &mut Payload, read_timeout: Duration) -> Result<(Conn, Head), Fail> {
+    fn exchange(&self, mut c: Conn, head: &[u8], payload: &mut Payload, raw_len: Option<u64>, read_timeout: Duration) -> Result<(Conn, Head), Fail> {
         c.get_ref().set_read_timeout(Some(read_timeout)).map_err(Fail::Early)?;
         let w = c.get_mut();
         match payload {
@@ -255,6 +282,26 @@ impl Request<'_> {
                 w.write_all(&all).map_err(Fail::Early)?;
             }
             Payload::Bytes(b) => w.write_all(head).and_then(|_| w.write_all(b)).map_err(Fail::Early)?,
+            Payload::Stream(r) if raw_len.is_some() => {
+                let len = raw_len.unwrap_or(0);
+                w.write_all(head).map_err(Fail::Early)?;
+                let mut buf = vec![0u8; 64 * 1024];
+                let mut left = len;
+                while left > 0 {
+                    let want = buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
+                    let n = match r.read(&mut buf[..want]) {
+                        Ok(0) => {
+                            let e = format!("request body ended {left} B before Content-Length {len}");
+                            return Err(Fail::Late(self.client.transport(e)));
+                        }
+                        Ok(n) => n,
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(e) => return Err(Fail::Late(self.client.transport(e))),
+                    };
+                    w.write_all(&buf[..n]).map_err(Fail::Early)?;
+                    left -= n as u64;
+                }
+            }
             Payload::Stream(r) => {
                 w.write_all(head).map_err(Fail::Early)?;
                 let mut buf = vec![0u8; 64 * 1024];
@@ -289,7 +336,8 @@ impl Request<'_> {
 
     fn finish(&self, c: Conn, h: Head) -> Result<Response, ApiError> {
         let framing = h.framing(self.is_head());
-        let reusable = h.keep_alive() && !matches!(framing, Framing::UntilClose);
+        // 101: spojení teď patří jinému protokolu – do poolu nikdy (framing je UntilClose)
+        let reusable = h.status != 101 && h.keep_alive() && !matches!(framing, Framing::UntilClose);
         let pool = reusable.then(|| self.client.inner.pool.clone());
         let resp = Response { status: h.status, headers: h.headers, body: Body::new(c, framing, pool) };
         if resp.status >= 400 {
@@ -308,6 +356,9 @@ pub struct Response {
 }
 
 impl Response {
+    // chybové stavy (>= 400) vrací `call`/`send…` jako `ApiError::Status`; stav úspěšné
+    // odpovědi aplikace zatím nepotřebuje
+    #[cfg(test)]
     pub fn status(&self) -> u16 {
         self.status
     }
@@ -333,7 +384,7 @@ impl Response {
         serde_json::from_slice(&v).map_err(|e| ApiError::Decode(e.to_string()))
     }
 
-    /// Chybový stav: `message` z JSON těla, jinak oříznuté tělo (jako u ureq).
+    /// Chybový stav: `message` z JSON těla, jinak oříznuté tělo (stejně jako dřívější klient).
     fn into_status_error(self) -> ApiError {
         let code = self.status;
         let mut raw = Vec::new();
@@ -459,6 +510,10 @@ struct Head {
 
 impl Head {
     fn framing(&self, head_request: bool) -> Framing {
+        // přepnutý protokol: všechno za hlavičkami jsou data nového protokolu až do zavření
+        if self.status == 101 {
+            return Framing::UntilClose;
+        }
         if head_request || self.status == 204 || self.status == 304 || (100..200).contains(&self.status) {
             return Framing::Len(0);
         }
@@ -608,6 +663,8 @@ mod tests {
         /// tělo a hlavička `X-Test` posledního požadavku
         body: Vec<u8>,
         x_test: String,
+        /// poslední požadavek měl tělo jako `chunked`
+        chunked: bool,
     }
 
     impl Srv {
@@ -641,6 +698,7 @@ mod tests {
                 }
             }
             self.body.clear();
+            self.chunked = chunked;
             if chunked {
                 Chunked::new(&mut self.r).read_to_end(&mut self.body).ok()?;
             } else {
@@ -687,7 +745,7 @@ mod tests {
                 let idx = c.fetch_add(1, Ordering::SeqCst);
                 let (h, q) = (handler.clone(), q.clone());
                 std::thread::spawn(move || {
-                    let mut srv = Srv { r: BufReader::new(s.try_clone().unwrap()), w: s, reqs: q, body: Vec::new(), x_test: String::new() };
+                    let mut srv = Srv { r: BufReader::new(s.try_clone().unwrap()), w: s, reqs: q, body: Vec::new(), x_test: String::new(), chunked: false };
                     h(idx, &mut srv);
                 });
             }
@@ -858,11 +916,7 @@ mod tests {
                 if what.ends_with("/slow") {
                     continue;
                 }
-                let head = format!("HTTP/1.1 200 OK
-X-Echo: {}
-Content-Length: {}
-
-", s.x_test, s.body.len());
+                let head = format!("HTTP/1.1 200 OK\r\nX-Echo: {}\r\nContent-Length: {}\r\n\r\n", s.x_test, s.body.len());
                 let body = s.body.clone();
                 if !(s.send(head.as_bytes()) && s.send(&body)) {
                     break;
@@ -917,5 +971,214 @@ Content-Length: {}
         let c = Client::new(Arc::new(TcpConnect { port, tls: None }), Duration::from_millis(300), Duration::from_secs(1));
         let e = c.request("GET", "/_ping").call().err().unwrap();
         assert!(matches!(e, ApiError::Transport(_)), "{e:?}");
+    }
+    #[test]
+    fn switching_protocols_is_never_pooled() {
+        let f = fake(|idx, s| {
+            if idx > 0 {
+                return serve_all(OK)(idx, s);
+            }
+            s.req();
+            s.send(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\nraw-data");
+            let _ = s.w.shutdown(std::net::Shutdown::Write);
+        });
+        let c = client(f.port);
+        let r = c.request("GET", "/up").call().unwrap();
+        assert_eq!(r.status(), 101);
+        // hned po hlavičkách se spojení do poolu vrátit nesmí (dřív: „prázdné tělo“ 1xx)
+        assert_eq!(c.idle(), 0);
+        let mut s = String::new();
+        r.into_reader().read_to_string(&mut s).unwrap();
+        assert_eq!(s, "raw-data");
+        assert_eq!(c.idle(), 0);
+        assert_eq!(c.request("GET", "/x").call().unwrap().into_string().unwrap(), "ok");
+        assert_eq!(f.conns(), 2);
+    }
+
+    #[test]
+    fn header_with_cr_lf_is_rejected_before_sending() {
+        let f = fake(serve_all(OK));
+        let c = client(f.port);
+        for (k, v) in [("X-A", "a\r\nX-Evil: 1"), ("X-A\r\nX-Evil", "1"), ("X-A", "a\nb"), ("X-A", "a\rb"), ("", "x"), ("X:A", "x")] {
+            let e = c.request("GET", "/h").set("X-Ok", "1").set(k, v).call().err().unwrap();
+            assert!(matches!(e, ApiError::Decode(_)), "{k:?}: {e:?}");
+        }
+        // nic se neodeslalo, ani spojení nevzniklo
+        assert_eq!(f.conns(), 0);
+        assert_eq!(c.request("GET", "/h").set("X-Ok", "a b: c").call().unwrap().into_string().unwrap(), "ok");
+    }
+
+    #[test]
+    fn stream_with_content_length_is_sent_raw() {
+        let f = fake(|_, s| {
+            while s.req().is_some() {
+                let head = format!("HTTP/1.1 200 OK\r\nX-Chunked: {}\r\nContent-Length: {}\r\n\r\n", s.chunked, s.body.len());
+                let body = s.body.clone();
+                if !(s.send(head.as_bytes()) && s.send(&body)) {
+                    break;
+                }
+            }
+        });
+        let c = client(f.port);
+        let data: Vec<u8> = (0..150_000u32).map(|i| (i % 253) as u8).collect();
+        let r = c
+            .request("PUT", "/archive")
+            .set("Content-Type", "application/x-tar")
+            .set("Content-Length", &data.len().to_string())
+            .send(std::io::Cursor::new(data.clone()))
+            .unwrap();
+        assert_eq!(r.header("x-chunked"), Some("false"));
+        let mut got = Vec::new();
+        r.into_reader().read_to_end(&mut got).unwrap();
+        assert_eq!(got, data);
+        // bez délky chunked
+        let r = c.request("PUT", "/archive").send(std::io::Cursor::new(vec![7u8; 10])).unwrap();
+        assert_eq!(r.header("x-chunked"), Some("true"));
+        assert_eq!(r.into_string().unwrap().len(), 10);
+        assert_eq!(f.conns(), 1);
+        // kratší tělo, než slibuje Content-Length -> chyba, spojení se zahodí
+        let e = c.request("PUT", "/archive").set("Content-Length", "10").send(std::io::Cursor::new(vec![1u8; 3])).err().unwrap();
+        assert!(matches!(e, ApiError::Transport(_)), "{e:?}");
+        assert_eq!(c.idle(), 0);
+    }
+
+    #[test]
+    fn short_timeout_does_not_stick_to_pooled_connection() {
+        let f = fake(|_, s| {
+            while let Some(what) = s.req() {
+                if what.ends_with("/late") {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+                if !s.send(OK) {
+                    break;
+                }
+            }
+        });
+        let c = client(f.port);
+        let r = c.request("GET", "/quick").timeout(Duration::from_millis(200)).call().unwrap();
+        assert_eq!(r.into_string().unwrap(), "ok");
+        assert_eq!(c.idle(), 1);
+        // stejné spojení z poolu, výchozí limit (2 s) – odpověď za 500 ms musí projít
+        assert_eq!(c.request("GET", "/late").call().unwrap().into_string().unwrap(), "ok");
+        assert_eq!(f.conns(), 1);
+    }
+
+    // ------------------------------------------------------------ TLS
+
+    use rustls_pki_types::pem::PemObject;
+    use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+
+    type TlsSrv = BufReader<rustls::StreamOwned<rustls::ServerConnection, TcpStream>>;
+
+    fn provider() -> Arc<rustls::crypto::CryptoProvider> {
+        Arc::new(rustls::crypto::ring::default_provider())
+    }
+
+    /// Klient s testovací CA (bez klientského certifikátu); `trust = false` = prázdná sada CA.
+    /// Certifikát serveru (testdata, platnost do roku 2126) je vystavený na IP 127.0.0.1.
+    fn tls_client(trust: bool) -> Arc<rustls::ClientConfig> {
+        let mut roots = rustls::RootCertStore::empty();
+        if trust {
+            for c in CertificateDer::pem_slice_iter(include_bytes!("testdata/ca.pem")) {
+                roots.add(c.unwrap()).unwrap();
+            }
+        }
+        let cfg = rustls::ClientConfig::builder_with_provider(provider())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        Arc::new(cfg)
+    }
+
+    /// TLS server na 127.0.0.1:0, každé spojení ve vlastním vlákně; vrací (port, počet spojení).
+    fn tls_fake<F: Fn(&mut TlsSrv) + Send + Sync + 'static>(handler: F) -> (u16, Arc<AtomicUsize>) {
+        let certs: Vec<CertificateDer<'static>> =
+            CertificateDer::pem_slice_iter(include_bytes!("testdata/server.pem")).collect::<Result<_, _>>().unwrap();
+        let key = PrivateKeyDer::from_pem_slice(include_bytes!("testdata/server-key.pem")).unwrap();
+        let cfg = Arc::new(
+            rustls::ServerConfig::builder_with_provider(provider())
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(certs, key)
+                .unwrap(),
+        );
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let conns = Arc::new(AtomicUsize::new(0));
+        let (c, handler) = (conns.clone(), Arc::new(handler));
+        std::thread::spawn(move || {
+            for s in l.incoming() {
+                let Ok(s) = s else { break };
+                c.fetch_add(1, Ordering::SeqCst);
+                let (cfg, h) = (cfg.clone(), handler.clone());
+                std::thread::spawn(move || {
+                    let conn = rustls::ServerConnection::new(cfg).unwrap();
+                    h(&mut BufReader::new(rustls::StreamOwned::new(conn, s)));
+                });
+            }
+        });
+        (port, conns)
+    }
+
+    /// Přečte hlavičky požadavku bez těla; false = klient zavřel.
+    fn tls_req(r: &mut TlsSrv) -> bool {
+        let mut seen = false;
+        loop {
+            let mut line = String::new();
+            match r.read_line(&mut line) {
+                Ok(0) | Err(_) => return false,
+                Ok(_) if line.trim_end().is_empty() => return seen,
+                Ok(_) => seen = true,
+            }
+        }
+    }
+
+    #[test]
+    fn tls_keep_alive_reuses_connection() {
+        let (port, conns) = tls_fake(|r| {
+            while tls_req(r) {
+                if r.get_mut().write_all(OK).and_then(|_| r.get_mut().flush()).is_err() {
+                    break;
+                }
+            }
+        });
+        let tls_client_for = |trust| Client::new(Arc::new(TcpConnect { port, tls: Some(tls_client(trust)) }), Duration::from_millis(500), Duration::from_secs(2));
+        let c = tls_client_for(true);
+        for _ in 0..3 {
+            assert_eq!(c.request("GET", "/t").call().unwrap().into_string().unwrap(), "ok");
+        }
+        assert_eq!(conns.load(Ordering::SeqCst), 1);
+        // bez důvěryhodné CA spojení neprojde
+        let e = tls_client_for(false).request("GET", "/t").call().err().unwrap();
+        assert!(matches!(e, ApiError::Transport(_)), "{e:?}");
+    }
+
+    #[test]
+    fn tls_shutdown_handle_unblocks_reader() {
+        // server přečte požadavek a mlčí, dokud ho klient nezavře
+        let (port, _) = tls_fake(|r| {
+            if tls_req(r) {
+                let mut b = [0u8; 16];
+                let _ = r.read(&mut b);
+            }
+        });
+        let mut st = TcpConnect { port, tls: Some(tls_client(true)) }.connect(Duration::from_millis(500)).unwrap();
+        st.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        // zápis dokončí handshake
+        st.write_all(b"GET /hold HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        st.flush().unwrap();
+        let close = st.shutdown_handle().unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 64];
+            while matches!(st.read(&mut buf), Ok(n) if n > 0) {}
+            let _ = tx.send(Instant::now());
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(rx.try_recv().is_err(), "čtení skončilo dřív než shutdown");
+        close();
+        assert!(rx.recv_timeout(Duration::from_secs(1)).is_ok(), "čtení přes TLS se po shutdown neodblokovalo");
     }
 }

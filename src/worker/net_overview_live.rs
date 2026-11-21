@@ -46,7 +46,7 @@ const DL_CLIENT: &str = "wslcd-test-net-dl-client";
 fn live_net_conn_traffic() {
     let cfg = Config::load();
     crate::docker::configure_tls(cfg.tls).expect("TLS klient");
-    let d = Docker::new(cfg.port);
+    let d = Docker::new(&crate::host::endpoint(&cfg));
     assert!(d.ping(), "engine API na portu {} neodpovídá", cfg.port);
     let guard = Cleanup(engine_cli(&cfg), [DL_WEB, DL_CLIENT]);
     let engine = &guard.0;
@@ -168,7 +168,7 @@ fn live_net_conn_traffic() {
 fn live_net_ports_in_out() {
     let cfg = Config::load();
     crate::docker::configure_tls(cfg.tls).expect("TLS klient");
-    let d = Docker::new(cfg.port);
+    let d = Docker::new(&crate::host::endpoint(&cfg));
     assert!(d.ping(), "engine API na portu {} neodpovídá", cfg.port);
     let guard = Cleanup(engine_cli(&cfg), [WEB, CLIENT]);
     let engine = &guard.0;

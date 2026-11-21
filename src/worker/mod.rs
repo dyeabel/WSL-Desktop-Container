@@ -336,7 +336,7 @@ impl Worker {
         crate::host::current(&self.cfg())
     }
     fn docker(&self) -> Docker {
-        Docker::new(self.cfg().port)
+        Docker::new(&crate::host::endpoint(&self.cfg()))
     }
 
     fn run(self, rx: Receiver<Cmd>) {
@@ -494,11 +494,11 @@ impl Worker {
     }
 
     fn wait_ping(&self, secs: u64) -> bool {
-        self.wait_ping_on(self.cfg().port, secs)
+        self.wait_ping_on(&crate::host::endpoint(&self.cfg()), secs)
     }
 
-    fn wait_ping_on(&self, port: u16, secs: u64) -> bool {
-        let d = Docker::new(port);
+    fn wait_ping_on(&self, ep: &crate::http::Endpoint, secs: u64) -> bool {
+        let d = Docker::new(ep);
         let t = Instant::now();
         while t.elapsed() < Duration::from_secs(secs) {
             if d.ping() {

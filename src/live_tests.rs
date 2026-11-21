@@ -13,6 +13,15 @@ fn distro() -> String {
     std::env::var("WSLCD_DISTRO").unwrap_or_else(|_| "Ubuntu".into())
 }
 
+/// API pro živý test: port z proměnné `var` (jinak `def`), TLS podle `WSLCD_TLS=1`
+/// (klientský certifikát z testovací kopie dat, viz `config::data_dir`), jinak bez TLS.
+fn live_api(var: &str, def: u16) -> (Docker, u16, bool) {
+    let port: u16 = std::env::var(var).ok().and_then(|p| p.parse().ok()).unwrap_or(def);
+    let tls = std::env::var("WSLCD_TLS").is_ok_and(|v| v == "1");
+    crate::docker::configure_tls(tls).expect("TLS klient");
+    (Docker::new(&crate::http::Endpoint::Tcp { port }), port, tls)
+}
+
 #[test]
 #[ignore]
 fn live_wsl_list_contains_distro() {
@@ -55,8 +64,7 @@ fn live_fs_root_lists_docker_dir() {
 fn live_podman_api() {
     use crate::engine::Engine;
     use crate::worker::RunSpec;
-    let port: u16 = std::env::var("WSLCD_PODMAN_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2376);
-    let d = Docker::new(port);
+    let (d, port, tls) = live_api("WSLCD_PODMAN_PORT", 2376);
     assert!(d.ping(), "Podman API na {port} neodpovídá");
 
     let s = d.snapshot();
@@ -74,9 +82,11 @@ fn live_podman_api() {
 
     // kontejner přes CLI (podman --url) jako v aplikaci
     let distro = distro();
-    let _ = wsl::run(&distro, None, None, &["podman", "--url", &format!("tcp://127.0.0.1:{port}"), "rm", "-f", "wslcd-pod-test"]);
+    let mut rm = Engine::Podman.cli(port, tls);
+    rm.extend(["rm", "-f", "wslcd-pod-test"].map(String::from));
+    let _ = wsl::run_owned(&distro, None, None, &rm);
     let spec = RunSpec { image: "alpine:3.20".into(), name: "wslcd-pod-test".into(), command: "sleep 120".into(), restart: "no".into(), ..Default::default() };
-    wsl::run_owned(&distro, None, None, &spec.args_for(Engine::Podman, port, false)).expect("podman run");
+    wsl::run_owned(&distro, None, None, &spec.args_for(Engine::Podman, port, tls)).expect("podman run");
     let c = d.snapshot().containers.into_iter().find(|c| c.name() == "wslcd-pod-test").expect("kontejner v API");
     assert!(c.running(), "{}", c.status);
     assert!(d.stats(&c.id, "wslcd-pod-test").is_some(), "stats");
@@ -178,12 +188,11 @@ fn live_container_detail() {
     use crate::engine::Engine;
     use crate::worker::RunSpec;
     use std::time::Duration;
-    let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
-    let d = Docker::new(port);
+    let (d, port, tls) = live_api("WSLCD_PORT", 2375);
     assert!(d.ping(), "API na {port} neodpovídá");
     let ver: serde_json::Value = d.get("/version").unwrap();
     let engine = if ver.to_string().contains("Podman") { Engine::Podman } else { Engine::Docker };
-    let cfg = crate::config::Config { distro: distro(), engine, port, ..Default::default() };
+    let cfg = crate::config::Config { distro: distro(), engine, port, tls, ..Default::default() };
     let name = "wslcd-test-detail";
     let vol = "wslcd-test-detail-vol";
     let cleanup = || {
@@ -211,7 +220,7 @@ fn live_container_detail() {
         command: r#"sh -c 'echo "hello detail"; sleep 600'"#.into(),
         ..Default::default()
     };
-    wsl::run_owned(&cfg.distro, None, None, &spec.args_for(engine, port, false)).expect("run");
+    wsl::run_owned(&cfg.distro, None, None, &spec.args_for(engine, port, tls)).expect("run");
     let det = inspect(name);
     eprintln!("inspect: {} {} {:?} ports={:?} nets={:?}", det.name, det.image, det.cmd, det.port_specs, det.networks);
     assert!(det.running, "{}", det.status);
@@ -227,7 +236,7 @@ fn live_container_detail() {
     assert_eq!(r.command, spec.command);
 
     // statistiky: ~3 vzorky, CPU z rozdílu
-    let feed = crate::worker::start_stats(eframe::egui::Context::default(), port, det.id.clone());
+    let feed = crate::worker::start_stats(eframe::egui::Context::default(), crate::http::Endpoint::Tcp { port }, det.id.clone());
     std::thread::sleep(Duration::from_millis(5500));
     let samples: Vec<_> = feed.samples.lock().unwrap().iter().copied().collect();
     drop(feed);
@@ -283,7 +292,7 @@ fn live_recreate_networks() {
     use crate::engine::Engine;
     use serde_json::{json, Value};
     let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
-    let d = Docker::new(port);
+    let d = Docker::new(&crate::http::Endpoint::Tcp { port });
     assert!(d.ping(), "API na {port} neodpovídá");
     let ver: Value = d.get("/version").unwrap();
     let engine = if ver.to_string().contains("Podman") { Engine::Podman } else { Engine::Docker };
@@ -398,12 +407,12 @@ fn live_recreate_networks() {
 #[test]
 #[ignore]
 fn live_docker_snapshot() {
-    let s = Docker::new(2375).snapshot();
+    let s = Docker::new(&crate::http::Endpoint::Tcp { port: 2375 }).snapshot();
     assert!(s.connected, "{:?}", s.error);
     assert!(s.error.is_none(), "{:?}", s.error);
     assert!(s.info.is_some());
     assert!(!s.networks.is_empty());
-    let df = Docker::new(2375).df();
+    let df = Docker::new(&crate::http::Endpoint::Tcp { port: 2375 }).df();
     assert!(df.is_some());
 }
 
@@ -426,13 +435,13 @@ fn live_autostart_roundtrip() {
 #[test]
 #[ignore]
 fn live_events_stream() {
-    let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
+    let (d, _, _) = live_api("WSLCD_PORT", 2375);
     let (tx, rx) = std::sync::mpsc::channel();
+    let ev = d.clone();
     std::thread::spawn(move || {
-        let _ = Docker::new(port).stream_events(|| {}, |e| tx.send((e.action().to_string(), e.name(), e.triggers_refresh())).is_ok());
+        let _ = ev.stream_events(|| {}, |e| tx.send((e.action().to_string(), e.name(), e.triggers_refresh())).is_ok());
     });
     std::thread::sleep(std::time::Duration::from_millis(500));
-    let d = Docker::new(port);
     d.post_json("/containers/create?name=wslcd-test-events", serde_json::json!({"Image": "docker.io/library/alpine:3.20", "Cmd": ["true"]}))
         .expect("create");
     d.delete("/containers/wslcd-test-events?force=1").expect("remove");
@@ -456,8 +465,7 @@ fn live_events_stream() {
 fn live_build_image() {
     let cfg = crate::config::Config::load();
     let distro = std::env::var("WSLCD_DISTRO").unwrap_or(cfg.distro.clone());
-    let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
-    let d = Docker::new(port);
+    let (d, port, tls) = live_api("WSLCD_PORT", 2375);
     assert!(d.ping(), "API na {port} neodpovídá");
 
     let dir = std::env::temp_dir().join(format!("wslcd-test-build-{}", std::process::id()));
@@ -470,7 +478,7 @@ fn live_build_image() {
         ..Default::default()
     };
     let mut lines = Vec::new();
-    let res = crate::worker::build::run_build(&WslHost::new(&distro), cfg.engine, port, false, &spec, |l| {
+    let res = crate::worker::build::run_build(&WslHost::new(&distro), cfg.engine, port, tls, &spec, |l| {
         eprintln!("| {l}");
         lines.push(l.to_string());
     });
@@ -568,7 +576,13 @@ fn live_tls_proxy() {
 #[ignore]
 fn live_npipe_plain() {
     let name = format!(r"\\.\pipe\wslcd_test_engine_{}", std::process::id());
-    let relay = crate::npipe::Relay::start(&name, std::sync::Arc::new(|| Ok(crate::npipe::Target::Plain(2375)))).expect("relay");
+    // WSLCD_TLS=1: relay přes TLS s klientským certifikátem (jako roura aplikace), port z WSLCD_PORT
+    let (_, port, tls) = live_api("WSLCD_PORT", 2375);
+    let target = match crate::docker::current_tls() {
+        Some(c) if tls => crate::npipe::Target::Tls(port, c),
+        _ => crate::npipe::Target::Plain(port),
+    };
+    let relay = crate::npipe::Relay::start(&name, std::sync::Arc::new(move || Ok(target.clone()))).expect("relay");
     let r = crate::npipe::tests::ping_pipe(&name);
     let version = crate::npipe::tests::get_via_pipe(&name, "/version");
     drop(relay);
@@ -606,13 +620,12 @@ fn live_fs_root_symlink_safe() {
 fn live_volume_backup_restore() {
     use crate::engine::Engine;
     use crate::worker::{volume_op_for_test, Cmd, HELPER_IMAGE};
-    let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
-    let d = Docker::new(port);
+    let (d, port, tls) = live_api("WSLCD_PORT", 2375);
     assert!(d.ping(), "API na {port} neodpovídá");
     let ver: serde_json::Value = d.get("/version").unwrap();
     let engine = if ver.to_string().contains("Podman") { Engine::Podman } else { Engine::Docker };
-    let cfg = crate::config::Config { distro: distro(), engine, port, ..Default::default() };
-    let cli = engine.cli(port, false);
+    let cfg = crate::config::Config { distro: distro(), engine, port, tls, ..Default::default() };
+    let cli = engine.cli(port, tls);
     let (src, dst, cln) = ("wslcd-test-backup", "wslcd-test-restore", "wslcd-test-clone");
     // složka s mezerou a apostrofem (uvozovky Windows v názvech nedovolí)
     let dir = std::env::temp_dir().join("wslcd-test backup it's");
@@ -725,7 +738,7 @@ fn live_compose_new_stack() {
     let cfg = crate::config::Config::load();
     let distro = std::env::var("WSLCD_DISTRO").unwrap_or(cfg.distro.clone());
     let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
-    let d = Docker::new(port);
+    let d = Docker::new(&crate::http::Endpoint::Tcp { port });
     assert!(d.ping(), "API na {port} neodpovídá");
     let cli = cfg.engine.cli(port, false);
     let project = "wslcd-test-compose";
@@ -895,7 +908,7 @@ fn live_shared_agent_speed() {
     let fresh = t.elapsed();
     let t = std::time::Instant::now();
     for _ in 0..n {
-        assert!(Docker::new(port).snapshot().connected);
+        assert!(Docker::new(&crate::http::Endpoint::Tcp { port }).snapshot().connected);
     }
     let shared = t.elapsed();
     eprintln!("{n}× snapshot: nový agent {fresh:?}, sdílený {shared:?}");
@@ -909,7 +922,7 @@ fn live_compose_label_trust() {
     if let Ok(d) = std::env::var("WSLCD_DISTRO") {
         cfg.distro = d;
     }
-    let d = Docker::new(cfg.port);
+    let d = Docker::new(&crate::host::endpoint(&cfg));
     let cli = cfg.engine.cli(cfg.port, cfg.tls);
     let run = |extra: &[&str]| {
         let mut a: Vec<String> = cli.clone();
@@ -951,7 +964,7 @@ fn live_run_env_file() {
     if let Ok(d) = std::env::var("WSLCD_DISTRO") {
         cfg.distro = d;
     }
-    let d = Docker::new(cfg.port);
+    let d = Docker::new(&crate::host::endpoint(&cfg));
     let _ = d.delete("/containers/wslcd-test-envfile?force=1");
     let spec = crate::worker::RunSpec {
         image: "alpine:3.20".into(),
@@ -983,7 +996,7 @@ fn live_stack_logs() {
     use std::time::{Duration, Instant};
     const PROJECT: &str = "wslcd-test-logs";
     let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
-    let d = Docker::new(port);
+    let d = Docker::new(&crate::http::Endpoint::Tcp { port });
     assert!(d.ping(), "API na {port} neodpovídá");
     let ver: serde_json::Value = d.get("/version").unwrap();
     let podman = ver.to_string().contains("Podman");
@@ -1018,7 +1031,7 @@ fn live_stack_logs() {
     assert_eq!(targets.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["web", "worker"]);
     let ids: Vec<String> = targets.iter().map(|t| t.0.clone()).collect();
     let buf = Arc::new(Mutex::new(LogBuf::new(MAX_LINES, Some(REORDER))));
-    let streams = Streams::start(port, buf.clone(), &ids, 500);
+    let streams = Streams::start(&crate::http::Endpoint::Tcp { port }, buf.clone(), &ids, 500);
     let t0 = Instant::now();
     while t0.elapsed() < Duration::from_secs(5) {
         std::thread::sleep(Duration::from_millis(100));
@@ -1088,7 +1101,7 @@ fn live_stack_logs_attach_later() {
     const PROJECT: &str = "wslcd-test-follow";
     let cfg = crate::config::Config::load();
     crate::docker::configure_tls(cfg.tls).expect("tls");
-    let d = Docker::new(cfg.port);
+    let d = Docker::new(&crate::host::endpoint(&cfg));
     assert!(d.ping(), "API na {} neodpovídá", cfg.port);
     let cli = cfg.engine.cli(cfg.port, cfg.tls);
     let distro = std::env::var("WSLCD_DISTRO").unwrap_or(cfg.distro.clone());
@@ -1114,7 +1127,7 @@ fn live_stack_logs_attach_later() {
     assert_eq!(t0.len(), 1, "{t0:?}");
     let buf = Arc::new(Mutex::new(LogBuf::new(MAX_LINES, Some(REORDER))));
     let ids: Vec<String> = t0.iter().map(|t| t.0.clone()).collect();
-    let mut streams = Streams::start(cfg.port, buf.clone(), &ids, 50);
+    let mut streams = Streams::start(&crate::host::endpoint(&cfg), buf.clone(), &ids, 50);
     std::thread::sleep(Duration::from_secs(2));
     // druhá služba naběhne až teď – připojit stejně jako okno logů (attach_new)
     start("b");
@@ -1122,7 +1135,7 @@ fn live_stack_logs_attach_later() {
     let t1 = logbuf::stack_targets(&d.snapshot().containers, PROJECT);
     let new: Vec<_> = t1.iter().filter(|t| !ids.contains(&t.0)).cloned().collect();
     assert_eq!(new.len(), 1, "{t1:?}");
-    streams.add(cfg.port, buf.clone(), &new[0].0, 1, 50);
+    streams.add(&crate::host::endpoint(&cfg), buf.clone(), &new[0].0, 1, 50);
     let a_before = buf.lock().unwrap().iter().filter(|l| l.src == 0).count();
     std::thread::sleep(Duration::from_secs(3));
     {
@@ -1155,7 +1168,7 @@ fn live_switch_primary() {
     unsafe { std::env::set_var("WSLCD_DATA_DIR", &data) };
     let mut cfg = crate::config::Config { distro: a.clone(), port: 2376, tls: true, keep_alive: false, ..Default::default() };
     let engine_on_api = |port: u16| -> String {
-        let v: serde_json::Value = Docker::new(port).get("/version").expect("/version");
+        let v: serde_json::Value = Docker::new(&crate::http::Endpoint::Tcp { port }).get("/version").expect("/version");
         v["Components"][0]["Name"].as_str().unwrap_or("").to_string()
     };
     for target in [b.clone(), a.clone()] {

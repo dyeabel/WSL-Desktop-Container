@@ -203,7 +203,8 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
             }
             paused = false;
             let c = cfg.read().map(|c| c.clone()).unwrap_or_default();
-            let (host, port) = (crate::host::current(&c), c.port);
+            let host = crate::host::current(&c);
+            let ep = host.engine_endpoint(&c);
             let mut next = NetData::default();
             let t = started.elapsed().as_secs_f64();
             match host.run(Privilege::Root, None, &["sh", "-c", OVERVIEW_SCRIPT]) {
@@ -227,7 +228,7 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
                 Err(e) => next.win_error = Some(e),
             }
             if tr.load(Ordering::Relaxed) {
-                next.containers = container_traffic(&Docker::new(port), &mut ctr, t);
+                next.containers = container_traffic(&Docker::new(&ep), &mut ctr, t);
             } else if let Ok(g) = buf.lock() {
                 next.containers = g.containers.clone();
             }
@@ -424,8 +425,8 @@ pub fn start_ns_feed(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>, id: O
                 continue;
             }
             let c = cfg.read().map(|c| c.clone()).unwrap_or_default();
-            let (host, port) = (crate::host::current(&c), c.port);
-            let d = Docker::new(port);
+            let host = crate::host::current(&c);
+            let d = Docker::new(&host.engine_endpoint(&c));
             let ids: Result<Vec<String>, String> = match &id {
                 Some(i) => Ok(vec![i.clone()]),
                 None => d

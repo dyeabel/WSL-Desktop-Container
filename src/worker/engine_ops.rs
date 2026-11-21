@@ -351,7 +351,7 @@ impl Worker {
             ));
         }
         crate::docker::configure_tls(cfg.tls)?;
-        if self.wait_ping_on(cfg.port, 25) {
+        if self.wait_ping_on(&crate::host::endpoint(cfg), 25) {
             Ok((out, true))
         } else {
             Err(tf!(

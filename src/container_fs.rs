@@ -540,7 +540,7 @@ fn list_archive(d: &Docker, id: &str, dir: &str) -> Result<Listing, String> {
     if !st.is_dir() {
         return Err(tf!("{dir}: není adresář", "{dir}: not a directory"));
     }
-    let resp = d.request("GET", &archive_url(id, &contents_path(dir))).call().map_err(|e| path_err(dir, e.into()))?;
+    let resp = d.request("GET", &archive_url(id, &contents_path(dir))).call().map_err(|e| path_err(dir, e))?;
     let (entries, truncated) = list_tar(resp.into_reader(), MAX_ARCHIVE_LIST);
     Ok(Listing { cwd: dir.to_string(), entries, via_archive: true, truncated })
 }
@@ -585,7 +585,7 @@ pub fn read_text(d: &Docker, id: &str, path: &str) -> Result<(String, String), S
         if st.size as usize > MAX_EDIT {
             return Err(t!("Soubor je větší než 2 MB – stáhni ho do Windows", "The file is larger than 2 MB – download it to Windows").into());
         }
-        let resp = d.request("GET", &archive_url(id, &p)).call().map_err(|e| path_err(&p, e.into()))?;
+        let resp = d.request("GET", &archive_url(id, &p)).call().map_err(|e| path_err(&p, e))?;
         let mut ar = tar::Archive::new(resp.into_reader());
         let mut ents = ar.entries().map_err(|e| e.to_string())?;
         let mut e = ents.next().ok_or_else(|| tf!("{p}: prázdný archiv", "{p}: empty archive"))?.map_err(|e| e.to_string())?;
@@ -668,7 +668,7 @@ fn put_archive(d: &Docker, id: &str, dir: &str, body: impl Read, len: u64) -> Re
         .set("Content-Length", &len.to_string())
         .send(body)
         .map(|_| ())
-        .map_err(|e| path_err(dir, e.into()))
+        .map_err(|e| path_err(dir, e))
 }
 
 /// Uloží text do souboru (tar s jedním souborem přes `PUT archive`); práva a vlastník
@@ -1058,7 +1058,7 @@ pub fn download(d: &Docker, id: &str, paths: &[String], dest: &Path) -> Result<E
         if p == "/" {
             return Err(t!("Celý kořenový adresář nelze stáhnout", "The whole root directory cannot be downloaded").into());
         }
-        let resp = d.request("GET", &archive_url(id, &p)).call().map_err(|e| path_err(&p, e.into()))?;
+        let resp = d.request("GET", &archive_url(id, &p)).call().map_err(|e| path_err(&p, e))?;
         let r = extract_tar(resp.into_reader(), dest)?;
         total.files += r.files;
         total.dirs += r.dirs;
@@ -1354,7 +1354,9 @@ mod tests {
     #[ignore]
     fn live_container_fs() {
         let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
-        let d = Docker::new(port);
+        // WSLCD_TLS=1: klientský certifikát z testovací kopie dat
+        crate::docker::configure_tls(std::env::var("WSLCD_TLS").is_ok_and(|v| v == "1")).expect("TLS klient");
+        let d = Docker::new(&crate::http::Endpoint::Tcp { port });
         assert!(d.ping(), "API na {port} neodpovídá");
         const NAME: &str = "wslcd-test-cfs";
         let cleanup = || {

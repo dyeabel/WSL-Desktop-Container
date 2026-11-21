@@ -615,22 +615,22 @@ pub struct Streams {
 
 impl Streams {
     /// `ids[i]` se zapisuje jako zdroj `i`.
-    pub fn start(port: u16, buf: Arc<Mutex<LogBuf>>, ids: &[String], tail: u32) -> Self {
+    pub fn start(ep: &crate::http::Endpoint, buf: Arc<Mutex<LogBuf>>, ids: &[String], tail: u32) -> Self {
         let mut s = Self { stop: Arc::new(AtomicBool::new(false)), closers: Vec::new(), handles: Vec::new() };
         for (src, id) in ids.iter().enumerate() {
-            s.add(port, buf.clone(), id, src as u16, tail);
+            s.add(ep, buf.clone(), id, src as u16, tail);
         }
         s
     }
 
     /// Připojí další kontejner za běhu (zdroj `src`) – ostatní streamy běží dál.
-    pub fn add(&mut self, port: u16, buf: Arc<Mutex<LogBuf>>, id: &str, src: u16, tail: u32) {
+    pub fn add(&mut self, ep: &crate::http::Endpoint, buf: Arc<Mutex<LogBuf>>, id: &str, src: u16, tail: u32) {
         {
             let opts = LogOpts::follow(tail);
             self.closers.push(opts.closer.clone());
-            let (buf, stop, id) = (buf, self.stop.clone(), id.to_string());
+            let (buf, stop, id, ep) = (buf, self.stop.clone(), id.to_string(), ep.clone());
             let h = std::thread::Builder::new().name(format!("logs-{src}")).spawn(move || {
-                let d = Docker::new(port);
+                let d = Docker::new(&ep);
                 let res = d.stream_logs(&id, &opts, |chunk, complete| {
                     if stop.load(Ordering::Relaxed) {
                         return false;

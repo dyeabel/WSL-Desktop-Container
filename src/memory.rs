@@ -705,7 +705,7 @@ cpu  1 2 3 4
     fn live_memory_breakdown() {
         let cfg = crate::config::Config::load();
         crate::docker::configure_tls(cfg.tls).expect("TLS");
-        let d = crate::docker::Docker::new(cfg.port);
+        let d = crate::docker::Docker::new(&crate::host::endpoint(&cfg));
         let snap = d.snapshot();
         let rows: Vec<crate::docker::StatRow> =
             snap.containers.iter().filter(|c| c.running()).filter_map(|c| d.stats(&c.id, &c.name())).collect();

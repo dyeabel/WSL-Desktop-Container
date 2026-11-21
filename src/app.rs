@@ -444,17 +444,21 @@ impl App {
         self.logs = Some(self.spawn_logs(id, name, 1000));
     }
 
+    /// Endpoint API enginu podle aktuální konfigurace (bez zámku výchozí port 2375 jako dřív).
+    pub fn engine_endpoint(&self) -> crate::http::Endpoint {
+        self.cfg.read().map(|c| crate::host::endpoint(&c)).unwrap_or(crate::http::Endpoint::Tcp { port: 2375 })
+    }
+
     /// Spustí streamování posledních `tail` řádků logu (a dalších) do nového `LogView`.
     pub fn spawn_logs(&self, id: String, name: String, tail: u32) -> LogView {
-        let port = self.cfg.read().map(|c| c.port).unwrap_or(2375);
-        LogView::single(port, id, name, tail)
+        LogView::single(self.engine_endpoint(), id, name, tail)
     }
 
     /// Okno se sloučenými živými logy všech kontejnerů compose projektu.
     pub fn open_stack_logs(&mut self, project: &str) {
-        let port = self.cfg.read().map(|c| c.port).unwrap_or(2375);
+        let ep = self.engine_endpoint();
         let targets = crate::logbuf::stack_targets(&self.snap.containers, project);
-        self.logs = Some(LogView::stack(port, project.to_string(), targets));
+        self.logs = Some(LogView::stack(ep, project.to_string(), targets));
     }
 
     fn drain(&mut self) {

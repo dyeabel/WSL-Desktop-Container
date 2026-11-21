@@ -76,7 +76,7 @@ fn live_lite_distro() {
     assert_eq!(cfg.distro, NAME);
     assert!(data.join("distros").join(NAME).join("ext4.vhdx").exists(), "distribuce v datové složce (portable)");
     crate::docker::configure_tls(true).unwrap();
-    let d = Docker::new(PORT);
+    let d = Docker::new(&crate::http::Endpoint::Tcp { port: PORT });
     // drž distribuci naživu (jinak ji WSL po chvíli bez relace uspí)
     let keep = Keep(wsl::keepalive(NAME).unwrap());
     assert!(wait_api(&d, 30).is_some(), "API po instalaci");
