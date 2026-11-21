@@ -144,7 +144,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let distro = app.distro();
     let engine = app.cfg.read().map(|c| c.engine).unwrap_or_default();
     let ename = engine.name();
-    header(ui, "WSL engine", t!("Řízení WSL distribucí a kontejnerového enginu (Docker / Podman)", "Manage WSL distributions and the container engine (Docker / Podman)"));
+    let local = app.kind() == crate::host::HostKind::Local;
+    header(ui, if local { "Engine" } else { "WSL engine" }, t!("Řízení WSL distribucí a kontejnerového enginu (Docker / Podman)", "Manage WSL distributions and the container engine (Docker / Podman)"));
 
     // --- kontejnerový engine ---
     let dstate = app.current_distro().map(|d| d.state.clone()).unwrap_or_else(|| t!("nenalezena", "not found").into());
@@ -152,6 +153,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let port = app.cfg.read().map(|c| c.port).unwrap_or(2375);
     let tls = app.cfg.read().map(|c| c.tls).unwrap_or(false);
     let npipe_on = app.cfg.read().map(|c| c.npipe).unwrap_or(false);
+    let caps = app.caps();
     security_hint(app, ui, tls);
     card(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -194,7 +196,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             } else if accent_button(ui, &tf!("\u{E3D0} Spustit {ename}", "\u{E3D0} Start {ename}")).clicked() {
                 app.send(Cmd::EngineStart);
             }
-            if ui.button(t!("\u{E330} Uspat distribuci", "\u{E330} Put to sleep")).on_hover_text(t!("Ukončí distribuci a uvolní RAM", "Terminates the distribution and frees RAM")).clicked() {
+            if caps.distros && ui.button(t!("\u{E330} Uspat distribuci", "\u{E330} Put to sleep")).on_hover_text(t!("Ukončí distribuci a uvolní RAM", "Terminates the distribution and frees RAM")).clicked() {
                 app.ask(
                     tf!("Uspat {distro}?", "Put {distro} to sleep?"),
                     t!(
@@ -210,6 +212,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         });
 
         // instalace a nastavení (sbalené, pokud je vše v pořádku)
+        if caps.engine_install || caps.shim || caps.api_tls {
         ui.add_space(6.0);
         ui.separator();
         // pro ladění/screenshoty: WSLCD_DEBUG_EXPAND=1
@@ -219,6 +222,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             .default_open(open_default)
             .show(ui, |ui| {
                 ui.add_space(4.0);
+                if caps.engine_install {
                 ui.horizontal(|ui| {
                     ui.label(muted("Engine:"));
                     // přepínač Docker | Podman
@@ -271,7 +275,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 if engine == crate::engine::Engine::Podman {
                     ui.label(muted(t!("Podman běží jako služba wslcd-podman-api; CLI v aplikaci i docker shim volají podman --url na stejné API. Pro compose se při instalaci přidá docker-compose jako provider.", "Podman runs as the wslcd-podman-api service; the in-app CLI and the docker shim call podman --url against the same API. For compose, docker-compose is added as the provider during installation.")).small());
                 }
+                }
 
+                if caps.shim {
                 // příkaz docker ve Windows (shim v PATH)
                 ui.add_space(8.0);
                 ui.label(RichText::new(t!("Příkaz docker ve Windows", "The docker command in Windows")).strong());
@@ -399,7 +405,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     }
                     _ => {}
                 }
+                }
 
+                if caps.api_tls {
                 // zabezpečení API (TLS s klientským certifikátem)
                 ui.add_space(8.0);
                 ui.label(RichText::new(t!("Zabezpečení API", "API security")).strong());
@@ -454,16 +462,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     })
                     .small(),
                 );
+                }
             });
+        }
     });
 
+    if caps.distros {
     // --- WSL distribuce ---
     section(ui, t!("WSL distribuce", "WSL distributions"));
     ui.horizontal(|ui| {
         if accent_button(ui, t!("\u{E3D4} Přidat distribuci…", "\u{E3D4} Add distribution…")).clicked() {
             super::settings::open_add_distro(app);
         }
-        if ui.button(t!("\u{E010} Importovat…", "\u{E010} Import…")).on_hover_text(t!("wsl --import ze souboru .tar / .vhdx", "wsl --import from a .tar / .vhdx file")).clicked() {
+        if caps.vm_disk && ui.button(t!("\u{E010} Importovat…", "\u{E010} Import…")).on_hover_text(t!("wsl --import ze souboru .tar / .vhdx", "wsl --import from a .tar / .vhdx file")).clicked() {
             super::distros::open_import(app);
         }
         if ui.button(t!("\u{E094} Obnovit", "\u{E094} Refresh")).clicked() {
@@ -552,6 +563,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             ask_primary(app, &d.name, Some(e));
                         }
                     }
+                    if caps.vm_disk {
                     ui.separator();
                     if ui.button(t!("\u{EAF0} Exportovat…", "\u{EAF0} Export…")).clicked() {
                         ui.close_menu();
@@ -560,6 +572,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     if ui.button(t!("\u{E29E} Disk a komprimace…", "\u{E29E} Disk and compacting…")).clicked() {
                         ui.close_menu();
                         super::distros::open_disk(app, &d.name);
+                    }
                     }
                     ui.separator();
                     if ui.button(RichText::new(t!("\u{E4A6} Odebrat distribuci…", "\u{E4A6} Remove distribution…")).color(theme::red())).clicked() {
@@ -571,9 +584,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
           });
         }
     });
+    }
 
     // --- daemon.json (jen Docker) ---
-    if engine != crate::engine::Engine::Docker {
+    if engine != crate::engine::Engine::Docker || !caps.daemon_json {
         return;
     }
     section(ui, t!("Konfigurace Docker démona (/etc/docker/daemon.json)", "Docker daemon configuration (/etc/docker/daemon.json)"));

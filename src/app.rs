@@ -43,6 +43,31 @@ impl Page {
             Page::Settings => t!("\u{E270}  Nastavení", "\u{E270}  Settings"),
         }
     }
+
+    /// Název podle hostitele: bez WSL se stránka enginu nejmenuje „WSL engine“.
+    pub fn label_for(self, kind: crate::host::HostKind) -> &'static str {
+        match (self, kind) {
+            (Page::Engine, crate::host::HostKind::Local) => t!("\u{EB02}  Engine", "\u{EB02}  Engine"),
+            _ => self.label(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::HostKind;
+
+    #[test]
+    fn engine_label_wsl_unchanged() {
+        assert_eq!(Page::Engine.label_for(HostKind::Wsl), Page::Engine.label());
+        assert_eq!(Page::Dashboard.label_for(HostKind::Local), Page::Dashboard.label());
+    }
+
+    #[test]
+    fn engine_label_local() {
+        assert_eq!(Page::Engine.label_for(HostKind::Local), "\u{EB02}  Engine");
+    }
 }
 
 pub struct Toast {
@@ -408,6 +433,15 @@ impl App {
         self.toasts.push(Toast { ok, text: text.into(), until: 0.0 });
     }
 
+    /// Schopnosti aktuálního hostitele; UI podle nich skrývá funkce jen pro WSL.
+    pub fn caps(&self) -> crate::host::Caps {
+        self.cfg.read().map(|c| crate::host::current(&c).caps()).unwrap_or(crate::host::Caps::WSL)
+    }
+
+    pub fn kind(&self) -> crate::host::HostKind {
+        self.cfg.read().map(|c| crate::host::current(&c).kind()).unwrap_or(crate::host::HostKind::Wsl)
+    }
+
     pub fn distro(&self) -> String {
         self.cfg.read().map(|c| c.distro.clone()).unwrap_or_default()
     }
@@ -740,7 +774,7 @@ impl App {
 
     fn nav_button(&mut self, ui: &mut egui::Ui, p: Page) {
         let sel = self.page == p;
-        let text = RichText::new(p.label()).size(15.0);
+        let text = RichText::new(p.label_for(self.kind())).size(15.0);
         let text = if sel { text.color(theme::strong_text()) } else { text };
         let r = ui.add(
             egui::Button::new(text)

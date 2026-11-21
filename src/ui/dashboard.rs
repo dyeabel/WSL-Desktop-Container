@@ -87,7 +87,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
     if !need_engine(app, ui) {
         // paměť WSL se měří i bez enginu
-        super::memory::show(app, ui);
+        if app.caps().vm_memory {
+            super::memory::show(app, ui);
+        }
         return;
     }
 
@@ -108,12 +110,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     cleanup_apply(app, pick);
 
-    super::memory::show(app, ui);
+    if app.caps().vm_memory {
+        super::memory::show(app, ui);
+    }
     containers_perf(app, ui);
 }
 
 /// Tlačítko s nabídkou „Uklidit“ (přehled disku a pruh upozornění); vrací vybranou položku.
-pub fn cleanup_menu(ui: &mut egui::Ui) -> Option<u8> {
+pub fn cleanup_menu(ui: &mut egui::Ui, vm_memory: bool) -> Option<u8> {
     let mut pick = None;
     ui.menu_button(t!("\u{EC54} Uklidit \u{E136}", "\u{EC54} Clean up \u{E136}"), |ui| {
         ui.set_min_width(260.0);
@@ -128,7 +132,8 @@ pub fn cleanup_menu(ui: &mut egui::Ui) -> Option<u8> {
         .iter()
         .enumerate()
         {
-            if ui.button(*label).clicked() {
+            // položka 5 (uvolnění paměti WSL) jen tam, kde hostitel umí vm_memory
+            if (i != 5 || vm_memory) && ui.button(*label).clicked() {
                 pick = Some(i as u8);
                 ui.close_menu();
             }
@@ -385,7 +390,7 @@ fn disk_tile(app: &mut App, ui: &mut egui::Ui, side_by_side: bool) -> Option<u8>
         ui.horizontal(|ui| {
             ui.label(muted(t!("Disk", "Disk")));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                pick = cleanup_menu(ui);
+                pick = cleanup_menu(ui, app.caps().vm_memory);
             });
         });
         let Some(df) = app.df.clone() else {
@@ -433,7 +438,7 @@ fn disk_tile(app: &mut App, ui: &mut egui::Ui, side_by_side: bool) -> Option<u8>
         if let Some(d) = &disk {
             ui.add_space(6.0);
             let mut extra = Vec::new();
-            if let Some((_, size)) = &d.vhdx {
+            if let Some((_, size)) = d.vhdx.as_ref().filter(|_| app.caps().vm_disk) {
                 extra.push(tf!("VHDX {}", "VHDX {}", fmt_bytes(*size)));
             }
             if let Some(w) = &d.drive {

@@ -43,6 +43,14 @@ pub(crate) fn wsl_args(distro: &str, req: &ExecReq) -> Vec<String> {
 }
 
 impl Host for WslHost {
+    fn kind(&self) -> super::HostKind {
+        super::HostKind::Wsl
+    }
+
+    fn caps(&self) -> super::Caps {
+        super::Caps::WSL
+    }
+
     fn label(&self) -> String {
         self.distro.clone()
     }

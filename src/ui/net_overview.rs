@@ -386,6 +386,7 @@ fn ports(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(6.0);
 
     // publikované porty
+    let distros_cap = app.caps().distros;
     let list = bindings(&app.snap.containers);
     let conflicts = netinfo::container_conflicts(&list);
     let win_ok = d.updated.is_some() && d.win_error.is_none();
@@ -395,7 +396,7 @@ fn ports(app: &mut App, ui: &mut egui::Ui) {
         .zip(conflicts)
         .map(|(b, c)| {
             let w = (win_ok && !mirror).then(|| netinfo::windows_state(&b.p, &d.win_listen, own));
-            let dc = netinfo::distro_conflicts(&b.p, &d.distros.engine_netns, &d.distros.others);
+            let dc = if distros_cap { netinfo::distro_conflicts(&b.p, &d.distros.engine_netns, &d.distros.others) } else { Vec::new() };
             (b, c, w, dc)
         })
         .collect();
@@ -477,7 +478,9 @@ fn ports(app: &mut App, ui: &mut egui::Ui) {
     if let Some(e) = &d.win_error {
         ui.label(RichText::new(tf!("Porty Windows nelze zjistit: {e}", "Cannot read Windows ports: {e}")).color(theme::yellow()).small());
     }
-    distro_scan_note(ui, &d.distros);
+    if distros_cap {
+        distro_scan_note(ui, &d.distros);
+    }
 
     // naslouchající sockety v distribuci
     section(ui, t!("Naslouchající sockety v distribuci", "Listening sockets in the distribution"));
@@ -492,10 +495,14 @@ fn ports(app: &mut App, ui: &mut egui::Ui) {
         socks.retain(|s| s.1 != ListenKind::ContainerProxy);
     }
     ui.horizontal_wrapped(|ui| {
-        ui.label(muted(t!("ss -ltnup jako root (kořenový síťový prostor, bez procesů v kontejnerech).", "ss -ltnup as root (root network namespace, without processes inside containers).")).small());
+        if app.caps().root_sampling {
+            ui.label(muted(t!("ss -ltnup jako root (kořenový síťový prostor, bez procesů v kontejnerech).", "ss -ltnup as root (root network namespace, without processes inside containers).")).small());
+        }
         ui.checkbox(&mut app.net.all_listeners, tf!("i porty kontejnerů ({hidden})", "container ports too ({hidden})"));
     });
-    sort_items(ui.ctx(), "netlisten", &mut socks, |(s, k), col| match col {
+    // bez root_sampling (ss -p jako root) není sloupec PROCES; indexy dalších sloupců se posunou
+    let rs = app.caps().root_sampling;
+    sort_items(ui.ctx(), "netlisten", &mut socks, |(s, k), col| match if rs || col < 2 { col } else { col + 1 } {
         1 => SortKey::text(&s.proto),
         2 => SortKey::text(s.procs.join(",")),
         3 => SortKey::num(*k as u8),
@@ -507,7 +514,8 @@ fn ports(app: &mut App, ui: &mut egui::Ui) {
         (t!("PROCES", "PROCESS"), W::Fr(1.6)),
         (t!("CO TO JE", "WHAT IT IS"), W::Fr(2.0)),
     ];
-    table_sort(ui, "netlisten", &cols, Sort { key: "netlisten", cols: &[0, 1, 2, 3] }, |mut body| {
+    let cols: Vec<_> = cols.into_iter().enumerate().filter(|(i, _)| rs || *i != 2).map(|(_, c)| c).collect();
+    table_sort(ui, "netlisten", &cols, Sort { key: "netlisten", cols: if rs { &[0, 1, 2, 3] } else { &[0, 1, 2] } }, |mut body| {
         for (s, k) in &socks {
             body.row(30.0, |mut r| {
                 r.col(|ui| {
@@ -516,9 +524,11 @@ fn ports(app: &mut App, ui: &mut egui::Ui) {
                 r.col(|ui| {
                     ui.label(muted(&s.proto));
                 });
+                if rs {
                 r.col(|ui| {
                     ui.label(if s.procs.is_empty() { muted("—") } else { RichText::new(s.process()) });
                 });
+                }
                 r.col(|ui| {
                     match k {
                         ListenKind::EngineApi => badge(ui, t!("API enginu", "engine API"), theme::accent()),

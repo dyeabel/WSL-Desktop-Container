@@ -74,7 +74,71 @@ pub struct ExecOut {
     pub stderr: Vec<u8>,
 }
 
+/// Druh hostitele.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostKind {
+    Wsl,
+    Local,
+}
+
+/// Co hostitel umí; UI podle toho skrývá funkce, které dávají smysl jen ve WSL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Caps {
+    /// seznam a správa distribucí, průvodce přidáním distribuce
+    pub distros: bool,
+    /// instalace, API a odinstalace enginu
+    pub engine_install: bool,
+    pub api_tls: bool,
+    pub daemon_json: bool,
+    /// VmmemWSL a uvolňování paměti
+    pub vm_memory: bool,
+    /// VHDX, export, import a kompaktace
+    pub vm_disk: bool,
+    pub wslconfig: bool,
+    /// shim `docker` v PATH
+    pub shim: bool,
+    /// pojmenovaná roura Dockeru
+    pub npipe: bool,
+    pub ipv6_relay: bool,
+    /// sloupce ze `ss -p` jako root
+    pub root_sampling: bool,
+    /// přepínač „Pracovat jako root“ v Souborech
+    pub files_root: bool,
+    /// portable a WSLCD Lite
+    pub lite: bool,
+    pub contexts: bool,
+}
+
+impl Caps {
+    pub const WSL: Caps = Caps::all(true);
+    #[allow(dead_code)] // použije místní (Linux) hostitel
+    pub const LOCAL: Caps = Caps::all(false);
+
+    const fn all(v: bool) -> Caps {
+        Caps {
+            distros: v,
+            engine_install: v,
+            api_tls: v,
+            daemon_json: v,
+            vm_memory: v,
+            vm_disk: v,
+            wslconfig: v,
+            shim: v,
+            npipe: v,
+            ipv6_relay: v,
+            root_sampling: v,
+            files_root: v,
+            lite: v,
+            contexts: v,
+        }
+    }
+}
+
 pub trait Host: Send + Sync {
+    fn kind(&self) -> HostKind;
+
+    fn caps(&self) -> Caps;
+
     #[allow(dead_code)] // použije se u dalších hostitelů (Linux, Windows)
     fn label(&self) -> String;
 
@@ -186,6 +250,31 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
+    /// Všechny příznaky v poli (destrukturace hlídá, že žádný nechybí).
+    fn flags(c: Caps) -> [bool; 14] {
+        let Caps {
+            distros, engine_install, api_tls, daemon_json, vm_memory, vm_disk, wslconfig, shim,
+            npipe, ipv6_relay, root_sampling, files_root, lite, contexts,
+        } = c;
+        [
+            distros, engine_install, api_tls, daemon_json, vm_memory, vm_disk, wslconfig, shim,
+            npipe, ipv6_relay, root_sampling, files_root, lite, contexts,
+        ]
+    }
+
+    #[test]
+    fn wsl_caps_all_true() {
+        let h = wsl::WslHost::new("x");
+        assert_eq!(h.kind(), HostKind::Wsl);
+        assert_eq!(h.caps(), Caps::WSL);
+        assert!(flags(h.caps()).iter().all(|v| *v));
+    }
+
+    #[test]
+    fn local_caps_all_false() {
+        assert!(flags(Caps::LOCAL).iter().all(|v| !*v));
+    }
+
     struct FakeHost {
         out: Mutex<Option<ExecOut>>,
         seen_stdin: Mutex<Option<Vec<u8>>>,
@@ -201,6 +290,12 @@ mod tests {
     }
 
     impl Host for FakeHost {
+        fn kind(&self) -> HostKind {
+            HostKind::Wsl
+        }
+        fn caps(&self) -> Caps {
+            Caps::WSL
+        }
         fn label(&self) -> String {
             "fake".into()
         }
@@ -227,6 +322,12 @@ mod tests {
     struct TrackingHost;
 
     impl Host for TrackingHost {
+        fn kind(&self) -> HostKind {
+            HostKind::Wsl
+        }
+        fn caps(&self) -> Caps {
+            Caps::WSL
+        }
         fn label(&self) -> String {
             "tracking-test-host".into()
         }
