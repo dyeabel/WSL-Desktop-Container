@@ -242,10 +242,32 @@ fn test_data_dir() -> &'static PathBuf {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
         let portable = std::env::var_os("WSLCD_PORTABLE_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(TEST_PORTABLE_DIR));
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("test-data").join(std::process::id().to_string());
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("test-data");
+        // složky dřívějších běhů obsahují kopii klientského klíče TLS – staré se mažou;
+        // mladší než hodina můžou patřit souběžně běžícím testům
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        remove_old_test_data(&root, &std::process::id().to_string(), cutoff);
+        let dir = root.join(std::process::id().to_string());
         copy_test_data(&portable.join("data"), &dir);
         dir
     })
+}
+
+/// Smaže v `root` složky jiných běhů testů (název = PID, jiný než `own`) změněné před `cutoff`.
+#[cfg(test)]
+fn remove_old_test_data(root: &std::path::Path, own: &str, cutoff: std::time::SystemTime) {
+    let Ok(rd) = std::fs::read_dir(root) else { return };
+    for e in rd.flatten() {
+        let name = e.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name == own || name.parse::<u32>().is_err() {
+            continue;
+        }
+        let old = e.metadata().ok().filter(|m| m.is_dir()).and_then(|m| m.modified().ok()).is_some_and(|t| t < cutoff);
+        if old {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
 }
 
 /// Zkopíruje z datové složky jen `config.json` a `tls\*` (ne distribuce, historii ani cache).
@@ -351,6 +373,28 @@ mod migrate_tests {
         super::copy_test_data(&src, &dst);
         assert!(dst.join("config.json").is_file() && dst.join("tls").join("cert.pem").is_file());
         assert!(!dst.join("distros").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn old_test_data_is_removed() {
+        use std::time::{Duration, SystemTime};
+        let base = std::env::temp_dir().join(format!("wslcd-testdata-clean-{}", std::process::id()));
+        for d in ["111", "222", "own", "keep-me"] {
+            std::fs::create_dir_all(base.join(d).join("tls")).unwrap();
+        }
+        std::fs::write(base.join("333"), "soubor, ne složka").unwrap();
+        // všechno je mladší než hodina -> nic se nesmaže
+        super::remove_old_test_data(&base, "own", SystemTime::now() - Duration::from_secs(3600));
+        for d in ["111", "222", "own", "keep-me", "333"] {
+            assert!(base.join(d).exists(), "{d}");
+        }
+        // hranice v budoucnosti: staré jsou všechny, smažou se jen cizí PID složky
+        super::remove_old_test_data(&base, "222", SystemTime::now() + Duration::from_secs(60));
+        assert!(!base.join("111").exists());
+        for d in ["222", "own", "keep-me", "333"] {
+            assert!(base.join(d).exists(), "{d}");
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 }

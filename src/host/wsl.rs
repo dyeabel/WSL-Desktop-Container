@@ -57,14 +57,23 @@ impl Host for WslHost {
                 None => cmd.stdin(Stdio::null()).output().map_err(|e| e.to_string())?,
                 Some(input) => {
                     let mut child = cmd.stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
-                    if let Some(mut si) = child.stdin.take() {
-                        // předčasně skončený proces (broken pipe): zajímá nás jeho výstup
-                        match si.write_all(input) {
-                            Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => return Err(e.to_string().into()),
-                            _ => {}
+                    let si = child.stdin.take();
+                    // vstup píše vlastní vlákno, ať se nezablokuje: proces s velkým výstupem
+                    // by jinak čekal na vyčtení stdout, zatímco my čekáme na zápis do stdin
+                    std::thread::scope(|s| {
+                        let writer = s.spawn(move || match si {
+                            // `si` se po zápisu zahodí -> proces dostane EOF
+                            Some(mut si) => si.write_all(input),
+                            None => Ok(()),
+                        });
+                        let out = child.wait_with_output().map_err(|e| e.to_string());
+                        match writer.join() {
+                            // předčasně skončený proces (broken pipe): zajímá nás jeho výstup
+                            Ok(Err(e)) if e.kind() != std::io::ErrorKind::BrokenPipe => Err(HostError::from(e.to_string())),
+                            Ok(_) => Ok(out?),
+                            Err(_) => Err(HostError::from("zápis vstupu procesu selhal".to_string())),
                         }
-                    }
-                    child.wait_with_output().map_err(|e| e.to_string())?
+                    })?
                 }
             };
             Ok::<_, HostError>(ExecOut {
@@ -164,11 +173,13 @@ mod tests {
             let h = host();
             // `finish` výstup neořezává (jako dosavadní wsl::run), proto s koncem řádku
             let e = h.run(Privilege::User, None, &["sh", "-c", "echo out; echo err >&2; exit 3"]).unwrap_err();
-            assert_eq!(e, HostError::Failed { code: 3, output: "err
-".into() });
+            assert_eq!(e, HostError::Failed { code: 3, output: "err\n".into() });
             assert_eq!(h.run(Privilege::Root, None, &["id", "-u"]).unwrap().trim(), "0");
             assert_eq!(h.run(Privilege::User, Some("/tmp"), &["pwd"]).unwrap().trim(), "/tmp");
             assert_eq!(h.run_stdin(Privilege::User, &["cat"], "x\ny").unwrap(), "x\ny");
+            // vstup větší než roura, proces ho zároveň vypisuje: zápis i čtení musí běžet souběžně
+            let big = "0123456789abcdef".repeat(64 * 1024);
+            assert_eq!(h.run_stdin(Privilege::User, &["cat"], &big).unwrap().len(), big.len());
 
             let mut lines = Vec::new();
             let req = ExecReq::new(&["printf", "a\\rb\\nc\\n"]);
