@@ -140,6 +140,9 @@ mod tests {
         }
         assert!(!SYSTEMCTL.contains("[["), "jen POSIX sh (busybox ash)");
         assert!(SYSTEMCTL.contains("cd / && exec env -i"), "služby z / s čistým prostředím jako v systemd");
+        assert!(SYSTEMCTL.contains("setsid sh -c"), "služby ve vlastní relaci");
+        assert!(SYSTEMCTL.contains("podman start --all --filter restart-policy=always"), "vestavěný podman-restart");
+        assert!(SYSTEMCTL.contains("start_unit podman-restart.service"), "kontejnery při bootu až po enginu");
         assert!(PREPARE.contains("command = /usr/local/bin/systemctl --boot"));
         assert!(!SYSTEMCTL.contains('\r') && !PREPARE.contains('\r'), "bez CRLF");
     }

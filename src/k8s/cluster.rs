@@ -14,6 +14,9 @@ pub const NAME: &str = "wslcd-k3s";
 pub const NETWORK: &str = "wslcd-k3s";
 pub const VOLUME: &str = "wslcd-k3s-data";
 pub const READY_TIMEOUT: Duration = Duration::from_secs(90);
+/// Restart policy uzlu: Docker ho po startu démona spustí sám, Podman přes `podman-restart`
+/// (ve WSLCD Lite vestavěné v náhradě systemctl).
+pub const RESTART: &str = "unless-stopped";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClusterState {
@@ -54,7 +57,8 @@ pub fn create_body(image: &str, api_port: u16, range: (u16, u16)) -> Value {
         "HostConfig": {
             "Privileged": true,
             "CgroupnsMode": "host",
-            "RestartPolicy": { "Name": "no" },
+            // po restartu WSL se cluster rozběhne sám, ručně zastavený zůstane stát
+            "RestartPolicy": { "Name": RESTART },
             "NetworkMode": NETWORK,
             "Binds": [format!("{VOLUME}:/var/lib/rancher/k3s")],
             "Tmpfs": { "/run": "", "/var/run": "" },
@@ -174,6 +178,8 @@ pub fn create(d: &Docker, image: &str, api_port: u16, range: (u16, u16), mut pro
 }
 
 pub fn start(d: &Docker) -> Result<(), String> {
+    // cluster založený starší verzí měl RestartPolicy „no“ – sjednotit (chyba nevadí)
+    let _ = d.post_json(&format!("/containers/{}/update", enc(NAME)), json!({ "RestartPolicy": { "Name": RESTART } }));
     d.container_action(NAME, "start").map(|_| ()).map_err(|e| {
         let e = e.to_string();
         port_conflict_message(&e).unwrap_or(e)
@@ -273,6 +279,7 @@ mod tests {
         let b = create_body(DEFAULT_IMAGE, 6443, (30080, 30099));
         assert_eq!(b["HostConfig"]["Privileged"], true);
         assert_eq!(b["HostConfig"]["CgroupnsMode"], "host");
+        assert_eq!(b["HostConfig"]["RestartPolicy"]["Name"], "unless-stopped", "po restartu WSL se rozběhne sám");
         assert_eq!(b["HostConfig"]["NetworkMode"], NETWORK);
         assert_eq!(b["HostConfig"]["PortBindings"]["6443/tcp"][0], json!({ "HostIp": "127.0.0.1", "HostPort": "6443" }));
         assert_eq!(b["HostConfig"]["PortBindings"].as_object().unwrap().len(), 21);

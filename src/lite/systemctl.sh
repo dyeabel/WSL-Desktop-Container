@@ -63,10 +63,26 @@ main_pid() {
 
 is_active() { [ "$(main_pid "$1")" != 0 ]; }
 
+# Vestavěný podman-restart (Alpine jednotku nemá): po startu spustí kontejnery s restart
+# policy always a unless-stopped. Ručně zastavený unless-stopped zůstane stát – pozná se
+# podle FinishedAt: po pádu/uspání distribuce je nulový, po `podman stop` skutečný čas.
+podman_restart() {
+  command -v podman >/dev/null 2>&1 || return 0
+  podman start --all --filter restart-policy=always
+  for c in $(podman ps -a -q --filter restart-policy=unless-stopped --filter status=exited --filter status=created); do
+    case "$(podman inspect --format '{{.State.FinishedAt}}' "$c")" in 0001-01-01*) podman start "$c" ;; esac
+  done
+  return 0
+}
+
 start_unit() {
   u=$1
   is_active "$u" && return 0
   cmd=$(get_last "$u" ExecStart)
+  if [ -z "$cmd" ] && [ "$u" = podman-restart.service ] && [ -z "$(unit_files "$u")" ]; then
+    (podman_restart >> "$LOGS/podman-restart.log" 2>&1 &)
+    return 0
+  fi
   if [ -z "$cmd" ]; then
     # jednotky distribucí, které tu nejsou (docker.socket, containerd, podman-restart…)
     [ -z "$(unit_files "$u")" ] && return 0
@@ -136,10 +152,12 @@ boot() {
   for f in "$STATE"/wslcd-dns.service "$STATE"/*; do
     [ -e "$f" ] || continue
     u=$(basename "$f")
-    case "$u" in wslcd-tls-proxy.service) continue ;; esac
+    case "$u" in wslcd-tls-proxy.service|podman-restart.service) continue ;; esac
     start_unit "$u"
   done
   [ -e "$STATE/wslcd-tls-proxy.service" ] && start_unit wslcd-tls-proxy.service
+  # kontejnery až po enginu
+  [ -e "$STATE/podman-restart.service" ] && start_unit podman-restart.service
   return 0
 }
 
@@ -168,7 +186,7 @@ case "$cmd" in
   start) for u in $units; do start_unit "$u" || rc=1; done ;;
   stop) for u in $units; do stop_unit "$u"; done ;;
   restart|try-restart|reload-or-restart) for u in $units; do stop_unit "$u"; start_unit "$u" || rc=1; done ;;
-  enable) for u in $units; do [ -n "$(unit_files "$u")" ] && touch "$STATE/$u"; [ "$now" = 1 ] && { start_unit "$u" || rc=1; }; done ;;
+  enable) for u in $units; do { [ -n "$(unit_files "$u")" ] || [ "$u" = podman-restart.service ]; } && touch "$STATE/$u"; [ "$now" = 1 ] && { start_unit "$u" || rc=1; }; done ;;
   disable) for u in $units; do rm -f "$STATE/$u"; [ "$now" = 1 ] && stop_unit "$u"; done ;;
   is-active) for u in $units; do if is_active "$u"; then [ "$quiet" = 1 ] || echo active; else [ "$quiet" = 1 ] || echo inactive; rc=3; fi; done ;;
   is-enabled) for u in $units; do if [ -e "$STATE/$u" ]; then echo enabled; else echo disabled; rc=1; fi; done ;;
