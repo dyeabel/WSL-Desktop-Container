@@ -25,6 +25,8 @@ pub struct Config {
     pub autostart_engine: bool,
     /// `docker` shim při prvním příkazu spustí aplikaci (schovanou) a engine, když neběží
     pub shim_autostart: bool,
+    /// Při ukončení aplikace vypnout WSL (`wsl --shutdown`), aby nezabíralo paměť
+    pub shutdown_wsl_on_quit: bool,
     /// Křížek okno jen schová do oznamovací oblasti
     pub close_to_tray: bool,
     /// Minimalizace schová okno do oznamovací oblasti
@@ -172,6 +174,7 @@ impl Default for Config {
             keep_alive: true,
             autostart_engine: false,
             shim_autostart: true,
+            shutdown_wsl_on_quit: false,
             close_to_tray: true,
             minimize_to_tray: true,
             start_hidden: false,

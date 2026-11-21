@@ -93,7 +93,6 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
     );
-    portrelay::app().stop_all();
-    history::flush_on_exit();
+    tray::cleanup_on_exit(config::Config::load().shutdown_wsl_on_quit);
     r
 }

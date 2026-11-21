@@ -49,10 +49,21 @@ struct Handles {
     term: MenuItem,
     explorer: MenuItem,
     quit: MenuItem,
+    quit_wsl: MenuItem,
     icon_on: Icon,
     icon_off: Icon,
     last: Option<EngineStatus>,
     shared: Arc<Shared>,
+}
+
+/// Úklid při ukončení aplikace; `shutdown_wsl` navíc `wsl --shutdown` – zastaví celé WSL
+/// (všechny distribuce) a VmmemWSL vrátí paměť Windows.
+pub fn cleanup_on_exit(shutdown_wsl: bool) {
+    crate::portrelay::app().stop_all();
+    crate::history::flush_on_exit();
+    if shutdown_wsl {
+        let _ = crate::wsl::shutdown();
+    }
 }
 
 thread_local! {
@@ -214,6 +225,7 @@ pub fn init(
     let close_tray = CheckMenuItem::with_id("close_tray", t!("Zavírat do oznamovací oblasti", "Close to tray"), true, c.close_to_tray, None);
     let min_tray = CheckMenuItem::with_id("min_tray", t!("Minimalizovat do oznamovací oblasti", "Minimize to tray"), true, c.minimize_to_tray, None);
     let quit = MenuItem::with_id("quit", t!("Ukončit", "Quit"), true, None);
+    let quit_wsl = MenuItem::with_id("quit_wsl", t!("Ukončit a vypnout WSL (uvolnit paměť)", "Quit and shut down WSL (free memory)"), true, None);
 
     let menu = Menu::new();
     menu.append_items(&[
@@ -238,6 +250,7 @@ pub fn init(
         &min_tray,
         &PredefinedMenuItem::separator(),
         &quit,
+        &quit_wsl,
     ])
     .map_err(|e| e.to_string())?;
 
@@ -270,6 +283,7 @@ pub fn init(
             term,
             explorer,
             quit,
+            quit_wsl,
             icon_on,
             icon_off,
             last: None,
@@ -340,8 +354,12 @@ pub fn init(
                 ctx.request_repaint();
             }
             "quit" => {
-                crate::portrelay::app().stop_all();
-                crate::history::flush_on_exit();
+                let shutdown = cfg.read().map(|c| c.shutdown_wsl_on_quit).unwrap_or(false);
+                cleanup_on_exit(shutdown);
+                std::process::exit(0)
+            }
+            "quit_wsl" => {
+                cleanup_on_exit(true);
                 std::process::exit(0)
             }
             _ => {}
@@ -470,6 +488,7 @@ pub fn retranslate() {
             h.close_tray.set_text(t!("Zavírat do oznamovací oblasti", "Close to tray"));
             h.min_tray.set_text(t!("Minimalizovat do oznamovací oblasti", "Minimize to tray"));
             h.quit.set_text(t!("Ukončit", "Quit"));
+            h.quit_wsl.set_text(t!("Ukončit a vypnout WSL (uvolnit paměť)", "Quit and shut down WSL (free memory)"));
             // stavové texty, tooltip a podnabídka kontejnerů se přepočítají
             h.last = None;
             h.built = None;

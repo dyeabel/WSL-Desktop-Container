@@ -399,6 +399,16 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 ui.end_row();
                 ui.label("");
                 ui.checkbox(
+                    &mut d.shutdown_wsl_on_quit,
+                    t!("Při ukončení aplikace vypnout WSL (uvolnit paměť)", "Shut down WSL when the app quits (free memory)"),
+                )
+                .on_hover_text(t!(
+                    "Ukončení aplikace zavolá wsl --shutdown: zastaví všechny distribuce (i ty, se kterými aplikace nepracuje) a VmmemWSL vrátí paměť Windows. Jednorázově to umí i „Ukončit a vypnout WSL“ v nabídce ikony v oznamovací oblasti.",
+                    "Quitting the app runs wsl --shutdown: stops all distributions (including ones the app does not manage) and VmmemWSL returns memory to Windows. The tray menu item “Quit and shut down WSL” does this one time."
+                ));
+                ui.end_row();
+                ui.label("");
+                ui.checkbox(
                     &mut d.shim_autostart,
                     t!(
                         "Příkaz docker ve Windows spustí aplikaci a engine, když neběží",

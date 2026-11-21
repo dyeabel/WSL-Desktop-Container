@@ -487,6 +487,11 @@ but the engine is not, the shim asks it to start the engine. When both are up th
 This applies only to the app's primary target (not to other contexts). Turn it off in *Settings*
 (“The docker command in Windows starts the app and the engine…”) or with `WSLCD_SHIM_AUTOSTART=0`.
 
+**Quit and shut down WSL:** the tray menu item *Quit and shut down WSL (free memory)* quits the app
+and runs `wsl --shutdown`, so VmmemWSL returns its memory to Windows. This stops **all**
+distributions, not only the app's. The setting *Shut down WSL when the app quits* does the same on
+every quit. The next `docker` command starts everything again (see Auto-start).
+
 Debugging: `WSLCD_SHIM_DEBUG=1` prints the executed command (and whether the fast path was used); `WSLCD_ENGINE=podman|docker`,
 `WSLCD_PORT` and `WSLCD_DISTRO` override the settings.
 
