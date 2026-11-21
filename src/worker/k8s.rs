@@ -206,7 +206,10 @@ impl Worker {
 
     fn k8s_apply_rules(&self, d: &Docker, ns: &str, set: &RuleSet) -> Result<usize, String> {
         let pods = model::parse_pods(&cluster::kubectl(d, &["get", "pods", "-n", ns, "-o", "json"])?)?;
-        let gws = model::parse_node_gateways(&cluster::kubectl(d, &["get", "nodes", "-o", "json"])?)?;
+        let mut gws = model::parse_node_gateways(&cluster::kubectl(d, &["get", "nodes", "-o", "json"])?)?;
+        if let Some(g) = cluster::network_gateway(d) {
+            gws.push(format!("{g}/32"));
+        }
         let manifests = policy::to_manifests(ns, set, label_key(&pods), &gws);
         cluster::kubectl(d, &["delete", "networkpolicy", "-n", ns, "-l", &format!("{MANAGED_LABEL}=1"), "--ignore-not-found"])?;
         if !manifests.is_empty() {

@@ -195,6 +195,16 @@ pub fn delete(d: &Docker) -> Result<(), String> {
     ignore_404(d.delete(&format!("/networks/{}", enc(NETWORK))))
 }
 
+/// Brána sítě `wslcd-k3s` v enginu (`10.89.0.1` Podman, `172.x.0.1` Docker): z ní přichází
+/// provoz z Windows na NodePort (WSL relay → port enginu → DNAT), a kube-router ho vyhodnocuje
+/// ještě před SNAT – pravidlo „localhost“ ji proto musí povolit.
+pub fn network_gateway(d: &Docker) -> Option<String> {
+    let v: Value = d.get(&format!("/networks/{}", enc(NETWORK))).ok()?;
+    let from_ipam = v.pointer("/IPAM/Config").and_then(|c| c.as_array()).and_then(|c| c.iter().find_map(|x| x.get("Gateway")?.as_str().map(str::to_string)));
+    let from_subnets = v.pointer("/subnets/0/gateway").and_then(|g| g.as_str()).map(str::to_string);
+    from_ipam.or(from_subnets).filter(|g| g.parse::<std::net::Ipv4Addr>().is_ok())
+}
+
 /// PID kontejneru uzlu v distribuci (pro cestu k síťovým namespace podů).
 pub fn node_pid(d: &Docker) -> Option<u32> {
     let v: Value = d.get(&format!("/containers/{}/json", enc(NAME))).ok()?;

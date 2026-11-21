@@ -81,3 +81,14 @@ pub fn set_primary(cfg: Config, distro: &str, engine: Option<Engine>, sleep_old:
     let c = w.cfg();
     (r, log, c)
 }
+
+/// Operace Kubernetes laboratoře stejnou cestou jako z UI; vrací výsledek a zprávy pro UI.
+pub fn k8s(cfg: Config, op: super::K8sOp) -> (Result<String, String>, Vec<super::K8sMsg>) {
+    assert!(crate::config::isolated(), "testkit potřebuje WSLCD_DATA_DIR");
+    let (msg, rx) = std::sync::mpsc::channel();
+    let (cmd, _c) = std::sync::mpsc::channel();
+    let w = Worker { ctx: eframe::egui::Context::default(), cfg: Arc::new(RwLock::new(cfg)), msg, cmd, shared: Arc::new(Shared::default()) };
+    let r = w.k8s_op(op);
+    let msgs = rx.try_iter().filter_map(|m| if let super::Msg::K8s(k) = m { Some(k) } else { None }).collect();
+    (r, msgs)
+}

@@ -6,6 +6,8 @@
 pub mod cluster;
 pub mod flows;
 pub mod kubeconfig;
+#[cfg(test)]
+mod live_k8s;
 pub mod model;
 pub mod policy;
 pub mod template;
