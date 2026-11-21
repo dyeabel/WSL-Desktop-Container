@@ -6,7 +6,7 @@
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\package.ps1 [-NoBuild] [-Sign] [-AllowUntrusted]
 #
-# -Sign podepíše wsl-container-desktop.exe a docker.exe přes scripts\sign.ps1 (způsob podpisu viz tam –
+# -Sign podepíše wsl-container-desktop.exe a docker.exe (wslcd.exe je jeho kopie) přes scripts\sign.ps1 (způsob podpisu viz tam –
 # proměnné WSLCD_SIGN_*). ZIP sám Authenticode podpis nést nemůže; ověřuje se SHA-256.
 param([switch]$NoBuild, [switch]$Sign, [switch]$AllowUntrusted)
 # nativní příkazy (cargo, git) píší průběh na stderr – úspěch se kontroluje přes $LASTEXITCODE
@@ -38,6 +38,8 @@ function New-Package([string]$zipName, [bool]$portable) {
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
     New-Item -ItemType Directory -Force $stage | Out-Null
     foreach ($e in $exes) { Copy-Item $e $stage }
+    # wslcd.exe = kopie (už podepsaného) docker.exe shimu; chová se jako docker, jen míří vždy na engine aplikace
+    Copy-Item 'targetelease\docker.exe' (Join-Path $stage 'wslcd.exe')
     Copy-Item README.md $stage
     if (Test-Path LICENSE) { Copy-Item LICENSE $stage }
     if ($portable) {

@@ -86,7 +86,7 @@ ShortDescription: Native desktop app to manage Docker or Podman running in WSL 2
 Description: |-
   WSL Container Desktop manages a Docker or Podman engine inside a WSL 2 distribution: containers, images,
   volumes, networks, compose stacks, logs, files, engine installation with TLS-secured API,
-  and a docker.exe command for Windows that forwards to the engine in WSL.
+  and a docker.exe command (and its wslcd.exe twin) for Windows that forwards to the engine in WSL.
 Tags:
 - docker
 - podman
