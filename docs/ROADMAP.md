@@ -43,6 +43,10 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
   ranges, weekly summary.
 - Per-container memory / CPU / PIDs limits from the UI (live `update`, no restart), limits in the
   performance table with a near-limit badge.
+- Kubernetes lab: k3s in the engine, environments (template FE + API + DB, YAML folder), flow
+  map from conntrack, rules → NetworkPolicy with connection tests, portable kubeconfig.
+- WSLCD Lite: Alpine distribution without systemd (POSIX `systemctl` replacement), Docker or
+  Podman with TLS, API ~1–2 s after a cold start.
 
 ## Recommended next steps
 

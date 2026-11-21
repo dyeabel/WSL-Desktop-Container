@@ -18,6 +18,7 @@ pub enum Page {
     Volumes,
     Networks,
     Compose,
+    Kubernetes,
     Files,
     Events,
     Engine,
@@ -25,7 +26,7 @@ pub enum Page {
 }
 
 impl Page {
-    pub const MAIN: [Page; 8] = [Page::Dashboard, Page::Containers, Page::Images, Page::Volumes, Page::Networks, Page::Compose, Page::Files, Page::Events];
+    pub const MAIN: [Page; 9] = [Page::Dashboard, Page::Containers, Page::Images, Page::Volumes, Page::Networks, Page::Compose, Page::Kubernetes, Page::Files, Page::Events];
     pub const BOTTOM: [Page; 2] = [Page::Engine, Page::Settings];
     pub fn label(self) -> &'static str {
         match self {
@@ -35,6 +36,7 @@ impl Page {
             Page::Volumes => t!("\u{E2A0}  Volume", "\u{E2A0}  Volumes"),
             Page::Networks => t!("\u{E408}  Sítě", "\u{E408}  Networks"),
             Page::Compose => "\u{E466}  Compose",
+            Page::Kubernetes => "\u{E1B6}  Kubernetes",
             Page::Files => t!("\u{E260}  Soubory", "\u{E260}  Files"),
             Page::Events => t!("\u{E0CE}  Události", "\u{E0CE}  Events"),
             Page::Engine => "\u{EB02}  WSL engine",
@@ -98,6 +100,8 @@ pub struct App {
     pub compose_dir: String,
     /// stránka Compose: nový stack, editor souborů, škálování
     pub compose: ui::compose::ComposeState,
+    /// stránka Kubernetes (cluster, prostředí, mapa toků, pravidla)
+    pub k8s: ui::k8s::K8sUi,
     pub daemon_json: String,
     pub daemon_loaded: bool,
     pub cfg_draft: Config,
@@ -260,6 +264,7 @@ impl App {
             net: Default::default(),
             compose_dir: String::new(),
             compose: ui::compose::ComposeState::default(),
+            k8s: ui::k8s::K8sUi::default(),
             daemon_json: String::new(),
             daemon_loaded: false,
             cfg_draft,
@@ -500,6 +505,7 @@ impl App {
                 Msg::Inspect(id, r) => ui::detail::on_inspect(self, id, r),
                 Msg::VolumeSizes(s) => self.vol.sizes = s,
                 Msg::Stack(m) => ui::compose::on_msg(self, m),
+                Msg::K8s(m) => ui::k8s::on_msg(self, m),
                 Msg::DistroDisk(name, r) => ui::distros::on_disk(self, name, r),
                 Msg::ContainerFs(view, m) => ui::container_files::on_msg(self, view, m),
                 Msg::MemoryFreed { auto, result } => ui::memory::on_freed(self, auto, result),
@@ -615,8 +621,11 @@ impl App {
                                 let mut pick = None;
                                 let mut sleep = None;
                                 ui.horizontal(|ui| {
-                                    ui.add_space(20.0);
-                                    let btn = egui::Button::new(RichText::new(format!("{detail}  \u{E136}")).small().color(theme::muted())).frame(false);
+                                    // zarovnat s přehledem pod ním (celá šířka karty)
+                                    ui.spacing_mut().button_padding.x = 0.0;
+                                    // počet kontejnerů je v přehledu níž – tady jen distribuce
+                                    let label = if distro_running { distro.clone() } else { detail.clone() };
+                                    let btn = egui::Button::new(RichText::new(format!("{label}  \u{E136}")).small().color(theme::muted())).frame(false);
                                     egui::menu::menu_custom_button(ui, btn, |ui| {
                                         ui.label(RichText::new(t!("Primární distribuce", "Primary distribution")).small().color(theme::muted()));
                                         let remembered = self.cfg.read().map(|c| c.distro_engines.clone()).unwrap_or_default();
@@ -659,9 +668,24 @@ impl App {
                                 // chyba API při běžícím enginu (dřív ve stavové liště)
                                 if let Some(e) = self.snap.error.as_ref().filter(|_| connected) {
                                     ui.horizontal(|ui| {
-                                        ui.add_space(20.0);
                                         ui.label(RichText::new(format!("\u{E4E0} {e}")).small().color(theme::red())).on_hover_text(e);
                                     });
+                                }
+                                // CPU a RAM celé WSL VM (poslední vzorek paměti); klik = Přehled
+                                if distro_running {
+                                    let g = self.shared.memory.lock().ok().and_then(|m| m.glance);
+                                    if let Some(g) = g {
+                                        let info = self.snap.info.as_ref().filter(|_| connected);
+                                        let x = ui::GlanceCtx {
+                                            containers: info.map(|i| (i.containers_running, i.containers)),
+                                            ncpu: info.map(|i| i.ncpu),
+                                            k8s: self.snap.containers.iter().find(|c| c.name() == crate::k8s::cluster::NAME).map(|c| c.state == "running"),
+                                        };
+                                        ui.add_space(6.0);
+                                        if ui::glance(ui, &g, &x).clicked() {
+                                            self.page = Page::Dashboard;
+                                        }
+                                    }
                                 }
                                 if let Some(n) = pick {
                                     ui::engine::ask_primary(self, &n, None);
@@ -713,8 +737,16 @@ impl App {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.add_space(6.0);
-                            ui.label(RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).small().color(theme::muted()))
-                                .on_hover_text(format!("WSL Container Desktop {}", env!("CARGO_PKG_VERSION")));
+                            // testovací build z jiné větve než main: verze + commit (build.rs)
+                            let build = env!("WSLCD_BUILD");
+                            let (label, hover) = match build.split_once('@') {
+                                Some((branch, commit)) => (
+                                    format!("v{} · {commit}", env!("CARGO_PKG_VERSION")),
+                                    format!("WSL Container Desktop {} – {branch} @ {commit}", env!("CARGO_PKG_VERSION")),
+                                ),
+                                None => (format!("v{}", env!("CARGO_PKG_VERSION")), format!("WSL Container Desktop {}", env!("CARGO_PKG_VERSION"))),
+                            };
+                            ui.label(RichText::new(label).small().color(theme::muted())).on_hover_text(hover);
                             ui::activity::indicator(self, ui);
                         });
                     });
@@ -922,6 +954,7 @@ impl eframe::App for App {
                     Page::Volumes => ui::volumes::show(self, ui),
                     Page::Networks => ui::networks::show(self, ui),
                     Page::Compose => ui::compose::show(self, ui),
+                    Page::Kubernetes => ui::k8s::show(self, ui),
                     Page::Files => ui::files::show(self, ui),
                     Page::Events => ui::events::show(self, ui),
                     Page::Engine => ui::engine::show(self, ui),

@@ -22,9 +22,11 @@ const ENGINE_PROCS: [&str; 10] =
 
 /// Příkaz pro jedno volání `wsl -e sh -c …`: /proc/meminfo, oddělovač, RSS procesů
 /// a čítače rozhraní (provoz VM do historie).
-pub const SAMPLE_SCRIPT: &str = "cat /proc/meminfo; echo @@ps; ps -e -o comm=,rss= 2>/dev/null; echo @@net; cat /proc/net/dev 2>/dev/null; true";
-/// Minimální vzorek – /proc/meminfo a čítače rozhraní.
-pub const SAMPLE_SCRIPT_MIN: &str = "cat /proc/meminfo; echo @@net; cat /proc/net/dev 2>/dev/null; true";
+/// Na konci řádek `cpu` z /proc/stat (vytížení CPU VM v kartě enginu).
+pub const SAMPLE_SCRIPT: &str =
+    "cat /proc/meminfo; echo @@ps; ps -e -o comm=,rss= 2>/dev/null; echo @@net; cat /proc/net/dev 2>/dev/null; echo @@cpu; head -n 1 /proc/stat; true";
+/// Minimální vzorek – /proc/meminfo, čítače rozhraní a řádek `cpu`.
+pub const SAMPLE_SCRIPT_MIN: &str = "cat /proc/meminfo; echo @@net; cat /proc/net/dev 2>/dev/null; echo @@cpu; head -n 1 /proc/stat; true";
 
 pub fn now_secs() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
@@ -106,7 +108,29 @@ pub fn parse_sample(out: &str) -> Option<(MemInfo, Option<u64>)> {
 /// Kumulované bajty eth0 VM (rx, tx) z části `@@net` výstupu vzorku.
 pub fn parse_net(out: &str) -> Option<(u64, u64)> {
     let (_, dev) = out.split_once("@@net")?;
+    let dev = dev.split_once("@@cpu").map_or(dev, |(a, _)| a);
     crate::netinfo::parse_proc_net_dev(dev).into_iter().find(|i| i.name == "eth0").map(|i| (i.rx, i.tx))
+}
+
+/// Kumulované tiky CPU (zaneprázdněno, celkem) z řádku `cpu` v části `@@cpu` výstupu vzorku.
+/// Celkem = user..steal (guest je už v user); nečinnost = idle + iowait.
+pub fn parse_cpu(out: &str) -> Option<(u64, u64)> {
+    let (_, rest) = out.split_once("@@cpu")?;
+    let line = rest.lines().find(|l| l.starts_with("cpu "))?;
+    let v: Vec<u64> = line.split_whitespace().skip(1).take(8).map(|x| x.parse().unwrap_or(0)).collect();
+    if v.len() < 4 {
+        return None;
+    }
+    let total: u64 = v.iter().sum();
+    let idle = v[3] + v.get(4).copied().unwrap_or(0);
+    Some((total - idle, total))
+}
+
+/// Vytížení CPU (0–100 %) mezi dvěma vzorky `parse_cpu`; None bez přírůstku (nebo po restartu VM).
+pub fn cpu_pct(prev: (u64, u64), cur: (u64, u64)) -> Option<f64> {
+    let total = cur.1.checked_sub(prev.1).filter(|t| *t > 0)?;
+    let busy = cur.0.checked_sub(prev.0)?;
+    Some((busy as f64 / total as f64 * 100.0).clamp(0.0, 100.0))
 }
 
 /// Velikost z .wslconfig (`8GB`, `4096MB`, `512 KB`, `2G`, bajty bez jednotky).
@@ -293,6 +317,22 @@ impl History {
     }
 }
 
+/// Krátký souhrn posledního vzorku pro kartu enginu v bočním panelu.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Glance {
+    /// použito procesy v Linuxu
+    pub used: u64,
+    /// MemTotal v Linuxu (≈ limit WSL)
+    pub total: u64,
+    pub cache: u64,
+    /// VmmemWSL – kolik RAM Windows si celá WSL VM opravdu bere
+    pub vmmem: Option<u64>,
+    /// fyzická RAM Windows (0 = neznámá)
+    pub ram: u64,
+    /// vytížení CPU VM (%) od předchozího vzorku
+    pub cpu: Option<f64>,
+}
+
 /// Stav sdílený workerem a UI.
 #[derive(Debug, Default)]
 pub struct MemState {
@@ -300,6 +340,10 @@ pub struct MemState {
     pub now: Option<MemNow>,
     /// čas posledního vzorku (unix s)
     pub last_sample: f64,
+    /// souhrn pro kartu enginu
+    pub glance: Option<Glance>,
+    /// tiky CPU z předchozího vzorku (zaneprázdněno, celkem)
+    pub cpu_ticks: Option<(u64, u64)>,
 }
 
 // ---------------------------------------------------------------- Windows
@@ -552,6 +596,34 @@ mod tests {
 
     fn mi(total: u64, free: u64, cached: u64) -> MemInfo {
         MemInfo { total, free, cached, ..Default::default() }
+    }
+
+    #[test]
+    fn cpu_from_proc_stat() {
+        let a = "MemTotal: 1 kB
+@@net
+eth0: 1 2
+@@cpu
+cpu  100 0 50 800 50 0 0 0 0 0
+";
+        let b = "@@cpu
+cpu  200 0 100 1100 50 0 0 0 0 0
+";
+        let (pa, pb) = (parse_cpu(a).unwrap(), parse_cpu(b).unwrap());
+        assert_eq!(pa, (150, 1000));
+        assert_eq!(pb, (300, 1450));
+        // 150 zaneprázdněných tiků ze 450
+        assert!((cpu_pct(pa, pb).unwrap() - 33.333).abs() < 0.01);
+        // restart VM (čítače klesnou) ani nulový přírůstek nedají číslo
+        assert_eq!(cpu_pct(pb, pa), None);
+        assert_eq!(cpu_pct(pa, pa), None);
+        assert_eq!(parse_cpu("cpu  1 2 3 4"), None);
+        // část @@cpu nesmí rozbít čítače rozhraní
+        assert_eq!(parse_net("@@net
+  eth0: 10 0 0 0 0 0 0 0 20 0 0 0 0 0 0 0
+@@cpu
+cpu  1 2 3 4
+"), Some((10, 20)));
     }
 
     #[test]

@@ -7,6 +7,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/icon_art.rs");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=assets/icon");
+    build_label();
 
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let ico_path = out.join("wsl-container-desktop.ico");
@@ -21,4 +22,29 @@ fn main() {
         res.set("LegalCopyright", "");
         res.compile().expect("kompilace Windows resource (rc.exe)");
     }
+}
+
+/// `WSLCD_BUILD` = „větev@commit“ u buildu z jiné větve než main/master, jinak prázdné
+/// (aplikace pak ukazuje jen verzi). Bez gitu (zdrojový balíček) je prázdné.
+fn build_label() {
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let label = match (git(&["rev-parse", "--abbrev-ref", "HEAD"]), git(&["rev-parse", "--short", "HEAD"])) {
+        (Some(branch), Some(commit)) if !matches!(branch.as_str(), "main" | "master" | "HEAD") => {
+            if let Some(dir) = git(&["rev-parse", "--git-dir"]) {
+                println!("cargo:rerun-if-changed={dir}/HEAD");
+                println!("cargo:rerun-if-changed={dir}/refs/heads/{branch}");
+            }
+            format!("{branch}@{commit}")
+        }
+        _ => String::new(),
+    };
+    println!("cargo:rustc-env=WSLCD_BUILD={label}");
 }

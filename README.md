@@ -51,6 +51,7 @@ plumbing between Windows and WSL. **WSL Container Desktop provides exactly that 
 | **Volumes** | create, remove, prune, **size**, which containers use a volume, browse its content (as root), *run a container with this volume*, **back up to `.tar.gz`, restore, clone** |
 | **Networks** (Sítě) | create (bridge, ipvlan, macvlan), remove, prune, subnets, attached containers |
 | **Compose** | stacks detected from container labels: up, stop, start, restart, pull, build, ps, logs, down, **scale a service**; **new stack from a template**; **built-in editor for the compose file and `.env` with validation** (Notepad still available); start a stack from any folder (Windows or Linux path) |
+| **Kubernetes** | local **single-node k3s** as a container in the primary engine (Docker or Podman): create, start, stop, delete; **environments** (namespaces) from a **FE + API + DB template** (nginx → PostgREST → PostgreSQL) or a **folder of YAML**; pods, services, *Expose on localhost* (NodePort 30080–30099); **flow map** of real connections (conntrack in the node, incl. short HTTP requests); **rules** “who may talk to whom” → NetworkPolicy (enforced by k3s), with **Test connection**; kubeconfig in the app data folder (portable); load a local image into the cluster |
 | **Files** (Soubory) | file browser for the distribution: navigation, bookmarks, *New* menu (folder, file), *Upload from Windows* menu (files, folder), rename and move, delete, chmod, built-in text editor (Ctrl+S), download to Windows, *Work as root* mode; bulk actions appear only when something is selected, row actions live in a per-row ⋯ menu |
 | **WSL engine** | start, stop and restart the engine, put the distribution to sleep, terminal; distribution list (start, sleep, default, **make primary** – moves the API and optionally puts the previous one to sleep, ⋯ *primary with Docker / Podman*, **export, disk & compacting, remove with confirmation**), **import**; *Install & setup* section: Docker / Podman switch, install, API setup, uninstall, `docker` command in PATH, `DOCKER_HOST`, **API security (TLS)**; editor for `/etc/docker/daemon.json` (Docker only) |
 | **Settings** (Nastavení) | language (Czech / English), **theme (dark / light / follow Windows)**, primary distribution (switched on the *WSL engine* page) and *Add distribution* wizard, API port, refresh interval (window shown / in the background), keep-alive, engine autostart, restoring containers that were running last time, **start with Windows**, **Windows notifications**, tray behaviour, `docker` command in PATH, global `.wslconfig` (memory, CPU, swap, `vmIdleTimeout`, `networkingMode`) |
@@ -70,6 +71,36 @@ a column header (ascending → descending → off); directories stay on top in f
 - **sleep infinity** keeps images without their own service (alpine, ubuntu, debian, …) running.
 - A few seconds after start the app checks the container state and reports immediately
   exited containers including the exit code.
+
+### Kubernetes lab
+
+*Kubernetes* runs k3s as the container `wslcd-k3s` in the primary engine (network `wslcd-k3s`,
+volume `wslcd-k3s-data`, API on `127.0.0.1:6443`, exposed services on `localhost:30080–30099`).
+The app talks to the cluster with `kubectl` inside the node, so nothing has to be installed on
+Windows; the kubeconfig (context `wslcd`) is written to `<data>\kube\config` – use it with
+`$env:KUBECONFIG`. An *environment* is a namespace labelled `wslcd.lab=1`.
+
+- **Flow map** – connections from the node's conntrack, grouped by component (label `app`), laid
+  out by `tier` (frontend → backend → database); live connections solid, recent (~2 min) grey,
+  allowed-but-idle paths dashed green.
+- **Rules** – “allow A → B : port” plus *deny everything else* become NetworkPolicies labelled
+  `wslcd.managed=1` (DNS stays allowed). *localhost (Windows)* allows NodePort traffic (the engine
+  network gateway and the node's pod gateway). Other policies are shown read-only.
+- **Test connection** – a TCP connect from inside the source pod's network namespace
+  (`nsenter` in the distribution), so the pod's policies apply; from *localhost* it connects to the
+  NodePort from Windows.
+
+Design and spike results: `docs/superpowers/specs/2026-11-21-kubernetes-lab-*.md`.
+
+### WSLCD Lite distribution
+
+*Settings → Add distribution → WSLCD Lite* creates a container-only distribution modelled on Kiri
+Linux: Alpine minirootfs (pinned and SHA-256 verified), root only, no systemd. A ~200-line POSIX
+`systemctl` replacement (`src/lite/systemctl.sh`) runs the same units the engine setup writes
+(engine API, TLS proxy, DNS) and starts them from `[boot] command` in `/etc/wsl.conf`; interop with
+Windows is off. The distribution lives in `<data>\distros\<name>` (portable). Measured: API over
+TLS ~1–2 s after a cold start, ~230 MB disk and ~80 MB RAM with Podman (~390 MB / ~165 MB with
+Docker); the Kubernetes lab runs in it too.
 
 ### Compose templates and editor
 
@@ -620,6 +651,14 @@ removes the Run registry value:
 ```bash
 cargo test -- --ignored --test-threads=1
 ```
+
+`live_k8s_lab` (`$env:WSLCD_K8S_DATA="C:\WSLContainerDesktop\data"; cargo test live_k8s -- --ignored --nocapture --test-threads=1`)
+creates the cluster in the engine from the app configuration (config and TLS certificates are
+copied into an isolated data folder), deploys the template with sample rules, checks the page
+through the NodePort from Windows, the connection tests (`fe → db` blocked) and the flow map, and
+deletes the cluster. `live_lite_distro` (`cargo test live_lite -- --ignored --nocapture`) creates
+`WSLCD-Lite-Test` with Podman and TLS on port 2387 (`WSLCD_LITE_ENGINE=docker` for Docker,
+`WSLCD_LITE_K8S=1` also starts k3s in it), measures the cold start and unregisters it.
 
 `live_net` (`cargo test live_net -- --ignored --nocapture`) checks the network overview (traffic,
 ports, in / out connections) against the engine from the app configuration.

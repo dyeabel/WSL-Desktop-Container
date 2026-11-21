@@ -12,6 +12,7 @@ mod distro_manage;
 mod engine_ops;
 mod events;
 mod fs_ops;
+pub(crate) mod k8s;
 mod limits;
 mod memory;
 pub(crate) mod net_overview;
@@ -29,6 +30,7 @@ pub use volumes::{du_sizes, volume_op_for_test, volume_sizes_for_test, HELPER_IM
 pub use build::cancel_build;
 pub use spec::{is_windows_path, AddDistroSpec, BuildSpec, RunSpec};
 pub use compose::{NewStackSpec, StackMsg, StackOp};
+pub use k8s::{K8sMsg, K8sOp};
 pub use container_fs::{CfMsg, CfOp};
 pub use detail::{start_stats, StatSample, StatsFeed, STATS_WINDOW};
 pub use distro_manage::{default_import_folder, DistroDisk, DistroOp};
@@ -121,6 +123,8 @@ pub enum Cmd {
     ComposeUpPath(String),
     /// nový stack ze šablony, editor compose souborů, kontrola (-> Msg::Stack)
     Stack(StackOp),
+    /// Kubernetes laboratoř (-> Msg::K8s)
+    K8s(K8sOp),
     Wsl(WslCmd),
     EngineStart,
     EngineStop,
@@ -225,6 +229,8 @@ pub enum Msg {
     VolumeSizes(std::collections::HashMap<String, u64>),
     /// výsledky operací se stacky (Cmd::Stack)
     Stack(StackMsg),
+    /// Kubernetes laboratoř (Cmd::K8s)
+    K8s(K8sMsg),
     /// virtuální disk distribuce (název, cesta / velikost / sparse, nebo chyba)
     DistroDisk(String, Result<DistroDisk, String>),
     /// odpověď prohlížeči souborů kontejneru (číslo pohledu)
@@ -495,7 +501,8 @@ impl Worker {
         self.shared.busy.fetch_add(1, Ordering::SeqCst);
         self.ctx.request_repaint();
         let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::ContainerFs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline | Cmd::Inspect(_) | Cmd::VolumeSizes)
-            || matches!(cmd, Cmd::Stack(StackOp::Read { .. } | StackOp::Validate { .. }));
+            || matches!(cmd, Cmd::Stack(StackOp::Read { .. } | StackOp::Validate { .. }))
+            || matches!(cmd, Cmd::K8s(K8sOp::Snapshot { .. } | K8sOp::Probe { .. }));
         // přehled „Na pozadí“: akce uživatele (bez obnovování a procházení)
         let mut act = (!is_fs && !matches!(cmd, Cmd::Refresh)).then(|| crate::activity::start(crate::activity::Kind::Action, activity_label(&cmd), String::new()));
         let res = self.exec_inner(cmd);
@@ -565,6 +572,7 @@ impl Worker {
                 self.compose(dir, project, args)
             }
             Cmd::Stack(op) => self.stack_op(op),
+            Cmd::K8s(op) => self.k8s_op(op),
             Cmd::ComposeUpPath(path) => {
                 let dir = wsl::to_linux_path(&distro, &path)?;
                 self.exec_inner(Cmd::Compose { dir, project: None, args: vec!["up".into(), "-d".into()] })

@@ -18,7 +18,9 @@ impl Worker {
         }
         let want = self.shared.want_stats.load(Ordering::Relaxed);
         let due = self.shared.memory.lock().map(|m| memory::now_secs() - m.last_sample >= memory::IDLE_SAMPLE_SECS).unwrap_or(false);
-        if !(want || due) || self.shared.mem_running.swap(true, Ordering::SeqCst) {
+        // při otevřeném okně při každém obnovení – karta enginu v bočním panelu ukazuje CPU a RAM
+        let shown = crate::tray::window_visible();
+        if !(want || due || shown) || self.shared.mem_running.swap(true, Ordering::SeqCst) {
             return;
         }
         let w = self.clone();
@@ -47,10 +49,17 @@ impl Worker {
         });
         // historie na disku: paměť a čítače eth0 VM (stejný výstup wsl, žádné další volání)
         let net = memory::parse_net(&out);
+        let ticks = memory::parse_cpu(&out);
         crate::history::store().record(t, Sample { vmmem, used: Some(mi.used()), cache: Some(mi.cache()), net, ..Default::default() });
         if let Ok(mut m) = self.shared.memory.lock() {
             m.history.push(MemPoint::new(t, vmmem, mi.used(), mi.cache()));
             m.last_sample = t;
+            let cpu = match (m.cpu_ticks, ticks) {
+                (Some(a), Some(b)) => memory::cpu_pct(a, b),
+                _ => None,
+            };
+            m.cpu_ticks = ticks;
+            m.glance = Some(memory::Glance { used: mi.used(), total: mi.total, cache: mi.cache(), vmmem, ram: memory::total_ram(), cpu });
             if now.is_some() {
                 m.now = now;
             }

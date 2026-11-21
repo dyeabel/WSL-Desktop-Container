@@ -30,6 +30,13 @@ fn valid_user(s: &str) -> bool {
             && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-'))
 }
 
+fn lite_hint() -> &'static str {
+    t!(
+        "Lehká distribuce po vzoru Kiri Linux: Alpine minirootfs (ověřený SHA-256), jen root, bez systemd – služby enginu startuje malá náhrada systemctl. Startuje za zlomek sekundy a leží v datové složce aplikace (u portable verze ve složce data vedle EXE).",
+        "A light distribution modelled on Kiri Linux: Alpine minirootfs (verified SHA-256), root only, no systemd – a small systemctl replacement starts the engine services. Starts in a fraction of a second and lives in the app's data folder (in the portable version, the data folder next to the EXE)."
+    )
+}
+
 /// Dialog „Přidat distribuci“.
 pub fn add_distro_dialog(app: &mut App, ctx: &egui::Context) {
     let Some(mut spec) = app.add_distro.take() else { return };
@@ -40,7 +47,17 @@ pub fn add_distro_dialog(app: &mut App, ctx: &egui::Context) {
     let (_, esc) = modal(ctx, "add-distro", t!("Přidat distribuci", "Add distribution"), 520.0, |ui| {
         egui::Grid::new("add-distro-grid").num_columns(2).spacing([14.0, 10.0]).show(ui, |ui| {
             ui.label(t!("Distribuce", "Distribution"));
+            let lite = spec.distro == crate::lite::LITE_ID;
+            let lite_label = tf!("WSLCD Lite – Alpine {}, jen pro kontejnery (~4 MB, bez systemd)", "WSLCD Lite – Alpine {}, containers only (~4 MB, no systemd)", crate::lite::ALPINE_VERSION);
             match &online {
+                _ if lite => {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&lite_label).strong());
+                        if ui.small_button(t!("jiná…", "other…")).clicked() {
+                            spec.distro.clear();
+                        }
+                    });
+                }
                 None => {
                     ui.horizontal(|ui| {
                         ui.spinner();
@@ -48,11 +65,19 @@ pub fn add_distro_dialog(app: &mut App, ctx: &egui::Context) {
                     });
                 }
                 Some(Err(e)) => {
-                    ui.label(RichText::new(format!("\u{E4E0} {e}")).color(theme::red()));
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(format!("\u{E4E0} {e}")).color(theme::red()));
+                        if ui.button(&lite_label).on_hover_text(lite_hint()).clicked() {
+                            spec.distro = crate::lite::LITE_ID.into();
+                        }
+                    });
                 }
                 Some(Ok(list)) => {
                     let shown = list.iter().find(|(n, _)| *n == spec.distro).map(|(_, f)| f.clone()).unwrap_or_else(|| t!("vyber…", "choose…").to_string());
                     egui::ComboBox::from_id_salt("online-distro").width(300.0).selected_text(shown).show_ui(ui, |ui| {
+                        if ui.selectable_label(false, &lite_label).on_hover_text(lite_hint()).clicked() {
+                            spec.distro = crate::lite::LITE_ID.into();
+                        }
                         for (n, f) in list {
                             if ui.selectable_label(spec.distro == *n, format!("{f}  ({n})")).clicked() {
                                 spec.distro = n.clone();
@@ -63,14 +88,21 @@ pub fn add_distro_dialog(app: &mut App, ctx: &egui::Context) {
             }
             ui.end_row();
             ui.label(t!("Název instance", "Instance name"));
-            ui.add(field(&mut spec.name).hint_text(if spec.distro.is_empty() { "Debian-dev" } else { spec.distro.as_str() }).desired_width(300.0));
+            let hint = if lite { crate::lite::DEFAULT_NAME } else if spec.distro.is_empty() { "Debian-dev" } else { spec.distro.as_str() };
+            ui.add(field(&mut spec.name).hint_text(hint).desired_width(300.0));
             ui.end_row();
-            ui.label(t!("Uživatel", "User"));
-            ui.add(field(&mut spec.user).hint_text(t!("prázdné = jen root", "empty = root only")).desired_width(300.0));
-            ui.end_row();
-            ui.label(t!("Heslo", "Password"));
-            ui.add(field(&mut spec.password).password(true).hint_text(t!("volitelné (sudo funguje i bez něj)", "optional (sudo works without it)")).desired_width(300.0));
-            ui.end_row();
+            if lite {
+                // lehká distribuce: jen root, služby enginu běží bez systemd
+                spec.user.clear();
+                spec.password.clear();
+            } else {
+                ui.label(t!("Uživatel", "User"));
+                ui.add(field(&mut spec.user).hint_text(t!("prázdné = jen root", "empty = root only")).desired_width(300.0));
+                ui.end_row();
+                ui.label(t!("Heslo", "Password"));
+                ui.add(field(&mut spec.password).password(true).hint_text(t!("volitelné (sudo funguje i bez něj)", "optional (sudo works without it)")).desired_width(300.0));
+                ui.end_row();
+            }
             ui.label(t!("Engine", "Engine"));
             ui.horizontal(|ui| {
                 ui.radio_value(&mut spec.engine, None, t!("žádný", "none"));
@@ -93,7 +125,13 @@ pub fn add_distro_dialog(app: &mut App, ctx: &egui::Context) {
             ui.end_row();
         });
         ui.add_space(8.0);
-        let name = if spec.name.trim().is_empty() { spec.distro.clone() } else { spec.name.trim().to_string() };
+        let name = if !spec.name.trim().is_empty() {
+            spec.name.trim().to_string()
+        } else if spec.distro == crate::lite::LITE_ID {
+            crate::lite::DEFAULT_NAME.to_string()
+        } else {
+            spec.distro.clone()
+        };
         let mut problems: Vec<&str> = Vec::new();
         if spec.distro.is_empty() {
             problems.push(t!("Vyber distribuci.", "Choose a distribution."));

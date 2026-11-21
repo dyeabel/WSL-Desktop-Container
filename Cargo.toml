@@ -28,6 +28,8 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Wind
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pki-types = { version = "1", features = ["std"] }
 tar = { version = "0.4", default-features = false }
+# SHA-256 staženého rootfs (WSLCD Lite) – už je v závislostech přes rustls
+ring = "0.17"
 
 [profile.release]
 opt-level = 3

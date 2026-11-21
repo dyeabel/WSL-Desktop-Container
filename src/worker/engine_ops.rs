@@ -188,6 +188,20 @@ impl Worker {
         let old = self.cfg();
         let step = |log: &mut String, s: &str| log.push_str(&format!("\n=== {s} ===\n"));
 
+        // Kubernetes laboratoř předchozího enginu drží porty 6443 a NodePort (síť WSL je
+        // sdílená) – zastavit, nesmazat; po návratu jde znovu spustit
+        if distro != old.distro {
+            use crate::k8s::cluster::{self, ClusterState};
+            let d = self.docker();
+            if matches!(cluster::state(&d), ClusterState::Running | ClusterState::Starting) {
+                step(log, t!("Zastavení clusteru Kubernetes v předchozí distribuci", "Stopping the Kubernetes cluster in the previous distribution"));
+                match cluster::stop(&d) {
+                    Ok(()) => log.push_str(t!("cluster zastaven\n", "cluster stopped\n")),
+                    Err(e) => log.push_str(&format!("{e}\n")),
+                }
+            }
+        }
+
         step(log, &tf!("Enginy v distribuci {distro}", "Engines in {distro}"));
         let out = wsl::run(distro, Some("root"), None, &["sh", "-c", crate::engine::DETECT_ENGINES])
             .map_err(|e| tf!("Distribuci {distro} nelze spustit: {e}", "Cannot start {distro}: {e}"))?;
@@ -306,6 +320,7 @@ impl Worker {
 
     fn setup_api_with(&self, cfg: &Config, regen: bool) -> Result<(String, bool), String> {
         let port = cfg.port.to_string();
+        crate::lite::refresh_shim(&cfg.distro);
         // výchozí uživatel distribuce – v režimu TLS dostane přístup k unix socketu enginu
         let user = wsl::run(&cfg.distro, None, None, &["id", "-un"]).map(|u| u.trim().to_string()).unwrap_or_default();
         let out = wsl::run(
@@ -370,7 +385,7 @@ impl Worker {
 
         // 2) systemd
         step(log, t!("Kontrola systemd", "Checking systemd"));
-        if wsl::run(&distro, Some("root"), None, &["test", "-d", "/run/systemd/system"]).is_err() {
+        if wsl::run(&distro, Some("root"), None, &["sh", "-c", crate::lite::HAS_INIT]).is_err() {
             log.push_str(t!(
                 "systemd neběží – zapínám v /etc/wsl.conf a restartuji distribuci\n",
                 "systemd is not running – enabling it in /etc/wsl.conf and restarting the distribution\n"
@@ -389,7 +404,7 @@ impl Worker {
                 wsl::start(&distro)?;
             }
             thread::sleep(Duration::from_secs(3));
-            if wsl::run(&distro, Some("root"), None, &["test", "-d", "/run/systemd/system"]).is_err() {
+            if wsl::run(&distro, Some("root"), None, &["sh", "-c", crate::lite::HAS_INIT]).is_err() {
                 log.push_str(t!(
                     "systemd stále neběží – zkus „Vypnout celé WSL“ a znovu.\n",
                     "systemd is still not running – try “Shut down all of WSL” and retry.\n"
