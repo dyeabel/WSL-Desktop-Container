@@ -1,0 +1,31 @@
+# Sestavení a testy na Linuxu (Ubuntu) – hostované runnery GitHubu, bez WSL.
+# Živé testy (--ignored) běží proti Dockeru samotného runneru (/var/run/docker.sock).
+name: linux
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Závislosti
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
+      - name: Sestavení
+        run: cargo build --locked
+      - name: Testy
+        run: cargo test --locked
+      - name: Živé testy proti Dockeru runneru
+        run: cargo test --locked host::local -- --ignored

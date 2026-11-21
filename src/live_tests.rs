@@ -502,6 +502,7 @@ fn live_build_image() {
 /// `tls_proxy` (stejný skript jako aplikace) s jinou složkou a službou na portu 2377,
 /// pak klient s certifikátem (musí projít), bez certifikátu a přes HTTP (musí selhat).
 /// Potřebuje podman a doinstaluje socat (pokud chybí).
+#[cfg(windows)]
 #[test]
 #[ignore]
 fn live_tls_proxy() {
@@ -572,6 +573,7 @@ fn live_tls_proxy() {
 /// Relay pojmenované roury proti běžícímu API bez TLS na 127.0.0.1:2375 (jen čte /_ping),
 /// na testovací rouře `\\.\pipe\wslcd_test_engine_<pid>` – roura aplikace se nepoužije.
 /// `cargo test live_npipe_plain -- --ignored --nocapture`
+#[cfg(windows)]
 #[test]
 #[ignore]
 fn live_npipe_plain() {

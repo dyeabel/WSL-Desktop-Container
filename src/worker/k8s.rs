@@ -288,7 +288,8 @@ mod tests {
 
     #[test]
     fn deploy_folder_reads_only_yaml() {
-        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("test-k8s-folder");
+        let target = std::env::var_os("CARGO_TARGET_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+        let dir = target.join("test-k8s-folder");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("b.yml"), "B").unwrap();

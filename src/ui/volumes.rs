@@ -226,6 +226,7 @@ fn request_sizes(app: &mut App, ctx: &egui::Context) {
 }
 
 /// Místní čas (rok, měsíc, den, hodina, minuta) pro název zálohy.
+#[cfg(windows)]
 fn local_now() -> (u16, u16, u16, u16, u16) {
     #[repr(C)]
     #[derive(Default)]
@@ -247,6 +248,24 @@ fn local_now() -> (u16, u16, u16, u16, u16) {
     // SAFETY: GetLocalTime jen vyplní předanou strukturu SYSTEMTIME
     unsafe { GetLocalTime(&mut st) };
     (st.year, st.month, st.day, st.hour, st.minute)
+}
+
+/// Mimo Windows jen UTC z UNIX času (bez systémového API a bez nových crate).
+#[cfg(not(windows))]
+fn local_now() -> (u16, u16, u16, u16, u16) {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let (days, rem) = ((secs / 86_400) as i64, secs % 86_400);
+    // dny od 1. 1. 1970 → občanské datum (Hinnantův algoritmus)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year as u16, month as u16, day as u16, (rem / 3_600) as u16, (rem % 3_600 / 60) as u16)
 }
 
 /// Doplní příponu .tar.gz, pokud ji uživatel v dialogu nezadal.

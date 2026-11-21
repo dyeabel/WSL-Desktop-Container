@@ -351,6 +351,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn split_and_names() {
         assert_eq!(
             split_target(r#""C:\Users\Jan Novák\zálohy\it's.tar.gz""#).unwrap(),

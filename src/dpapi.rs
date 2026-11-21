@@ -58,6 +58,7 @@ pub use imp::{protect, unprotect};
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
     #[test]
     fn roundtrip() {
         let secret = b"-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n";

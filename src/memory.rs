@@ -700,6 +700,7 @@ cpu  1 2 3 4
     }
 
     /// Skutečná čísla (jen čtení): `cargo test live_memory_breakdown -- --ignored --nocapture`
+    #[cfg(windows)]
     #[test]
     #[ignore]
     fn live_memory_breakdown() {

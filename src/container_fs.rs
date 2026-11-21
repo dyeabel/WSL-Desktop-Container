@@ -1254,6 +1254,7 @@ mod tests {
 
     /// N-01: řetěz symlinků + kolize velikosti písmen (`S` vs `s` na NTFS) nesmí zapsat mimo cíl.
     /// Bez oprávnění k symlinkům (Developer Mode) se symlinky jen přeskočí – test platí v obou případech.
+    #[cfg(windows)]
     #[test]
     fn extraction_blocks_symlink_chains() {
         let root = tmp_dir("chain");

@@ -57,6 +57,7 @@ fn literal_chars() -> std::collections::BTreeMap<char, String> {
     found
 }
 
+#[cfg(windows)]
 #[test]
 fn ui_text_glyphs_exist_in_app_fonts() {
     use eframe::egui;

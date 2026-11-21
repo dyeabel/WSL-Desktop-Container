@@ -408,6 +408,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn only_dockers_before_ours_shadow() {
         let exts = v(&[".com", ".exe", ".bat", ".cmd"]);
         let present = |p: &std::path::Path| {
