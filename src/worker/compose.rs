@@ -84,9 +84,8 @@ pub fn clean_output(s: &str) -> String {
 /// Spustí program u hostitele s textem na stdin.
 fn run_input(host: &dyn Host, cwd: Option<&str>, args: &[String], input: &str) -> Result<String, String> {
     let a: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let out = host.exec(&ExecReq::new(&a).cwd(cwd).stdin(input.as_bytes()))?;
-    let text = format!("{}
-{}", decode(&out.stdout), decode(&out.stderr));
+    let out = host.exec(&ExecReq::new(&a).cwd(cwd).stdin(input.as_bytes()).quiet())?;
+    let text = format!("{}\n{}", decode(&out.stdout), decode(&out.stderr));
     let text = clean_output(&text);
     if out.code == 0 {
         Ok(text)

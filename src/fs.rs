@@ -64,7 +64,7 @@ pub fn parse_listing(out: &str) -> (String, Vec<Entry>) {
 
 pub fn list(host: &dyn Host, root: bool, path: &str) -> Result<(String, Vec<Entry>), String> {
     let args = ["sh", "-c", LIST_SCRIPT, "sh", path];
-    let out = host.exec(&ExecReq::new(&args).privilege(privilege(root)))?;
+    let out = host.exec(&ExecReq::new(&args).privilege(privilege(root)).quiet())?;
     if out.code != 0 {
         let e = decode(&out.stderr);
         return Err(if e.trim().is_empty() { tf!("Adresář {path} nelze otevřít", "Cannot open directory {path}") } else { e.trim().to_string() });
@@ -133,7 +133,7 @@ pub const MAX_EDIT: usize = 2 * 1024 * 1024;
 pub fn read_text(host: &dyn Host, root: bool, path: &str) -> Result<String, String> {
     let n = (MAX_EDIT + 1).to_string();
     let args = ["head", "-c", &n, "--", path];
-    let out = host.exec(&ExecReq::new(&args).privilege(privilege(root)))?;
+    let out = host.exec(&ExecReq::new(&args).privilege(privilege(root)).quiet())?;
     if out.code != 0 {
         return Err(decode(&out.stderr).trim().to_string());
     }

@@ -35,11 +35,13 @@ pub struct ExecReq<'a> {
     pub cwd: Option<&'a str>,
     /// bez vstupu = `Stdio::null()`
     pub stdin: Option<&'a [u8]>,
+    /// zapsat do přehledu „Na pozadí“ (výchozí ano)
+    pub track: bool,
 }
 
 impl<'a> ExecReq<'a> {
     pub fn new(args: &'a [&'a str]) -> Self {
-        ExecReq { args, privilege: Privilege::User, cwd: None, stdin: None }
+        ExecReq { args, privilege: Privilege::User, cwd: None, stdin: None, track: true }
     }
 
     pub fn privilege(mut self, p: Privilege) -> Self {
@@ -49,6 +51,12 @@ impl<'a> ExecReq<'a> {
 
     pub fn cwd(mut self, cwd: Option<&'a str>) -> Self {
         self.cwd = cwd;
+        self
+    }
+
+    /// Bez záznamu do přehledu „Na pozadí“ (výpisy, čtení).
+    pub fn quiet(mut self) -> Self {
+        self.track = false;
         self
     }
 
@@ -110,10 +118,8 @@ pub trait HostExt: Host {
 
 impl<T: Host + ?Sized> HostExt for T {
     fn run(&self, p: Privilege, cwd: Option<&str>, args: &[&str]) -> Result<String, HostError> {
-        let mut g = track(&self.label(), p, args);
-        let r = self.exec(&ExecReq::new(args).privilege(p).cwd(cwd)).and_then(finish);
-        g.set_ok(r.is_ok());
-        r
+        // záznam do přehledu dělá `exec`
+        self.exec(&ExecReq::new(args).privilege(p).cwd(cwd)).and_then(finish)
     }
 
     fn run_owned(&self, p: Privilege, cwd: Option<&str>, args: &[String]) -> Result<String, HostError> {
@@ -122,7 +128,6 @@ impl<T: Host + ?Sized> HostExt for T {
     }
 
     fn run_stdin(&self, p: Privilege, args: &[&str], input: &str) -> Result<String, HostError> {
-        let _g = track(&self.label(), p, args);
         self.exec(&ExecReq::new(args).privilege(p).stdin(input.as_bytes())).and_then(finish)
     }
 }
@@ -158,6 +163,11 @@ pub fn finish(out: ExecOut) -> Result<String, HostError> {
         let output = if stderr.trim().is_empty() { stdout } else { stderr };
         Err(HostError::Failed { code: out.code, output })
     }
+}
+
+/// Záznam pro požadavek: žádný, když je `quiet`.
+pub(crate) fn track_req(label: &str, req: &ExecReq) -> Option<activity::Guard> {
+    req.track.then(|| track(label, req.privilege, req.args))
 }
 
 /// Záznam do přehledu „Na pozadí“ (hostitel, oprávnění, zkrácený příkaz).
@@ -208,6 +218,59 @@ mod tests {
         fn engine_endpoint(&self, _: &Config) -> crate::http::Endpoint {
             crate::http::Endpoint::Tcp { port: 1 }
         }
+    }
+
+    /// Hostitel, který zapisuje aktivitu jako `WslHost` (v `exec`), a vždy skončí chybou,
+    /// aby se záznam uložil i u krátkého příkazu.
+    struct TrackingHost;
+
+    impl Host for TrackingHost {
+        fn label(&self) -> String {
+            "tracking-test-host".into()
+        }
+        fn exec(&self, req: &ExecReq) -> Result<ExecOut, HostError> {
+            let mut g = track_req(&self.label(), req);
+            if let Some(g) = g.as_mut() {
+                g.set_ok(false);
+            }
+            Ok(ExecOut { code: 1, stdout: vec![], stderr: b"x".to_vec() })
+        }
+        fn exec_stream(&self, _: &ExecReq, _: Option<&AtomicBool>, _: &mut dyn FnMut(&str)) -> Result<i32, HostError> {
+            Ok(0)
+        }
+        fn open_terminal(&self, _: &str, _: &ExecReq) -> Result<(), HostError> {
+            Ok(())
+        }
+        fn to_guest_path(&self, path: &str) -> Result<String, HostError> {
+            Ok(path.to_string())
+        }
+        fn engine_endpoint(&self, _: &Config) -> crate::http::Endpoint {
+            crate::http::Endpoint::Tcp { port: 1 }
+        }
+    }
+
+    fn entries(title: &str, detail: &str) -> usize {
+        activity::snapshot().1.iter().filter(|d| d.title == title && d.detail == detail).count()
+    }
+
+    #[test]
+    fn run_records_exactly_one_entry() {
+        let h = TrackingHost;
+        let _ = h.run(Privilege::User, None, &["uniq-run-cmd"]);
+        let _ = h.run_owned(Privilege::User, None, &["uniq-owned-cmd".to_string()]);
+        let _ = h.run_stdin(Privilege::User, &["uniq-stdin-cmd"], "x");
+        for c in ["uniq-run-cmd", "uniq-owned-cmd", "uniq-stdin-cmd"] {
+            assert_eq!(entries("tracking-test-host", c), 1, "{c}");
+        }
+    }
+
+    #[test]
+    fn quiet_records_nothing() {
+        let h = TrackingHost;
+        let _ = h.exec(&ExecReq::new(&["uniq-quiet-cmd"]).quiet());
+        assert_eq!(entries("tracking-test-host", "uniq-quiet-cmd"), 0);
+        let _ = h.exec(&ExecReq::new(&["uniq-loud-cmd"]));
+        assert_eq!(entries("tracking-test-host", "uniq-loud-cmd"), 1);
     }
 
     #[test]

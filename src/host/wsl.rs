@@ -4,7 +4,7 @@ use std::io::Write;
 use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
 
-use super::{track, ExecOut, ExecReq, Host, HostError, Privilege};
+use super::{track_req, ExecOut, ExecReq, Host, HostError, Privilege};
 use crate::config::Config;
 use crate::http::Endpoint;
 use crate::wsl;
@@ -48,7 +48,7 @@ impl Host for WslHost {
     }
 
     fn exec(&self, req: &ExecReq) -> Result<ExecOut, HostError> {
-        let mut g = track(&self.distro, req.privilege, req.args);
+        let mut g = track_req(&self.distro, req);
         let r = (|| {
             let mut cmd = wsl::hidden("wsl.exe");
             cmd.args(wsl_args(&self.distro, req));
@@ -58,7 +58,11 @@ impl Host for WslHost {
                 Some(input) => {
                     let mut child = cmd.stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
                     if let Some(mut si) = child.stdin.take() {
-                        si.write_all(input).map_err(|e| e.to_string())?;
+                        // předčasně skončený proces (broken pipe): zajímá nás jeho výstup
+                        match si.write_all(input) {
+                            Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => return Err(e.to_string().into()),
+                            _ => {}
+                        }
                     }
                     child.wait_with_output().map_err(|e| e.to_string())?
                 }
@@ -69,7 +73,9 @@ impl Host for WslHost {
                 stderr: out.stderr,
             })
         })();
-        g.set_ok(matches!(&r, Ok(o) if o.code == 0));
+        if let Some(g) = g.as_mut() {
+            g.set_ok(matches!(&r, Ok(o) if o.code == 0));
+        }
         r
     }
 
@@ -79,11 +85,13 @@ impl Host for WslHost {
         cancel: Option<&AtomicBool>,
         on_line: &mut dyn FnMut(&str),
     ) -> Result<i32, HostError> {
-        let mut g = track(&self.distro, req.privilege, req.args);
+        let mut g = track_req(&self.distro, req);
         let mut cmd = wsl::hidden("wsl.exe");
         cmd.args(wsl_args(&self.distro, req));
         let code = wsl::stream_command(&mut cmd, cancel, on_line)?;
-        g.set_ok(code == 0);
+        if let Some(g) = g.as_mut() {
+            g.set_ok(code == 0);
+        }
         Ok(code)
     }
 

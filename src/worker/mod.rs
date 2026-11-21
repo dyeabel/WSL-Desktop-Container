@@ -515,6 +515,7 @@ impl Worker {
             || matches!(cmd, Cmd::Stack(StackOp::Read { .. } | StackOp::Validate { .. }))
             || matches!(cmd, Cmd::K8s(K8sOp::Snapshot { .. } | K8sOp::Probe { .. }));
         // přehled „Na pozadí“: akce uživatele (bez obnovování a procházení)
+        let is_fs = is_fs || matches!(cmd, Cmd::Terminal(Term::PodLogs { .. }));
         let mut act = (!is_fs && !matches!(cmd, Cmd::Refresh)).then(|| crate::activity::start(crate::activity::Kind::Action, activity_label(&cmd), String::new()));
         let res = self.exec_inner(cmd);
         if let Some(a) = act.as_mut() {
