@@ -39,7 +39,9 @@ function New-Package([string]$zipName, [bool]$portable) {
     New-Item -ItemType Directory -Force $stage | Out-Null
     foreach ($e in $exes) { Copy-Item $e $stage }
     # wslcd.exe = kopie (už podepsaného) docker.exe shimu; chová se jako docker, jen míří vždy na engine aplikace
-    Copy-Item 'targetelease\docker.exe' (Join-Path $stage 'wslcd.exe')
+    $wslcd = Join-Path $stage 'wslcd.exe'
+    Copy-Item 'target\release\docker.exe' $wslcd -ErrorAction Stop
+    if (-not (Test-Path $wslcd)) { throw 'wslcd.exe se nepodarilo pridat do balicku' }
     Copy-Item README.md $stage
     if (Test-Path LICENSE) { Copy-Item LICENSE $stage }
     if ($portable) {

@@ -64,6 +64,11 @@ fn invoked_as(file_stem: &str) -> Invoked {
     }
 }
 
+/// Hodnota proměnné DOCKER_CONTEXT / DOCKER_HOST, kterou shim bere v úvahu: wslcd je ignoruje.
+fn env_for(who: Invoked, value: Option<String>) -> Option<String> {
+    if who == Invoked::Wslcd { None } else { value }
+}
+
 fn main() -> ExitCode {
     let exe = std::env::current_exe().ok();
     let exe_name = exe
@@ -101,9 +106,8 @@ fn main() -> ExitCode {
     let debug = std::env::var("WSLCD_SHIM_DEBUG").is_ok();
     // wslcd míří vždy na engine aplikace: DOCKER_CONTEXT / DOCKER_HOST z prostředí (cizí engine) ignoruje,
     // `wslcd --context <kontext aplikace>` a `wslcd context use` dál fungují
-    let own_only = exe_name == Invoked::Wslcd;
-    let env_ctx = if own_only { None } else { std::env::var("DOCKER_CONTEXT").ok() };
-    let env_host = if own_only { None } else { std::env::var("DOCKER_HOST").ok() };
+    let env_ctx = env_for(exe_name, std::env::var("DOCKER_CONTEXT").ok());
+    let env_host = env_for(exe_name, std::env::var("DOCKER_HOST").ok());
     let store_path = contexts::path();
 
     // docker context … – vyřídí shim sám
@@ -280,6 +284,15 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wslcd_ignores_docker_env() {
+        let v = Some("remote".to_string());
+        assert_eq!(env_for(Invoked::Wslcd, v.clone()), None);
+        assert_eq!(env_for(Invoked::Docker, v.clone()), v);
+        assert_eq!(env_for(Invoked::Compose, v.clone()), v);
+        assert_eq!(env_for(Invoked::Docker, None), None);
+    }
 
     #[test]
     fn invoked_name_detection() {

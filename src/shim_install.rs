@@ -101,7 +101,12 @@ pub fn set_docker_host(target: Option<(u16, bool)>) -> Result<String, String> {
 const SHIM_FILES: [&str; 3] = ["docker.exe", "docker-compose.exe", "wslcd.exe"];
 
 /// Soubory, které vedle `docker.exe` v portable balíčku přibývají (kopie shimu).
-const SHIM_COPIES: [&str; 2] = ["docker-compose.exe", "wslcd.exe"];
+const SHIM_COPIES: &[&str] = SHIM_FILES.split_at(1).1;
+
+/// Jsou vedle docker.exe všechny kopie shimu? (chybí např. wslcd.exe po aktualizaci ze starší verze)
+fn shims_complete(dir: &std::path::Path) -> bool {
+    dir.join("docker.exe").exists() && SHIM_COPIES.iter().all(|n| dir.join(n).is_file())
+}
 
 /// Kam patří docker.exe v PATH: v portable režimu přímo složka aplikace (nic se nekopíruje),
 /// jinak %LOCALAPPDATA%\WSL_Container_Desktop\bin.
@@ -171,7 +176,8 @@ pub fn shadowing(entries: &[String], ours: &str, exts: &[String], exists: impl F
 
 pub fn status() -> Status {
     let dir = bin_dir();
-    let installed = dir.join("docker.exe").exists();
+    // neúplná sada (chybí wslcd.exe / docker-compose.exe) = „neinstalováno“ -> UI nabídne instalaci/aktualizaci
+    let installed = shims_complete(&dir);
     let (entries, user_path) = registry_path();
     let d = dir.display().to_string();
     let in_path = user_path.split(';').any(|p| norm(p) == norm(&d));
@@ -371,7 +377,7 @@ fn copy_shim_files(src: &std::path::Path, dir: &std::path::Path) -> Result<(), S
 
 /// Smaže soubory shimu z `dir`; v portable režimu zůstává `docker.exe` (je součást balíčku).
 fn remove_shim_files(dir: &std::path::Path, portable: bool) {
-    let names: &[&str] = if portable { &SHIM_COPIES } else { &SHIM_FILES };
+    let names: &[&str] = if portable { SHIM_COPIES } else { &SHIM_FILES };
     for name in names {
         let _ = std::fs::remove_file(dir.join(name));
     }
@@ -491,6 +497,18 @@ mod tests {
         remove_shim_files(&bin, false);
         assert_eq!(exists(&bin), vec![false, false, false]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn status_needs_update_when_wslcd_missing() {
+        let dir = temp_dir("complete");
+        std::fs::write(dir.join("docker.exe"), b"shim").unwrap();
+        assert!(!shims_complete(&dir));
+        copy_shim_files(&dir.join("docker.exe"), &dir).unwrap();
+        assert!(shims_complete(&dir));
+        std::fs::remove_file(dir.join("wslcd.exe")).unwrap();
+        assert!(!shims_complete(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
