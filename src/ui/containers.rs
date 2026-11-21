@@ -96,9 +96,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             (t!("STAV", "STATE"), W::Fr(1.6)),
             (t!("AKCE", "ACTIONS"), icons_w(8)),
         ];
+        let ui_ctx = ui.ctx().clone();
         table_sort(ui, &format!("grid-{g}"), &cols, Sort { key: "containers", cols: &[1, 2, 3, 4, 5] }, |mut body| {
             for c in &list {
-                body.row(46.0, |mut r| row(app, &mut r, c));
+                // klik na řádek (mimo tlačítka akcí) otevře detail
+                if body.row_click(46.0, |mut r| row(app, &mut r, c)) {
+                    let ctx = ui_ctx.clone();
+                    crate::ui::detail::open(app, &ctx, c.id.clone(), c.name());
+                }
             }
         });
     }

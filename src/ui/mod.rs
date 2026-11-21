@@ -110,6 +110,8 @@ pub struct TableRow<'a> {
     rect: egui::Rect,
     x: f32,
     idx: usize,
+    /// klikací řádek: text v buňkách nejde označovat (označitelný popisek by si klik vzal)
+    clickable: bool,
 }
 
 const CELL_PAD: f32 = 8.0;
@@ -124,10 +126,25 @@ fn total_width(widths: &[f32], gap: f32) -> f32 {
 
 impl TableBody<'_> {
     pub fn row(&mut self, height: f32, add: impl FnOnce(TableRow<'_>)) {
+        let _ = self.row_sense(height, egui::Sense::hover(), add);
+    }
+
+    /// Klikací řádek (klik mimo tlačítka v buňkách) – vrací true po kliknutí.
+    pub fn row_click(&mut self, height: f32, add: impl FnOnce(TableRow<'_>)) -> bool {
+        let resp = self.row_sense(height, egui::Sense::click(), add);
+        if resp.hovered() {
+            self.ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        resp.clicked()
+    }
+
+    fn row_sense(&mut self, height: f32, sense: egui::Sense, add: impl FnOnce(TableRow<'_>)) -> egui::Response {
         let total = total_width(&self.widths, self.gap);
-        let (rect, resp) = self.ui.allocate_exact_size(egui::vec2(total, height), egui::Sense::hover());
+        let (rect, resp) = self.ui.allocate_exact_size(egui::vec2(total, height), sense);
         if self.ui.is_rect_visible(rect) {
-            let fill = if resp.hovered() {
+            // zvýraznit podle polohy ukazatele v celém řádku – `hovered()` je false nad popisky
+            // s bublinou (image, porty, stav), které leží nad řádkem
+            let fill = if resp.contains_pointer() {
                 Some(theme::row_hover())
             } else if self.n % 2 == 1 {
                 Some(theme::row_stripe())
@@ -139,7 +156,9 @@ impl TableBody<'_> {
             }
         }
         self.n += 1;
-        add(TableRow { ui: self.ui, widths: &self.widths, gap: self.gap, rect, x: rect.left() + CELL_PAD, idx: 0 });
+        let clickable = sense.senses_click();
+        add(TableRow { ui: self.ui, widths: &self.widths, gap: self.gap, rect, x: rect.left() + CELL_PAD, idx: 0, clickable });
+        resp
     }
 }
 
@@ -158,6 +177,9 @@ impl TableRow<'_> {
         );
         child.set_clip_rect(cell.expand2(egui::vec2(2.0, 0.0)).intersect(self.ui.clip_rect()));
         child.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        if self.clickable {
+            child.style_mut().interaction.selectable_labels = false;
+        }
         add(&mut child);
         self.x += w + self.gap;
     }
@@ -349,7 +371,7 @@ fn build_table(ui: &mut egui::Ui, cols: &[(&str, W)], widths: Vec<f32>, sort: So
     // hlavička (bez výplně), pod ní tenká čára a mezera před prvním řádkem
     let total = total_width(&widths, GAP);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(total, 28.0), egui::Sense::hover());
-    let mut h = TableRow { ui, widths: &widths, gap: GAP, rect, x: rect.left() + CELL_PAD, idx: 0 };
+    let mut h = TableRow { ui, widths: &widths, gap: GAP, rect, x: rect.left() + CELL_PAD, idx: 0, clickable: false };
     for (i, (t, _)) in cols.iter().enumerate() {
         let sortable = sort.cols.contains(&i) && !t.is_empty();
         h.col(|ui| {
@@ -762,6 +784,47 @@ mod tests {
         assert_eq!(super::fmt_bytes(512), "512 B");
         assert_eq!(super::fmt_bytes(1536), "1.5 KB");
         assert_eq!(super::fmt_bytes(3 * 1024 * 1024 * 1024), "3.0 GB");
+    }
+
+    /// Klik kamkoli do řádku (i na popisek s bublinou) je klik na řádek; tlačítko v buňce
+    /// si klik nechá.
+    #[test]
+    fn table_row_click_outside_buttons() {
+        use super::{egui, W};
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let frame = |events: Vec<egui::Event>| {
+            let (mut row_clicked, mut btn_clicked) = (false, false);
+            let (mut label, mut btn) = (egui::Rect::NOTHING, egui::Rect::NOTHING);
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    super::table(ui, "t", &[("A", W::Px(200.0)), ("B", W::Px(100.0))], |mut body| {
+                        row_clicked = body.row_click(40.0, |mut r| {
+                            r.col(|ui| label = ui.label("wslcd-k3s").on_hover_text("bublina").rect);
+                            r.col(|ui| {
+                                let b = ui.button("stop");
+                                btn = b.rect;
+                                btn_clicked = b.clicked();
+                            });
+                        });
+                    });
+                });
+            });
+            (row_clicked, btn_clicked, label, btn)
+        };
+        let btn_ev = |p: egui::Pos2, pressed: bool| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        // klik jako od uživatele: najetí, stisk a uvolnění v samostatných snímcích
+        let click = |p: egui::Pos2| {
+            let _ = frame(vec![egui::Event::PointerMoved(p)]);
+            let _ = frame(vec![btn_ev(p, true)]);
+            let (row, b, ..) = frame(vec![btn_ev(p, false)]);
+            (row, b)
+        };
+        let (_, _, label, btn) = frame(vec![]);
+        let empty = egui::pos2(label.right() + 40.0, label.center().y);
+        assert_eq!(click(empty), (true, false), "klik do prázdného místa řádku");
+        assert_eq!(click(label.center()), (true, false), "klik na popisek s bublinou otevře řádek");
+        assert_eq!(click(btn.center()), (false, true), "klik na tlačítko nepatří řádku");
     }
 
     #[test]
