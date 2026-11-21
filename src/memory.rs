@@ -329,6 +329,8 @@ pub struct Glance {
     pub vmmem: Option<u64>,
     /// fyzická RAM Windows (0 = neznámá)
     pub ram: u64,
+    /// z toho obsazeno ve Windows celkem (všechny procesy včetně VmmemWSL)
+    pub win_used: u64,
     /// vytížení CPU VM (%) od předchozího vzorku
     pub cpu: Option<f64>,
 }
@@ -509,20 +511,25 @@ fn vmmem_ntquery() -> Option<Option<u64>> {
 }
 
 /// Celková fyzická RAM Windows.
-#[cfg(windows)]
 pub fn total_ram() -> u64 {
+    win_ram().0
+}
+
+/// Fyzická RAM Windows: (celkem, obsazeno všemi procesy včetně VmmemWSL); (0, 0) = neznámá.
+#[cfg(windows)]
+pub fn win_ram() -> (u64, u64) {
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
     // SAFETY: struktura má nastavenou velikost.
     unsafe {
         let mut m: MEMORYSTATUSEX = std::mem::zeroed();
         m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
-        if GlobalMemoryStatusEx(&mut m) != 0 { m.ullTotalPhys } else { 0 }
+        if GlobalMemoryStatusEx(&mut m) != 0 { (m.ullTotalPhys, m.ullTotalPhys.saturating_sub(m.ullAvailPhys)) } else { (0, 0) }
     }
 }
 
 #[cfg(not(windows))]
-pub fn total_ram() -> u64 {
-    0
+pub fn win_ram() -> (u64, u64) {
+    (0, 0)
 }
 
 #[cfg(test)]

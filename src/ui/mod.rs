@@ -425,13 +425,18 @@ pub struct GlanceRow {
     pub value: String,
     pub bar: Option<f32>,
     pub dot: Option<bool>,
+    /// část pruhu zvýrazněná barvou akcentu (VmmemWSL v obsazené RAM Windows); s ní se celý
+    /// pruh kreslí tlumeně
+    pub part: Option<f32>,
+    /// hodnota před `value` v barvě zvýrazněné části („1.7 · …“)
+    pub lead: Option<String>,
 }
 
 /// Nahoře stavové řádky (kontejnery, Kubernetes), pod nimi metriky s pruhem (CPU, paměť VM,
 /// paměť Windows) – všechny metriky mají pruh, takže rozteč je pravidelná.
 pub fn glance_rows(g: &crate::memory::Glance, x: &GlanceCtx) -> Vec<GlanceRow> {
     let frac = |a: u64, b: u64| (b > 0).then(|| (a as f64 / b as f64) as f32);
-    let row = |label: String, value: String| GlanceRow { label, value, bar: None, dot: None };
+    let row = |label: String, value: String| GlanceRow { label, value, bar: None, dot: None, part: None, lead: None };
     let mut rows = vec![];
     if let Some((r, t)) = x.containers {
         let label = if x.engine.is_empty() { t!("Kontejnery", "Containers").to_string() } else { tf!("Kontejnery · {}", "Containers · {}", x.engine) };
@@ -447,9 +452,17 @@ pub fn glance_rows(g: &crate::memory::Glance, x: &GlanceCtx) -> Vec<GlanceRow> {
     };
     rows.push(GlanceRow { bar: Some(g.cpu.map(|c| (c / 100.0) as f32).unwrap_or(0.0)), ..row("CPU".into(), cpu) });
     rows.push(GlanceRow { bar: Some(frac(g.used, g.total).unwrap_or(0.0)), ..row(t!("Paměť", "Memory").into(), format!("{} / {}", fmt_gb(g.used), fmt_gb(g.total))) });
-    if let Some(v) = g.vmmem {
-        let value = if g.ram > 0 { format!("{} / {}", fmt_gb(v), fmt_gb(g.ram)) } else { fmt_gb(v) };
-        rows.push(GlanceRow { bar: Some(frac(v, g.ram).unwrap_or(0.0)), ..row("Windows".into(), value) });
+    // Windows: pruh = obsazená RAM Windows celkem, v ní zvýrazněný podíl VmmemWSL
+    if g.ram > 0 && g.win_used > 0 {
+        let gb = |b: u64| format!("{:.1}", b as f64 / (1024.0 * 1024.0 * 1024.0));
+        rows.push(GlanceRow {
+            bar: frac(g.win_used, g.ram),
+            part: g.vmmem.and_then(|v| frac(v, g.ram)),
+            lead: g.vmmem.map(gb),
+            ..row("Windows".into(), format!("{} / {}", gb(g.win_used), fmt_gb(g.ram)))
+        });
+    } else if let Some(v) = g.vmmem {
+        rows.push(GlanceRow { bar: Some(frac(v, g.ram).unwrap_or(0.0)), ..row("Windows".into(), fmt_gb(v)) });
     }
     rows
 }
@@ -480,7 +493,10 @@ pub fn glance(ui: &mut egui::Ui, g: &crate::memory::Glance, x: &GlanceCtx) -> eg
     for r in &rows {
         let y = top + GLANCE_TEXT / 2.0;
         p.text(egui::pos2(x0, y), egui::Align2::LEFT_CENTER, &r.label, font.clone(), theme::muted());
-        let vr = p.text(egui::pos2(x1, y), egui::Align2::RIGHT_CENTER, &r.value, font.clone(), theme::strong_text());
+        let mut vr = p.text(egui::pos2(x1, y), egui::Align2::RIGHT_CENTER, &r.value, font.clone(), theme::strong_text());
+        if let Some(lead) = &r.lead {
+            vr = p.text(egui::pos2(vr.left(), y), egui::Align2::RIGHT_CENTER, format!("{lead} · "), font.clone(), theme::accent());
+        }
         if let Some(on) = r.dot {
             p.circle_filled(egui::pos2(vr.left() - 7.0, y), 3.0, if on { theme::green() } else { theme::muted() });
         }
@@ -488,19 +504,30 @@ pub fn glance(ui: &mut egui::Ui, g: &crate::memory::Glance, x: &GlanceCtx) -> eg
             let by = top + GLANCE_TEXT + GLANCE_BAR_GAP;
             let bar = egui::Rect::from_min_max(egui::pos2(x0, by), egui::pos2(x1.max(x0 + 10.0), by + GLANCE_BAR));
             p.rect_filled(bar, 2.0, theme::card_stroke());
-            let f = f.clamp(0.0, 1.0);
-            if f > 0.0 {
-                p.rect_filled(egui::Rect::from_min_max(bar.min, egui::pos2(bar.left() + (bar.width() * f).max(3.0), bar.bottom())), 2.0, load_color(f));
+            let seg = |f: f32, color: Color32| {
+                let f = f.clamp(0.0, 1.0);
+                if f > 0.0 {
+                    p.rect_filled(egui::Rect::from_min_max(bar.min, egui::pos2(bar.left() + (bar.width() * f).max(3.0), bar.bottom())), 2.0, color);
+                }
+            };
+            match r.part {
+                // celkové obsazení tlumeně (od 75 % žlutě, od 90 % červeně), přes něj podíl WSL
+                Some(part) => {
+                    let total = if f >= 0.75 { load_color(f) } else { theme::muted() };
+                    seg(f, total.gamma_multiply(0.55));
+                    seg(part, theme::accent());
+                }
+                None => seg(f, load_color(f)),
             }
         }
         top += glance_row_h(r);
     }
     let vmmem = g.vmmem.map(fmt_bytes).unwrap_or_else(|| "?".into());
     let cpu = g.cpu.map(|c| format!("{c:.1} %")).unwrap_or_else(|| "…".into());
-    let (used, total, cache, ram) = (fmt_bytes(g.used), fmt_bytes(g.total), fmt_bytes(g.cache), fmt_bytes(g.ram));
+    let (used, total, cache, ram, win) = (fmt_bytes(g.used), fmt_bytes(g.total), fmt_bytes(g.cache), fmt_bytes(g.ram), fmt_bytes(g.win_used));
     resp.on_hover_text(tf!(
-        "Celá WSL VM (všechny distribuce)\nCPU: {cpu} ze všech procesorů VM (· jejich počet)\nPaměť – použitá procesy v Linuxu: {used} z {total}\nCache souborů: {cache}\nWindows – kolik si VM bere z RAM Windows (VmmemWSL): {vmmem} z {ram}\n(obsahuje i cache a paměť, kterou Linux ještě nevrátil)\nKlikni pro Přehled",
-        "Whole WSL VM (all distributions)\nCPU: {cpu} of all VM processors (· their count)\nMemory – used by Linux processes: {used} of {total}\nFile cache: {cache}\nWindows – Windows RAM taken by the VM (VmmemWSL): {vmmem} of {ram}\n(includes cache and memory Linux has not returned yet)\nClick for the Overview"
+        "Celá WSL VM (všechny distribuce)\nCPU: {cpu} ze všech procesorů VM (· jejich počet)\nPaměť – použitá procesy v Linuxu: {used} z {total}\nCache souborů: {cache}\nWindows – obsazená RAM Windows: {win} z {ram}\n  z toho WSL VM (VmmemWSL, barevně): {vmmem}\n  (obsahuje i cache a paměť, kterou Linux ještě nevrátil)\nKlikni pro Přehled",
+        "Whole WSL VM (all distributions)\nCPU: {cpu} of all VM processors (· their count)\nMemory – used by Linux processes: {used} of {total}\nFile cache: {cache}\nWindows – Windows RAM in use: {win} of {ram}\n  of which the WSL VM (VmmemWSL, coloured): {vmmem}\n  (includes cache and memory Linux has not returned yet)\nClick for the Overview"
     ))
     .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -741,7 +768,7 @@ mod tests {
     fn glance_rows_like_kiri() {
         use super::{GlanceCtx, GlanceRow};
         const G: u64 = 1024 * 1024 * 1024;
-        let g = crate::memory::Glance { used: 2 * G, total: 16 * G, cache: G, vmmem: Some(6 * G), ram: 32 * G, cpu: Some(12.0) };
+        let g = crate::memory::Glance { used: 2 * G, total: 16 * G, cache: G, vmmem: Some(6 * G), ram: 32 * G, win_used: 24 * G, cpu: Some(12.0) };
         let x = GlanceCtx { engine: "Podman", containers: Some((3, 5)), ncpu: Some(8), k8s: Some(true) };
         let rows = super::glance_rows(&g, &x);
         assert_eq!(rows.len(), 5, "kontejnery, Kubernetes, CPU, paměť, Windows");
@@ -749,12 +776,17 @@ mod tests {
         assert_eq!((rows[1].label.as_str(), rows[1].dot, rows[1].bar), ("Kubernetes", Some(true), None));
         assert_eq!((rows[2].label.as_str(), rows[2].value.as_str(), rows[2].bar), ("CPU", "12 % · 8", Some(0.12)));
         assert_eq!((rows[3].value.as_str(), rows[3].bar), ("2.0 GB / 16.0 GB", Some(2.0 / 16.0)));
-        assert_eq!((rows[4].label.as_str(), rows[4].value.as_str(), rows[4].bar), ("Windows", "6.0 GB / 32.0 GB", Some(6.0 / 32.0)));
+        // Windows: obsazeno celkem 24 z 32 GB, z toho VmmemWSL 6 GB (zvýrazněná část a číslo vpředu)
+        assert_eq!((rows[4].label.as_str(), rows[4].value.as_str(), rows[4].bar), ("Windows", "24.0 / 32.0 GB", Some(0.75)));
+        assert_eq!((rows[4].part, rows[4].lead.as_deref()), (Some(6.0 / 32.0), Some("6.0")));
         // bez enginu, VmmemWSL a clusteru jen metriky CPU a paměť; neznámá RAM Windows → prázdný pruh
-        let min = super::glance_rows(&crate::memory::Glance { vmmem: None, ..g }, &GlanceCtx::default());
+        let min = super::glance_rows(&crate::memory::Glance { vmmem: None, win_used: 0, ..g }, &GlanceCtx::default());
         assert_eq!((min.len(), min[0].label.as_str(), min[0].value.as_str()), (2, "CPU", "12 %"));
         let r: Vec<GlanceRow> = super::glance_rows(&crate::memory::Glance { ram: 0, ..g }, &GlanceCtx::default());
-        assert_eq!((r[2].bar, r[2].value.as_str()), (Some(0.0), "6.0 GB"));
+        assert_eq!((r[2].bar, r[2].value.as_str(), r[2].part), (Some(0.0), "6.0 GB", None));
+        // VmmemWSL nezměřený: pruh jen celkového obsazení Windows
+        let r = super::glance_rows(&crate::memory::Glance { vmmem: None, ..g }, &GlanceCtx::default());
+        assert_eq!((r[2].value.as_str(), r[2].part, r[2].lead.as_deref()), ("24.0 / 32.0 GB", None, None));
 
         // vykreslení bez okna: 5 řádků textu, pod třemi metrikami pruh – nic se nepřekrývá
         use super::egui;
