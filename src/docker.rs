@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 pub use crate::error::ApiError;
 use crate::http::client::{http_response, Client, Request};
-use crate::http::conn::{Connect, TcpConnect};
+use crate::http::conn::{Connect, TcpConnect, UnixConnect};
 use crate::http::Endpoint;
 
 /// Časový limit navázání spojení s API.
@@ -506,21 +506,6 @@ pub struct Docker {
     conn: Arc<dyn Connect>,
 }
 
-/// Spojení, které se nikdy nepodaří (endpoint, pro který zatím není transport).
-struct UnsupportedConnect(String);
-
-impl Connect for UnsupportedConnect {
-    fn connect(&self, _timeout: Duration) -> std::io::Result<Box<dyn crate::http::conn::Stream>> {
-        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, format!("unix socket {} není podporován", self.0)))
-    }
-    fn describe(&self) -> String {
-        self.0.clone()
-    }
-    fn host_header(&self) -> String {
-        "localhost".into()
-    }
-}
-
 impl Docker {
     /// Klient pro endpoint a aktuální TLS nastavení. Klient (a jeho pool spojení s keep-alive)
     /// se sdílí mezi všemi voláními se stejným endpointem a TLS klíčem.
@@ -549,8 +534,8 @@ impl Docker {
     fn for_endpoint(ep: &Endpoint, tls: Option<Arc<rustls::ClientConfig>>) -> Self {
         match ep {
             Endpoint::Tcp { port } => Self::with_tls(*port, tls),
-            // Unix socket zatím nemá spojení: klient hlásí srozumitelnou chybu při připojení.
-            Endpoint::Unix(path) => Self::with_connect(Arc::new(UnsupportedConnect(path.display().to_string()))),
+            // TLS se na unix socketu nepoužije
+            Endpoint::Unix(path) => Self::with_connect(Arc::new(UnixConnect { path: path.clone() })),
         }
     }
 

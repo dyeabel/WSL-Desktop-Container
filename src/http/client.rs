@@ -681,6 +681,8 @@ mod tests {
     use super::*;
     use crate::error::ApiError;
     use crate::http::conn::{Connect, TcpConnect};
+    #[cfg(unix)]
+    use crate::http::conn::UnixConnect;
     use std::io::{BufReader, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1272,5 +1274,58 @@ mod tests {
         assert!(rx.try_recv().is_err(), "čtení skončilo dřív než shutdown");
         close();
         assert!(rx.recv_timeout(Duration::from_secs(1)).is_ok(), "čtení přes TLS se po shutdown neodblokovalo");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_keep_alive_reuses_connection() {
+        use std::os::unix::net::UnixListener;
+        let d = std::env::temp_dir().join(format!("wslcd-unix-ka-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let path = d.join("s.sock");
+        let l = UnixListener::bind(&path).unwrap();
+        let conns = Arc::new(AtomicUsize::new(0));
+        let hosts = Arc::new(Mutex::new(Vec::<String>::new()));
+        let (c2, h2) = (conns.clone(), hosts.clone());
+        std::thread::spawn(move || {
+            for s in l.incoming() {
+                let Ok(s) = s else { break };
+                c2.fetch_add(1, Ordering::SeqCst);
+                let h2 = h2.clone();
+                std::thread::spawn(move || {
+                    let mut r = BufReader::new(s.try_clone().unwrap());
+                    let mut w = s;
+                    loop {
+                        let mut line = String::new();
+                        if r.read_line(&mut line).unwrap_or(0) == 0 {
+                            break;
+                        }
+                        loop {
+                            let mut h = String::new();
+                            if r.read_line(&mut h).unwrap_or(0) == 0 {
+                                return;
+                            }
+                            if h.trim_end().is_empty() {
+                                break;
+                            }
+                            if h.to_ascii_lowercase().starts_with("host:") {
+                                h2.lock().unwrap().push(h[5..].trim().to_string());
+                            }
+                        }
+                        if w.write_all(OK).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        let c = Client::new(Arc::new(UnixConnect { path: path.clone() }), Duration::from_millis(500), Duration::from_secs(2));
+        for _ in 0..3 {
+            assert_eq!(c.request("GET", "/x").call().unwrap().into_string().unwrap(), "ok");
+        }
+        assert_eq!(conns.load(Ordering::SeqCst), 1);
+        assert_eq!(hosts.lock().unwrap().as_slice(), ["localhost", "localhost", "localhost"]);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
