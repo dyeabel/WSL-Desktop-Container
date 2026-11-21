@@ -110,6 +110,8 @@ pub struct TableRow<'a> {
     rect: egui::Rect,
     x: f32,
     idx: usize,
+    /// klikací řádek: text v buňkách nejde označovat (označitelný popisek by si klik vzal)
+    clickable: bool,
 }
 
 const CELL_PAD: f32 = 8.0;
@@ -124,10 +126,25 @@ fn total_width(widths: &[f32], gap: f32) -> f32 {
 
 impl TableBody<'_> {
     pub fn row(&mut self, height: f32, add: impl FnOnce(TableRow<'_>)) {
+        let _ = self.row_sense(height, egui::Sense::hover(), add);
+    }
+
+    /// Klikací řádek (klik mimo tlačítka v buňkách) – vrací true po kliknutí.
+    pub fn row_click(&mut self, height: f32, add: impl FnOnce(TableRow<'_>)) -> bool {
+        let resp = self.row_sense(height, egui::Sense::click(), add);
+        if resp.hovered() {
+            self.ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        resp.clicked()
+    }
+
+    fn row_sense(&mut self, height: f32, sense: egui::Sense, add: impl FnOnce(TableRow<'_>)) -> egui::Response {
         let total = total_width(&self.widths, self.gap);
-        let (rect, resp) = self.ui.allocate_exact_size(egui::vec2(total, height), egui::Sense::hover());
+        let (rect, resp) = self.ui.allocate_exact_size(egui::vec2(total, height), sense);
         if self.ui.is_rect_visible(rect) {
-            let fill = if resp.hovered() {
+            // zvýraznit podle polohy ukazatele v celém řádku – `hovered()` je false nad popisky
+            // s bublinou (image, porty, stav), které leží nad řádkem
+            let fill = if resp.contains_pointer() {
                 Some(theme::row_hover())
             } else if self.n % 2 == 1 {
                 Some(theme::row_stripe())
@@ -139,7 +156,9 @@ impl TableBody<'_> {
             }
         }
         self.n += 1;
-        add(TableRow { ui: self.ui, widths: &self.widths, gap: self.gap, rect, x: rect.left() + CELL_PAD, idx: 0 });
+        let clickable = sense.senses_click();
+        add(TableRow { ui: self.ui, widths: &self.widths, gap: self.gap, rect, x: rect.left() + CELL_PAD, idx: 0, clickable });
+        resp
     }
 }
 
@@ -158,6 +177,9 @@ impl TableRow<'_> {
         );
         child.set_clip_rect(cell.expand2(egui::vec2(2.0, 0.0)).intersect(self.ui.clip_rect()));
         child.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        if self.clickable {
+            child.style_mut().interaction.selectable_labels = false;
+        }
         add(&mut child);
         self.x += w + self.gap;
     }
@@ -349,7 +371,7 @@ fn build_table(ui: &mut egui::Ui, cols: &[(&str, W)], widths: Vec<f32>, sort: So
     // hlavička (bez výplně), pod ní tenká čára a mezera před prvním řádkem
     let total = total_width(&widths, GAP);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(total, 28.0), egui::Sense::hover());
-    let mut h = TableRow { ui, widths: &widths, gap: GAP, rect, x: rect.left() + CELL_PAD, idx: 0 };
+    let mut h = TableRow { ui, widths: &widths, gap: GAP, rect, x: rect.left() + CELL_PAD, idx: 0, clickable: false };
     for (i, (t, _)) in cols.iter().enumerate() {
         let sortable = sort.cols.contains(&i) && !t.is_empty();
         h.col(|ui| {
@@ -407,6 +429,8 @@ fn load_color(frac: f32) -> Color32 {
 /// Co karta enginu ukazuje navíc k vzorku paměti (ze snímku enginu).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GlanceCtx {
+    /// název enginu (popisek řádku kontejnerů)
+    pub engine: &'static str,
     /// běžící / všechny kontejnery (jen když engine odpovídá)
     pub containers: Option<(i64, i64)>,
     /// počet CPU VM (NCPU z /info)
@@ -423,78 +447,109 @@ pub struct GlanceRow {
     pub value: String,
     pub bar: Option<f32>,
     pub dot: Option<bool>,
+    /// část pruhu zvýrazněná barvou akcentu (VmmemWSL v obsazené RAM Windows); s ní se celý
+    /// pruh kreslí tlumeně
+    pub part: Option<f32>,
+    /// hodnota před `value` v barvě zvýrazněné části („1.7 · …“)
+    pub lead: Option<String>,
 }
 
+/// Nahoře stavové řádky (kontejnery, Kubernetes), pod nimi metriky s pruhem (CPU, paměť VM,
+/// paměť Windows) – všechny metriky mají pruh, takže rozteč je pravidelná.
 pub fn glance_rows(g: &crate::memory::Glance, x: &GlanceCtx) -> Vec<GlanceRow> {
     let frac = |a: u64, b: u64| (b > 0).then(|| (a as f64 / b as f64) as f32);
-    let row = |label: &str, value: String| GlanceRow { label: label.into(), value, bar: None, dot: None };
+    let row = |label: String, value: String| GlanceRow { label, value, bar: None, dot: None, part: None, lead: None };
     let mut rows = vec![];
     if let Some((r, t)) = x.containers {
-        rows.push(row(t!("Kontejnery", "Containers"), format!("{r} / {t}")));
-    }
-    let cpu = g.cpu.map(|c| format!("{c:.0} %")).unwrap_or_else(|| "…".into());
-    rows.push(row("CPU", match x.ncpu.filter(|n| *n > 0) {
-        Some(n) => format!("{cpu} · {n}"),
-        None => cpu,
-    }));
-    rows.push(GlanceRow { bar: Some(frac(g.used, g.total).unwrap_or(0.0)), ..row(t!("Paměť", "Memory"), format!("{} / {}", fmt_gb(g.used), fmt_gb(g.total))) });
-    if let Some(v) = g.vmmem {
-        let value = if g.ram > 0 { format!("{} / {}", fmt_gb(v), fmt_gb(g.ram)) } else { fmt_gb(v) };
-        rows.push(GlanceRow { bar: frac(v, g.ram), ..row("Windows", value) });
+        let label = if x.engine.is_empty() { t!("Kontejnery", "Containers").to_string() } else { tf!("Kontejnery · {}", "Containers · {}", x.engine) };
+        rows.push(row(label, format!("{r} / {t}")));
     }
     if let Some(on) = x.k8s {
-        rows.push(GlanceRow { dot: Some(on), ..row("Kubernetes", if on { t!("Běží", "Running") } else { t!("Zastaven", "Stopped") }.into()) });
+        rows.push(GlanceRow { dot: Some(on), ..row("Kubernetes".into(), if on { t!("Běží", "Running") } else { t!("Zastaven", "Stopped") }.into()) });
+    }
+    let cpu = g.cpu.map(|c| format!("{c:.0} %")).unwrap_or_else(|| "…".into());
+    let cpu = match x.ncpu.filter(|n| *n > 0) {
+        Some(n) => format!("{cpu} · {n}"),
+        None => cpu,
+    };
+    rows.push(GlanceRow { bar: Some(g.cpu.map(|c| (c / 100.0) as f32).unwrap_or(0.0)), ..row("CPU".into(), cpu) });
+    rows.push(GlanceRow { bar: Some(frac(g.used, g.total).unwrap_or(0.0)), ..row(t!("Paměť", "Memory").into(), format!("{} / {}", fmt_gb(g.used), fmt_gb(g.total))) });
+    // Windows: pruh = obsazená RAM Windows celkem, v ní zvýrazněný podíl VmmemWSL
+    if g.ram > 0 && g.win_used > 0 {
+        let gb = |b: u64| format!("{:.1}", b as f64 / (1024.0 * 1024.0 * 1024.0));
+        rows.push(GlanceRow {
+            bar: frac(g.win_used, g.ram),
+            part: g.vmmem.and_then(|v| frac(v, g.ram)),
+            lead: g.vmmem.map(gb),
+            ..row("Windows".into(), format!("{} / {}", gb(g.win_used), fmt_gb(g.ram)))
+        });
+    } else if let Some(v) = g.vmmem {
+        rows.push(GlanceRow { bar: Some(frac(v, g.ram).unwrap_or(0.0)), ..row("Windows".into(), fmt_gb(v)) });
     }
     rows
 }
 
-/// Výška řádku karty enginu: text, u pruhu navíc pruh pod ním.
-const GLANCE_TEXT: f32 = 20.0;
-const GLANCE_BAR: f32 = 4.0;
-const GLANCE_BAR_GAP: f32 = 2.0;
+/// Výška řádku karty enginu: text, u metriky navíc pruh pod ním.
+/// Pruh má vlastní místo pod textem (mezera, pruh, mezera k dalšímu řádku) – nepřetíná písmena.
+const GLANCE_TEXT: f32 = 16.0;
+const GLANCE_BAR_GAP: f32 = 3.0;
+const GLANCE_BAR: f32 = 3.0;
 const GLANCE_BAR_AFTER: f32 = 6.0;
 
 fn glance_row_h(r: &GlanceRow) -> f32 {
     GLANCE_TEXT + if r.bar.is_some() { GLANCE_BAR_GAP + GLANCE_BAR + GLANCE_BAR_AFTER } else { 0.0 }
 }
 
-/// Karta enginu v bočním panelu (styl Kiri): kontejnery, CPU, paměť ve VM a ve Windows
-/// (VmmemWSL) s tenkým pruhem, stav Kubernetes. Celý blok je klikací, detail v bublině.
+/// Karta enginu v bočním panelu (styl Kiri): kontejnery, Kubernetes, CPU, paměť ve VM a ve
+/// Windows (VmmemWSL). Celý blok je klikací, detail v bublině.
 pub fn glance(ui: &mut egui::Ui, g: &crate::memory::Glance, x: &GlanceCtx) -> egui::Response {
     let rows = glance_rows(g, x);
     let w = ui.available_width();
-    let h: f32 = rows.iter().map(glance_row_h).sum();
+    let h: f32 = rows.iter().map(glance_row_h).sum::<f32>() - GLANCE_BAR_AFTER;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
     let p = ui.painter_at(rect);
+    // popisek i hodnota stejným písmem → společná účaří
     let font = egui::TextStyle::Small.resolve(ui.style());
-    let strong = egui::FontId::new(font.size + 1.0, font.family.clone());
-    // přes celou šířku karty (zarovnané s tlačítky pod ním)
     let (x0, x1) = (rect.left(), rect.right());
     let mut top = rect.top();
     for r in &rows {
         let y = top + GLANCE_TEXT / 2.0;
         p.text(egui::pos2(x0, y), egui::Align2::LEFT_CENTER, &r.label, font.clone(), theme::muted());
-        let vr = p.text(egui::pos2(x1, y), egui::Align2::RIGHT_CENTER, &r.value, strong.clone(), theme::strong_text());
+        let mut vr = p.text(egui::pos2(x1, y), egui::Align2::RIGHT_CENTER, &r.value, font.clone(), theme::strong_text());
+        if let Some(lead) = &r.lead {
+            vr = p.text(egui::pos2(vr.left(), y), egui::Align2::RIGHT_CENTER, format!("{lead} · "), font.clone(), theme::accent());
+        }
         if let Some(on) = r.dot {
-            p.circle_filled(egui::pos2(vr.left() - 7.0, y), 3.5, if on { theme::green() } else { theme::muted() });
+            p.circle_filled(egui::pos2(vr.left() - 7.0, y), 3.0, if on { theme::green() } else { theme::muted() });
         }
         if let Some(f) = r.bar {
             let by = top + GLANCE_TEXT + GLANCE_BAR_GAP;
             let bar = egui::Rect::from_min_max(egui::pos2(x0, by), egui::pos2(x1.max(x0 + 10.0), by + GLANCE_BAR));
             p.rect_filled(bar, 2.0, theme::card_stroke());
-            let f = f.clamp(0.0, 1.0);
-            if f > 0.0 {
-                p.rect_filled(egui::Rect::from_min_max(bar.min, egui::pos2(bar.left() + (bar.width() * f).max(3.0), bar.bottom())), 2.0, load_color(f));
+            let seg = |f: f32, color: Color32| {
+                let f = f.clamp(0.0, 1.0);
+                if f > 0.0 {
+                    p.rect_filled(egui::Rect::from_min_max(bar.min, egui::pos2(bar.left() + (bar.width() * f).max(3.0), bar.bottom())), 2.0, color);
+                }
+            };
+            match r.part {
+                // celkové obsazení tlumeně (od 75 % žlutě, od 90 % červeně), přes něj podíl WSL
+                Some(part) => {
+                    let total = if f >= 0.75 { load_color(f) } else { theme::muted() };
+                    seg(f, total.gamma_multiply(0.55));
+                    seg(part, theme::accent());
+                }
+                None => seg(f, load_color(f)),
             }
         }
         top += glance_row_h(r);
     }
     let vmmem = g.vmmem.map(fmt_bytes).unwrap_or_else(|| "?".into());
     let cpu = g.cpu.map(|c| format!("{c:.1} %")).unwrap_or_else(|| "…".into());
-    let (used, total, cache, ram) = (fmt_bytes(g.used), fmt_bytes(g.total), fmt_bytes(g.cache), fmt_bytes(g.ram));
+    let (used, total, cache, ram, win) = (fmt_bytes(g.used), fmt_bytes(g.total), fmt_bytes(g.cache), fmt_bytes(g.ram), fmt_bytes(g.win_used));
     resp.on_hover_text(tf!(
-        "Celá WSL VM (všechny distribuce)\nCPU: {cpu} (· počet procesorů VM)\nPaměť – použitá procesy v Linuxu: {used} z {total}\nCache souborů: {cache}\nWindows – kolik si VM bere z RAM Windows (VmmemWSL): {vmmem} z {ram}\n(obsahuje i cache a paměť, kterou Linux ještě nevrátil)\nKlikni pro Přehled",
-        "Whole WSL VM (all distributions)\nCPU: {cpu} (· number of VM processors)\nMemory – used by Linux processes: {used} of {total}\nFile cache: {cache}\nWindows – Windows RAM taken by the VM (VmmemWSL): {vmmem} of {ram}\n(includes cache and memory Linux has not returned yet)\nClick for the Overview"
+        "Celá WSL VM (všechny distribuce)\nCPU: {cpu} ze všech procesorů VM (· jejich počet)\nPaměť – použitá procesy v Linuxu: {used} z {total}\nCache souborů: {cache}\nWindows – obsazená RAM Windows: {win} z {ram}\n  z toho WSL VM (VmmemWSL, barevně): {vmmem}\n  (obsahuje i cache a paměť, kterou Linux ještě nevrátil)\nKlikni pro Přehled",
+        "Whole WSL VM (all distributions)\nCPU: {cpu} of all VM processors (· their count)\nMemory – used by Linux processes: {used} of {total}\nFile cache: {cache}\nWindows – Windows RAM in use: {win} of {ram}\n  of which the WSL VM (VmmemWSL, coloured): {vmmem}\n  (includes cache and memory Linux has not returned yet)\nClick for the Overview"
     ))
     .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -731,34 +786,79 @@ mod tests {
         assert_eq!(super::fmt_bytes(3 * 1024 * 1024 * 1024), "3.0 GB");
     }
 
+    /// Klik kamkoli do řádku (i na popisek s bublinou) je klik na řádek; tlačítko v buňce
+    /// si klik nechá.
+    #[test]
+    fn table_row_click_outside_buttons() {
+        use super::{egui, W};
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let frame = |events: Vec<egui::Event>| {
+            let (mut row_clicked, mut btn_clicked) = (false, false);
+            let (mut label, mut btn) = (egui::Rect::NOTHING, egui::Rect::NOTHING);
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    super::table(ui, "t", &[("A", W::Px(200.0)), ("B", W::Px(100.0))], |mut body| {
+                        row_clicked = body.row_click(40.0, |mut r| {
+                            r.col(|ui| label = ui.label("wslcd-k3s").on_hover_text("bublina").rect);
+                            r.col(|ui| {
+                                let b = ui.button("stop");
+                                btn = b.rect;
+                                btn_clicked = b.clicked();
+                            });
+                        });
+                    });
+                });
+            });
+            (row_clicked, btn_clicked, label, btn)
+        };
+        let btn_ev = |p: egui::Pos2, pressed: bool| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        // klik jako od uživatele: najetí, stisk a uvolnění v samostatných snímcích
+        let click = |p: egui::Pos2| {
+            let _ = frame(vec![egui::Event::PointerMoved(p)]);
+            let _ = frame(vec![btn_ev(p, true)]);
+            let (row, b, ..) = frame(vec![btn_ev(p, false)]);
+            (row, b)
+        };
+        let (_, _, label, btn) = frame(vec![]);
+        let empty = egui::pos2(label.right() + 40.0, label.center().y);
+        assert_eq!(click(empty), (true, false), "klik do prázdného místa řádku");
+        assert_eq!(click(label.center()), (true, false), "klik na popisek s bublinou otevře řádek");
+        assert_eq!(click(btn.center()), (false, true), "klik na tlačítko nepatří řádku");
+    }
+
     #[test]
     fn glance_rows_like_kiri() {
         use super::{GlanceCtx, GlanceRow};
         const G: u64 = 1024 * 1024 * 1024;
-        let g = crate::memory::Glance { used: 2 * G, total: 16 * G, cache: G, vmmem: Some(6 * G), ram: 32 * G, cpu: Some(12.0) };
-        let x = GlanceCtx { containers: Some((3, 5)), ncpu: Some(8), k8s: Some(true) };
+        let g = crate::memory::Glance { used: 2 * G, total: 16 * G, cache: G, vmmem: Some(6 * G), ram: 32 * G, win_used: 24 * G, cpu: Some(12.0) };
+        let x = GlanceCtx { engine: "Podman", containers: Some((3, 5)), ncpu: Some(8), k8s: Some(true) };
         let rows = super::glance_rows(&g, &x);
-        assert_eq!(rows.len(), 5, "kontejnery, CPU, paměť, Windows, Kubernetes");
-        assert_eq!((rows[0].value.as_str(), rows[0].bar), ("3 / 5", None));
-        assert_eq!((rows[1].label.as_str(), rows[1].value.as_str(), rows[1].bar), ("CPU", "12 % · 8", None), "CPU bez pruhu, s počtem jader");
-        assert_eq!((rows[2].value.as_str(), rows[2].bar), ("2.0 GB / 16.0 GB", Some(2.0 / 16.0)));
-        assert_eq!((rows[3].label.as_str(), rows[3].value.as_str(), rows[3].bar), ("Windows", "6.0 GB / 32.0 GB", Some(6.0 / 32.0)));
-        assert_eq!((rows[4].label.as_str(), rows[4].dot), ("Kubernetes", Some(true)));
-        // bez enginu, VmmemWSL a clusteru jen CPU a paměť; neznámá RAM Windows → bez pruhu
-        let min = super::glance_rows(&crate::memory::Glance { vmmem: None, ..g }, &GlanceCtx::default());
-        assert_eq!(min.iter().map(|r| r.label.as_str()).filter(|l| *l == "CPU" || *l == "Windows").count(), 1);
-        assert_eq!((min.len(), min[0].value.as_str()), (2, "12 %"));
+        assert_eq!(rows.len(), 5, "kontejnery, Kubernetes, CPU, paměť, Windows");
+        assert!(rows[0].label.ends_with("Podman") && rows[0].value == "3 / 5" && rows[0].bar.is_none());
+        assert_eq!((rows[1].label.as_str(), rows[1].dot, rows[1].bar), ("Kubernetes", Some(true), None));
+        assert_eq!((rows[2].label.as_str(), rows[2].value.as_str(), rows[2].bar), ("CPU", "12 % · 8", Some(0.12)));
+        assert_eq!((rows[3].value.as_str(), rows[3].bar), ("2.0 GB / 16.0 GB", Some(2.0 / 16.0)));
+        // Windows: obsazeno celkem 24 z 32 GB, z toho VmmemWSL 6 GB (zvýrazněná část a číslo vpředu)
+        assert_eq!((rows[4].label.as_str(), rows[4].value.as_str(), rows[4].bar), ("Windows", "24.0 / 32.0 GB", Some(0.75)));
+        assert_eq!((rows[4].part, rows[4].lead.as_deref()), (Some(6.0 / 32.0), Some("6.0")));
+        // bez enginu, VmmemWSL a clusteru jen metriky CPU a paměť; neznámá RAM Windows → prázdný pruh
+        let min = super::glance_rows(&crate::memory::Glance { vmmem: None, win_used: 0, ..g }, &GlanceCtx::default());
+        assert_eq!((min.len(), min[0].label.as_str(), min[0].value.as_str()), (2, "CPU", "12 %"));
         let r: Vec<GlanceRow> = super::glance_rows(&crate::memory::Glance { ram: 0, ..g }, &GlanceCtx::default());
-        assert_eq!((r[2].bar, r[2].value.as_str()), (None, "6.0 GB"));
+        assert_eq!((r[2].bar, r[2].value.as_str(), r[2].part), (Some(0.0), "6.0 GB", None));
+        // VmmemWSL nezměřený: pruh jen celkového obsazení Windows
+        let r = super::glance_rows(&crate::memory::Glance { vmmem: None, ..g }, &GlanceCtx::default());
+        assert_eq!((r[2].value.as_str(), r[2].part, r[2].lead.as_deref()), ("24.0 / 32.0 GB", None, None));
 
-        // vykreslení bez okna: 5 řádků textu, pod dvěma pruh – nic se nepřekrývá
+        // vykreslení bez okna: 5 řádků textu, pod třemi metrikami pruh – nic se nepřekrývá
         use super::egui;
         let ctx = egui::Context::default();
         let mut h = 0.0;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| h = super::glance(ui, &g, &x).rect.height());
         });
-        assert_eq!(h, 5.0 * 20.0 + 2.0 * 12.0);
+        assert_eq!(h, 5.0 * 16.0 + 3.0 * 12.0 - 6.0, "pruh pod textem, ne přes něj");
     }
 }
 

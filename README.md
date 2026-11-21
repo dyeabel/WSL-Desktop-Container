@@ -45,13 +45,13 @@ plumbing between Windows and WSL. **WSL Container Desktop provides exactly that 
 
 | Page | What it does |
 |---|---|
-| **Overview** (Přehled) | engine status, container / image / volume counts, CPU and RAM available to WSL; tiles side by side: **CPU** of containers with a 15-minute chart, **Disk** – engine storage (images, containers, volumes, build cache) against the distribution disk with a usage bar, VHDX and Windows drive and a *Clean up* menu (prune), **WSL memory** summary bar next to its history chart (1 h / 24 h / 7 d / 30 d, kept across restarts) and a *Weekly summary*; live CPU, memory, network and disk stats per running container (with its image and compose stack, against the container's limit when it has one) |
-| **Containers** (Kontejnery) | grouped by compose project; start, stop, restart, pause, remove; colored state badges (running, stopped, error with exit code, health); live logs (see *Logs*); **files inside the container**; console in Windows Terminal; *Run container* dialog; **container detail** (see below) |
+| **Overview** (Přehled) | engine status, container / image / volume counts, CPU and RAM available to WSL; tiles side by side: **CPU** of the whole WSL VM (same as the sidebar card) and of containers, with a 15-minute chart of both, **Disk** – engine storage (images, containers, volumes, build cache) against the distribution disk with a usage bar, VHDX and Windows drive and a *Clean up* menu (prune), **WSL memory** summary bar next to its history chart (1 h / 24 h / 7 d / 30 d, kept across restarts) and a *Weekly summary*; live CPU, memory, network and disk stats per running container (with its image and compose stack, against the container's limit when it has one) |
+| **Containers** (Kontejnery) | grouped by compose project; start, stop, restart, pause, remove; colored state badges (running, stopped, error with exit code, health); live logs (see *Logs*); **files inside the container**; console in Windows Terminal; *Run container* dialog; **container detail** – click a row (see below) |
 | **Images** | **build from a Dockerfile** (see below), search Docker Hub (dialog with tag picker, size and update date), pull by exact name, remove, prune, run a container from an image, which containers use an image |
 | **Volumes** | create, remove, prune, **size**, which containers use a volume, browse its content (as root), *run a container with this volume*, **back up to `.tar.gz`, restore, clone** |
 | **Networks** (Sítě) | create (bridge, ipvlan, macvlan), remove, prune, subnets, attached containers |
 | **Compose** | stacks detected from container labels: up, stop, start, restart, pull, build, ps, logs, down, **scale a service**; **new stack from a template**; **built-in editor for the compose file and `.env` with validation** (Notepad still available); start a stack from any folder (Windows or Linux path) |
-| **Kubernetes** | local **single-node k3s** as a container in the primary engine (Docker or Podman): create, start, stop, delete; **environments** (namespaces) from a **FE + API + DB template** (nginx → PostgREST → PostgreSQL) or a **folder of YAML**; pods, services, *Expose on localhost* (NodePort 30080–30099); **flow map** of real connections (conntrack in the node, incl. short HTTP requests); **rules** “who may talk to whom” → NetworkPolicy (enforced by k3s), with **Test connection**; kubeconfig in the app data folder (portable); load a local image into the cluster |
+| **Kubernetes** | local **single-node k3s** as a container in the primary engine (Docker or Podman): create, start, stop, delete; **environments** (namespaces) from a **FE + API + DB template** (nginx → PostgREST → PostgreSQL) or a **folder of YAML**; pods, services, *Expose on localhost* (NodePort 30080–30099); **flow map** of real connections (conntrack in the node, incl. short HTTP requests); **rules** “who may talk to whom” → NetworkPolicy (enforced by k3s), with **Test connection**; kubeconfig in the app data folder; starts again by itself after a WSL restart; load a local image into the cluster |
 | **Files** (Soubory) | file browser for the distribution: navigation, bookmarks, *New* menu (folder, file), *Upload from Windows* menu (files, folder), rename and move, delete, chmod, built-in text editor (Ctrl+S), download to Windows, *Work as root* mode; bulk actions appear only when something is selected, row actions live in a per-row ⋯ menu |
 | **WSL engine** | start, stop and restart the engine, put the distribution to sleep, terminal; distribution list (start, sleep, default, **make primary** – moves the API and optionally puts the previous one to sleep, ⋯ *primary with Docker / Podman*, **export, disk & compacting, remove with confirmation**), **import**; *Install & setup* section: Docker / Podman switch, install, API setup, uninstall, `docker` command in PATH, `DOCKER_HOST`, **API security (TLS)**; editor for `/etc/docker/daemon.json` (Docker only) |
 | **Settings** (Nastavení) | language (Czech / English), **theme (dark / light / follow Windows)**, primary distribution (switched on the *WSL engine* page) and *Add distribution* wizard, API port, refresh interval (window shown / in the background), keep-alive, engine autostart, restoring containers that were running last time, **start with Windows**, **Windows notifications**, tray behaviour, `docker` command in PATH, global `.wslconfig` (memory, CPU, swap, `vmIdleTimeout`, `networkingMode`) |
@@ -78,7 +78,15 @@ a column header (ascending → descending → off); directories stay on top in f
 volume `wslcd-k3s-data`, API on `127.0.0.1:6443`, exposed services on `localhost:30080–30099`).
 The app talks to the cluster with `kubectl` inside the node, so nothing has to be installed on
 Windows; the kubeconfig (context `wslcd`) is written to `<data>\kube\config` – use it with
-`$env:KUBECONFIG`. An *environment* is a namespace labelled `wslcd.lab=1`.
+`$env:KUBECONFIG`. `<data>` is the `data` folder next to the EXE in the portable package (with
+`PORTABLE.txt`), otherwise `%APPDATA%\WSL_Container_Desktop`. An *environment* is a namespace
+labelled `wslcd.lab=1`.
+
+- **Node** – privileged, with its own cgroup namespace, so k3s and all pods stay inside the
+  container's cgroup and the engine's CPU / memory stats (Overview, container table) count the
+  whole cluster. Restart policy `unless-stopped`: after a WSL restart the cluster starts by itself,
+  a cluster stopped by hand stays stopped. A node created by an older version (shared cgroup
+  namespace, restart policy `no`) is recreated on *Start*; the cluster data in the volume is kept.
 
 - **Flow map** – connections from the node's conntrack, grouped by component (label `app`), laid
   out by `tier` (frontend → backend → database); live connections solid, recent (~2 min) grey,
@@ -98,7 +106,12 @@ Design and spike results: `docs/superpowers/specs/2026-11-21-kubernetes-lab-*.md
 Linux: Alpine minirootfs (pinned and SHA-256 verified), root only, no systemd. A ~200-line POSIX
 `systemctl` replacement (`src/lite/systemctl.sh`) runs the same units the engine setup writes
 (engine API, TLS proxy, DNS) and starts them from `[boot] command` in `/etc/wsl.conf`; interop with
-Windows is off. The distribution lives in `<data>\distros\<name>` (portable). Measured: API over
+Windows is off. Like systemd it starts services from `/` with a clean environment in their own
+session (otherwise the end of a `wsl.exe` session sends SIGHUP and Podman 5.8 reloads its config
+without `volume_path`), and it has a built-in `podman-restart`: after the engine it starts
+containers with restart policy `always`, and `unless-stopped` ones unless they were stopped by hand.
+*Set up API* refreshes the replacement in existing Lite distributions. The distribution lives in
+`<data>\distros\<name>` (in the portable package next to the EXE). Measured: API over
 TLS ~1–2 s after a cold start, ~230 MB disk and ~80 MB RAM with Podman (~390 MB / ~165 MB with
 Docker); the Kubernetes lab runs in it too.
 
@@ -128,6 +141,21 @@ where the name must be typed, with *Export a backup first* checked by default. T
 used by the app for the engine cannot be removed. *Import…* (next to *Add distribution…*) runs
 `wsl --import` from a `.tar` / `.vhdx`.
 
+### Sidebar engine card
+
+The card above *WSL engine* in the sidebar shows the primary distribution with the state badge
+(the primary distribution is switched on the *WSL engine* page), and below it:
+
+- **Containers · engine** – running / all containers;
+- **Kubernetes** – state of the lab cluster (when it exists);
+- **CPU** – load of the whole WSL VM and its number of processors;
+- **Memory** – memory used by Linux processes out of the VM total;
+- **Windows** – RAM in use in Windows out of the physical RAM, with the part taken by the WSL VM
+  (VmmemWSL) highlighted in the bar and in the value (`1.7 · 26.1 / 30.7 GB`).
+
+The bars turn yellow from 75 % and red from 90 %; a click opens *Overview*. When the window is too
+low for the whole navigation, the card shows only the state and buttons, and the navigation scrolls.
+
 ### Tray: containers submenu
 
 The tray menu has a *Containers (n running)* submenu – running ones first, up to 25 – with
@@ -136,7 +164,8 @@ detail) for each container.
 
 ### Container detail
 
-The ⓘ icon in a container row opens a resizable window with tabs:
+A click on a container row (outside the action buttons) or its ⓘ icon opens a resizable window
+with tabs:
 
 - **Overview** – state and health, image, command and entrypoint, restart policy, ports, mounts,
   networks with IPs, environment variables (values of keys containing PASS / SECRET / TOKEN / KEY
@@ -334,7 +363,7 @@ The engine is selected per distribution on the *WSL engine* page.
 - **Primary distribution:** several distributions can each have their own engine (for example
   Docker in Ubuntu, Podman in Debian), but only one – the *primary* – serves the app API on
   `127.0.0.1:<port>`, the `docker` command and all pages. *Make primary* (in the distribution
-  list, or by clicking the distribution in the sidebar engine card) detects the engine in the
+  list) detects the engine in the
   target distribution (or uses the one chosen in its ⋯ menu), turns off the TCP API in the other
   distributions – their engines and containers keep running on the unix socket – and sets up the
   API in the target. The previous primary is put to sleep (`wsl --terminate`) by default; the
@@ -356,6 +385,11 @@ The engine is selected per distribution on the *WSL engine* page.
   are translated to `podman --url tcp://127.0.0.1:<port> …`, so they see the same containers.
   Short image names are expanded to `docker.io/library/…`. `docker-compose` is installed as the
   compose provider. Setting up one engine disables the other so they don't fight over the port.
+- **Docker and Podman side by side:** all WSL 2 distributions share one network namespace. Docker
+  sets the iptables policy `FORWARD DROP` when it enables forwarding itself (it starts first after
+  WSL boots), which would cut Podman containers in another distribution off the network. The Docker
+  setup therefore adds a `docker.service` drop-in that accepts traffic of Podman bridges
+  (`podman+`) in the `DOCKER-USER` chain (iptables and ip6tables).
 - **`host.docker.internal`** resolves inside containers like in Docker Desktop. Podman provides it
   itself (its bridge gateway); for Docker the API setup starts a small DNS forwarder
   (`dnsmasq`, service `wslcd-dns`) on `172.17.0.1` and runs `dockerd --dns 172.17.0.1`:
@@ -512,7 +546,7 @@ console window when it is not available.
   with keep-alive. API errors are typed (`ApiError`: HTTP status, unreachable engine, decode).
 - **WSL operations** (starting / stopping the distribution, `systemctl`, compose, file
   operations) run via `wsl.exe -d <distro> [-u root] -e …`.
-- **Switching distributions:** *Make primary* on the WSL engine page or in the sidebar (see
+- **Switching distributions:** *Make primary* on the WSL engine page (see
   *Docker / Podman engine*); a distribution without an engine becomes primary and offers
   *Install & setup*. Requirements: systemd (`[boot] systemd=true` in `/etc/wsl.conf`, set up automatically by
   *Install & setup*) and apt, dnf, zypper or pacman for automatic installation.
@@ -619,7 +653,7 @@ to the community repository means a pull request to `microsoft/winget-pkgs` (e.g
 
 How Docker and Podman perform inside the app – latency of the app API, the `docker` command and plain `wsl.exe`, API load
 tests, 50 containers at once, resource footprint – see **[docs/BENCHMARK.md](docs/BENCHMARK.md)**. Reproduce with
-`powershell -ExecutionPolicy Bypass -File scriptsench.ps1` (`-Quick` for a ~2 minute smoke run); it switches the primary
+`powershell -ExecutionPolicy Bypass -File scripts\bench.ps1` (`-Quick` for a ~2 minute smoke run); it switches the primary
 distribution for each engine like *Make primary* and switches back at the end.
 
 ## Tests
@@ -652,11 +686,12 @@ removes the Run registry value:
 cargo test -- --ignored --test-threads=1
 ```
 
-`live_k8s_lab` (`$env:WSLCD_K8S_DATA="C:\WSLContainerDesktop\data"; cargo test live_k8s -- --ignored --nocapture --test-threads=1`)
+`live_k8s_lab` (`$env:WSLCD_K8S_DATA="C:\WSLContainerDesktop\data"; cargo test live_k8s_lab -- --ignored --nocapture --test-threads=1`)
 creates the cluster in the engine from the app configuration (config and TLS certificates are
 copied into an isolated data folder), deploys the template with sample rules, checks the page
 through the NodePort from Windows, the connection tests (`fe → db` blocked) and the flow map, and
-deletes the cluster. `live_lite_distro` (`cargo test live_lite -- --ignored --nocapture`) creates
+deletes the cluster. `live_k8s_start_existing` (same variable) starts an existing cluster like the
+*Start* button – including the conversion of an older node – and deletes nothing. `live_lite_distro` (`cargo test live_lite -- --ignored --nocapture`) creates
 `WSLCD-Lite-Test` with Podman and TLS on port 2387 (`WSLCD_LITE_ENGINE=docker` for Docker,
 `WSLCD_LITE_K8S=1` also starts k3s in it), measures the cold start and unregisters it.
 

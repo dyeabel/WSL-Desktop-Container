@@ -41,6 +41,35 @@ impl Drop for Cleanup {
     }
 }
 
+/// Spustí (případně převede) už existující cluster stejně jako tlačítko Spustit – nic nemaže.
+/// `$env:WSLCD_K8S_DATA="C:\WSLContainerDesktop\data"; cargo test live_k8s_start_existing -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn live_k8s_start_existing() {
+    let cfg = isolated_cfg();
+    let (r, msgs) = k8s(cfg.clone(), K8sOp::Start);
+    eprintln!("start: {r:?}\n{msgs:?}");
+    r.unwrap();
+    assert_eq!(snapshot(&cfg, None, false).state, ClusterState::Running);
+}
+
+/// Konfigurace a certifikáty z `WSLCD_K8S_DATA` zkopírované do `target\k8s-live-data`.
+fn isolated_cfg() -> Config {
+    let src = std::path::PathBuf::from(std::env::var("WSLCD_K8S_DATA").expect("WSLCD_K8S_DATA = datová složka aplikace"));
+    let data = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("k8s-live-data");
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(data.join("tls")).unwrap();
+    std::fs::copy(src.join("config.json"), data.join("config.json")).unwrap();
+    for f in std::fs::read_dir(src.join("tls")).into_iter().flatten().flatten() {
+        let _ = std::fs::copy(f.path(), data.join("tls").join(f.file_name()));
+    }
+    std::env::set_var("WSLCD_DATA_DIR", &data);
+    let cfg = Config::load();
+    crate::docker::configure_tls(cfg.tls).unwrap();
+    eprintln!("engine {} v {} (port {})", cfg.engine.name(), cfg.distro, cfg.port);
+    cfg
+}
+
 #[test]
 #[ignore]
 fn live_k8s_lab() {
