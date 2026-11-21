@@ -23,6 +23,8 @@ pub struct Config {
     pub keep_alive: bool,
     /// Po spuštění aplikace automaticky nastartovat Docker
     pub autostart_engine: bool,
+    /// `docker` shim při prvním příkazu spustí aplikaci (schovanou) a engine, když neběží
+    pub shim_autostart: bool,
     /// Křížek okno jen schová do oznamovací oblasti
     pub close_to_tray: bool,
     /// Minimalizace schová okno do oznamovací oblasti
@@ -169,6 +171,7 @@ impl Default for Config {
             background_refresh_secs: 15,
             keep_alive: true,
             autostart_engine: false,
+            shim_autostart: true,
             close_to_tray: true,
             minimize_to_tray: true,
             start_hidden: false,

@@ -334,10 +334,16 @@ impl Worker {
     }
 
     fn run(self, rx: Receiver<Cmd>) {
-        if self.cfg().autostart_engine {
+        // spuštěno ze shimu = někdo právě potřebuje engine
+        if self.cfg().autostart_engine || crate::wake::launched_from_shim() {
             let w = self.clone();
             thread::spawn(move || w.exec(Cmd::EngineStart));
         }
+        // docker shim žádá o start enginu (aplikace už běží, engine ne)
+        let tx = self.cmd.clone();
+        crate::wake::listen(move || {
+            let _ = tx.send(Cmd::EngineStart);
+        });
         self.refresh();
         self.spawn_events();
         let pool = self.spawn_pool(POOL_THREADS);

@@ -399,6 +399,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 ui.end_row();
                 ui.label("");
                 ui.checkbox(
+                    &mut d.shim_autostart,
+                    t!(
+                        "Příkaz docker ve Windows spustí aplikaci a engine, když neběží",
+                        "The docker command in Windows starts the app and the engine when they are not running"
+                    ),
+                )
+                .on_hover_text(t!(
+                    "První příkaz přes docker shim (docker ps, docker compose …) nahodí WSL, spustí aplikaci schovanou v oznamovací oblasti, nastartuje engine a počká, až API odpoví. Vypnout jde i proměnnou WSLCD_SHIM_AUTOSTART=0.",
+                    "The first command through the docker shim (docker ps, docker compose …) boots WSL, starts the app hidden in the tray, starts the engine and waits for the API. Can also be disabled with WSLCD_SHIM_AUTOSTART=0."
+                ));
+                ui.end_row();
+                ui.label("");
+                ui.checkbox(
                     &mut d.restore_containers,
                     t!(
                         "Po startu enginu znovu spustit kontejnery, které naposledy běžely",

@@ -13,6 +13,8 @@
 //! Docker kontexty (`docker context …`, `--context`, `DOCKER_CONTEXT`) vybírají cíl WSL Container Desktop –
 //! distribuci, engine, port a TLS (viz `contexts.rs`, `ctxcmd.rs`).
 //!
+//! Když aplikace nebo engine neběží, první příkaz je nahodí a počká na API (`autowake.rs`).
+//!
 //! WSLCD_SHIM_DEBUG=1 vypíše na stderr, co se spouští (včetně vybraného kontextu).
 
 #[path = "../config.rs"]
@@ -30,6 +32,9 @@ mod apitls;
 mod dpapi;
 #[path = "../contexts.rs"]
 mod contexts;
+#[path = "../wake.rs"]
+mod wake;
+mod autowake;
 mod ctxcmd;
 mod envfwd;
 mod events;
@@ -115,6 +120,12 @@ fn main() -> ExitCode {
             target.port,
             if target.tls { ", tls" } else { "" }
         );
+    }
+
+    // neběží aplikace / engine -> spustit a počkat na API (jen primární cíl aplikace)
+    let autostart = cfg.shim_autostart && std::env::var("WSLCD_SHIM_AUTOSTART").map(|v| v != "0").unwrap_or(true);
+    if autostart && target.distro == cfg.distro && target.port == cfg.port && autowake::needs_engine(&args) {
+        autowake::ensure(&target.distro, target.engine, target.port, cfg.language != "en", debug);
     }
 
     // rychlá cesta: odpověď přímo z API, bez wsl.exe

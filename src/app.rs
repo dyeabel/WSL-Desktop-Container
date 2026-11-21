@@ -360,7 +360,7 @@ impl App {
         }
         if self.first_frame {
             self.first_frame = false;
-            if start_hidden || crate::autostart::launched_at_login() {
+            if start_hidden || crate::autostart::launched_at_login() || crate::wake::launched_from_shim() {
                 crate::tray::hide_window();
             }
         }

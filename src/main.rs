@@ -34,6 +34,7 @@ mod shim_install;
 mod tray;
 mod theme;
 mod ui;
+mod wake;
 mod worker;
 mod wsl;
 mod wslconfig;
@@ -52,7 +53,7 @@ mod glyph_check;
 fn single_instance() -> bool {
     use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
     use windows_sys::Win32::System::Threading::CreateMutexW;
-    let name: Vec<u16> = "Local\\WSL-Container-Desktop-single-instance".encode_utf16().chain(std::iter::once(0)).collect();
+    let name: Vec<u16> = wake::MUTEX.encode_utf16().chain(std::iter::once(0)).collect();
     let h = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
     !(h.is_null() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS)
 }
@@ -66,12 +67,18 @@ fn main() -> eframe::Result<()> {
     // jen jedna instance: pojmenovaný mutex (okno se dá podvrhnout, F-14); když už běží
     // (třeba schovaná v tray), jen zobrazíme její okno
     if !single_instance() {
-        tray::activate_existing("WSL Container Desktop");
+        // spuštěno ze shimu: okno neukazovat, jen běžící instanci požádat o start enginu
+        if wake::launched_from_shim() {
+            wake::signal_start();
+        } else {
+            tray::activate_existing("WSL Container Desktop");
+        }
         return Ok(());
     }
     std::thread::spawn(|| {
         notify::register();
         autostart::fix_path();
+        wake::record_app_path();
     });
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()

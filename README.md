@@ -479,6 +479,14 @@ from the engine API (also over TLS) in ~50 ms instead of ~250 ms via `wsl.exe`. 
 CLI. Anything else (unknown flag, template function, API error) silently falls back to
 `wsl.exe`. `WSLCD_SHIM_FAST=0` disables the fast path.
 
+**Auto-start:** you don't have to start anything first. If the app is not running, the first
+command that needs the engine (`docker ps`, `docker compose up`, … – not `help`, `context` or
+`--version`) starts the app hidden in the tray (`--from-shim`), the app boots WSL and starts the
+engine, and the shim waits for the API (up to 120 s, `WSLCD_SHIM_WAIT=<s>`). If the app is running
+but the engine is not, the shim asks it to start the engine. When both are up the check costs about 1 ms.
+This applies only to the app's primary target (not to other contexts). Turn it off in *Settings*
+(“The docker command in Windows starts the app and the engine…”) or with `WSLCD_SHIM_AUTOSTART=0`.
+
 Debugging: `WSLCD_SHIM_DEBUG=1` prints the executed command (and whether the fast path was used); `WSLCD_ENGINE=podman|docker`,
 `WSLCD_PORT` and `WSLCD_DISTRO` override the settings.
 
