@@ -622,56 +622,18 @@ impl App {
                                 ui.set_width(ui.available_width());
                                 ui.spacing_mut().item_spacing.y = 4.0;
                                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                                // řádek 1: tečka + distribuce (klik = přepnutí primární distribuce),
-                                // vpravo štítek stavu; engine je v řádku kontejnerů a v bublině
-                                let mut pick = None;
-                                let mut sleep = None;
+                                // řádek 1: tečka + distribuce, vpravo štítek stavu; engine je v řádku
+                                // kontejnerů a v bublině (přepnutí distribuce je na stránce WSL engine)
                                 ui.horizontal(|ui| {
                                     ui::dot(ui, c);
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    ui::badge(ui, state, c).on_hover_text(ename);
-                                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                    ui.spacing_mut().button_padding.x = 0.0;
-                                    let btn = egui::Button::new(RichText::new(format!("{distro} \u{E136}")).strong()).frame(false);
-                                    egui::menu::menu_custom_button(ui, btn, |ui| {
-                                        ui.label(RichText::new(t!("Primární distribuce", "Primary distribution")).small().color(theme::muted()));
-                                        let remembered = self.cfg.read().map(|c| c.distro_engines.clone()).unwrap_or_default();
-                                        for d in &self.distros {
-                                            let cur = d.name == distro;
-                                            let e = if cur { Some(ename) } else { remembered.get(&d.name).map(|e| e.name()) };
-                                            let text = match e {
-                                                Some(e) => format!("{} · {e}", d.name),
-                                                None => d.name.clone(),
-                                            };
-                                            ui.horizontal(|ui| {
-                                                if ui.add(egui::Button::new(text).selected(cur).min_size(egui::vec2(180.0, 0.0))).clicked() {
-                                                    ui.close_menu();
-                                                    if !cur {
-                                                        pick = Some(d.name.clone());
-                                                    }
-                                                }
-                                                // neprimární běžící distribuci jde uspat rovnou odtud
-                                                if !cur && d.running() {
-                                                    if ui
-                                                        .small_button("\u{E330}")
-                                                        .on_hover_text(tf!("Uspat {} (wsl --terminate)", "Put {} to sleep (wsl --terminate)", d.name))
-                                                        .clicked()
-                                                    {
-                                                        ui.close_menu();
-                                                        sleep = Some(d.name.clone());
-                                                    }
-                                                } else {
-                                                    ui.add_space(22.0);
-                                                }
-                                            });
-                                        }
-                                    })
-                                    .response
-                                    .on_hover_text(tf!(
-                                        "{ename} · {detail}\nAPI: tcp://127.0.0.1:{port}\nKlikni pro přepnutí primární distribuce",
-                                        "{ename} · {detail}\nAPI: tcp://127.0.0.1:{port}\nClick to switch the primary distribution"
-                                    ));
-                                    });
+                                        ui::badge(ui, state, c).on_hover_text(ename);
+                                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                            ui.label(RichText::new(&distro).strong()).on_hover_text(tf!(
+                                                "{ename} · {detail}\nAPI: tcp://127.0.0.1:{port}",
+                                                "{ename} · {detail}\nAPI: tcp://127.0.0.1:{port}"
+                                            ));
+                                        });
                                     });
                                 });
                                 // chyba API při běžícím enginu (dřív ve stavové liště)
@@ -698,19 +660,6 @@ impl App {
                                             self.page = Page::Dashboard;
                                         }
                                     }
-                                }
-                                if let Some(n) = pick {
-                                    ui::engine::ask_primary(self, &n, None);
-                                }
-                                if let Some(n) = sleep {
-                                    self.ask(
-                                        tf!("Uspat {n}?", "Put {n} to sleep?"),
-                                        t!(
-                                            "Distribuce se ukončí (wsl --terminate) a uvolní paměť. Kontejnery v ní se zastaví; ty s restart policy se spustí při dalším startu.",
-                                            "The distribution is terminated (wsl --terminate) and frees memory. Its containers stop; those with a restart policy start again on the next start."
-                                        ),
-                                        Cmd::Wsl(crate::worker::WslCmd::Terminate(n)),
-                                    );
                                 }
                                 ui.add_space(4.0);
                                 // stejně široká tlačítka

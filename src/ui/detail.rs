@@ -454,14 +454,31 @@ fn overview(ui: &mut egui::Ui, d: &Detail, reveal: &mut bool) {
     if d.mounts.is_empty() {
         ui.label(muted(t!("Žádná připojení.", "No mounts.")));
     } else {
-        egui::Grid::new("detail-mounts").num_columns(4).spacing([16.0, 6.0]).striped(true).show(ui, |ui| {
+        // pevné sloupce (Grid se zalamováním dával sloupcům minimální šířku a dlouhé ID svazku
+        // se lámalo po pár znacích); dlouhé hodnoty se zkrátí, celé jsou v bublině
+        let cols = [
+            (t!("TYP", "TYPE"), W::Px(64.0)),
+            (t!("ZDROJ", "SOURCE"), W::Fr(3.0)),
+            (t!("CÍL V KONTEJNERU", "CONTAINER PATH"), W::Fr(2.0)),
+            (t!("REŽIM", "MODE"), W::Px(80.0)),
+        ];
+        table_in(ui, "detail-mounts", &cols, |mut body| {
             for m in &d.mounts {
-                ui.label(muted(&m.typ));
-                let src = if m.typ == "volume" && !m.name.is_empty() { m.name.clone() } else { m.source.clone() };
-                ui.add(egui::Label::new(RichText::new(src).monospace()).selectable(true).wrap()).on_hover_text(&m.source);
-                ui.add(egui::Label::new(RichText::new(&m.destination).monospace()).selectable(true).wrap());
-                ui.label(if m.rw { muted("rw") } else { RichText::new(t!("jen čtení", "read-only")).color(theme::yellow()) });
-                ui.end_row();
+                body.row(26.0, |mut r| {
+                    r.col(|ui| {
+                        ui.label(muted(&m.typ));
+                    });
+                    let src = if m.typ == "volume" && !m.name.is_empty() { m.name.clone() } else { m.source.clone() };
+                    r.col(|ui| {
+                        ui.add(egui::Label::new(RichText::new(&src).monospace()).selectable(true)).on_hover_text(&m.source);
+                    });
+                    r.col(|ui| {
+                        ui.add(egui::Label::new(RichText::new(&m.destination).monospace()).selectable(true)).on_hover_text(&m.destination);
+                    });
+                    r.col(|ui| {
+                        ui.label(if m.rw { muted("rw") } else { RichText::new(t!("jen čtení", "read-only")).color(theme::yellow()) });
+                    });
+                });
             }
         });
     }

@@ -143,8 +143,8 @@ used by the app for the engine cannot be removed. *Import…* (next to *Add dist
 
 ### Sidebar engine card
 
-The card above *WSL engine* in the sidebar shows the primary distribution – click its name to
-switch the primary distribution or put another one to sleep – with the state badge, and below it:
+The card above *WSL engine* in the sidebar shows the primary distribution with the state badge
+(the primary distribution is switched on the *WSL engine* page), and below it:
 
 - **Containers · engine** – running / all containers;
 - **Kubernetes** – state of the lab cluster (when it exists);
@@ -363,7 +363,7 @@ The engine is selected per distribution on the *WSL engine* page.
 - **Primary distribution:** several distributions can each have their own engine (for example
   Docker in Ubuntu, Podman in Debian), but only one – the *primary* – serves the app API on
   `127.0.0.1:<port>`, the `docker` command and all pages. *Make primary* (in the distribution
-  list, or by clicking the distribution in the sidebar engine card) detects the engine in the
+  list) detects the engine in the
   target distribution (or uses the one chosen in its ⋯ menu), turns off the TCP API in the other
   distributions – their engines and containers keep running on the unix socket – and sets up the
   API in the target. The previous primary is put to sleep (`wsl --terminate`) by default; the
@@ -546,7 +546,7 @@ console window when it is not available.
   with keep-alive. API errors are typed (`ApiError`: HTTP status, unreachable engine, decode).
 - **WSL operations** (starting / stopping the distribution, `systemctl`, compose, file
   operations) run via `wsl.exe -d <distro> [-u root] -e …`.
-- **Switching distributions:** *Make primary* on the WSL engine page or in the sidebar (see
+- **Switching distributions:** *Make primary* on the WSL engine page (see
   *Docker / Podman engine*); a distribution without an engine becomes primary and offers
   *Install & setup*. Requirements: systemd (`[boot] systemd=true` in `/etc/wsl.conf`, set up automatically by
   *Install & setup*) and apt, dnf, zypper or pacman for automatic installation.
