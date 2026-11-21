@@ -59,7 +59,7 @@ impl Worker {
                 _ => None,
             };
             m.cpu_ticks = ticks;
-            m.glance = Some(memory::Glance { used: mi.used(), total: mi.total, cache: mi.cache(), vmmem, cpu });
+            m.glance = Some(memory::Glance { used: mi.used(), total: mi.total, cache: mi.cache(), vmmem, ram: memory::total_ram(), cpu });
             if now.is_some() {
                 m.now = now;
             }

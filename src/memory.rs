@@ -325,7 +325,10 @@ pub struct Glance {
     /// MemTotal v Linuxu (≈ limit WSL)
     pub total: u64,
     pub cache: u64,
+    /// VmmemWSL – kolik RAM Windows si celá WSL VM opravdu bere
     pub vmmem: Option<u64>,
+    /// fyzická RAM Windows (0 = neznámá)
+    pub ram: u64,
     /// vytížení CPU VM (%) od předchozího vzorku
     pub cpu: Option<f64>,
 }

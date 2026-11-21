@@ -404,22 +404,33 @@ fn load_color(frac: f32) -> Color32 {
     }
 }
 
-/// Karta enginu v bočním panelu: dva řádky CPU a RAM celé WSL VM s malým pruhem.
-/// Celý blok je klikací (vrací odezvu), detail v bublině.
+/// Řádky karty enginu: (popisek, podíl pro pruh, hodnota). CPU a RAM uvnitř VM, „Win“ =
+/// kolik RAM Windows si celá VM bere (VmmemWSL) z fyzické RAM počítače.
+pub fn glance_rows(g: &crate::memory::Glance) -> Vec<(&'static str, Option<f32>, String)> {
+    let frac = |a: u64, b: u64| (b > 0).then(|| (a as f64 / b as f64) as f32);
+    let mut rows = vec![
+        ("CPU", g.cpu.map(|c| (c / 100.0) as f32), g.cpu.map(|c| format!("{c:.0} %")).unwrap_or_else(|| "…".into())),
+        ("RAM", Some(frac(g.used, g.total).unwrap_or(0.0)), format!("{} / {}", fmt_gb(g.used), fmt_gb(g.total))),
+    ];
+    if let Some(v) = g.vmmem {
+        let value = if g.ram > 0 { format!("{} / {}", fmt_gb(v), fmt_gb(g.ram)) } else { fmt_gb(v) };
+        rows.push(("Win", frac(v, g.ram), value));
+    }
+    rows
+}
+
+/// Karta enginu v bočním panelu: řádky CPU, RAM (uvnitř WSL VM) a Win (VmmemWSL ve Windows)
+/// s malým pruhem. Celý blok je klikací (vrací odezvu), detail v bublině.
 pub fn glance(ui: &mut egui::Ui, g: &crate::memory::Glance) -> egui::Response {
     const ROW: f32 = 16.0;
     const INDENT: f32 = 20.0;
     const LABEL: f32 = 32.0;
     const VALUE: f32 = 78.0;
+    let rows = glance_rows(g);
     let w = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, ROW * 2.0 + 2.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, rows.len() as f32 * (ROW + 2.0)), egui::Sense::click());
     let p = ui.painter_at(rect);
     let font = egui::TextStyle::Small.resolve(ui.style());
-    let mem_frac = if g.total > 0 { (g.used as f64 / g.total as f64) as f32 } else { 0.0 };
-    let rows = [
-        ("CPU", g.cpu.map(|c| (c / 100.0) as f32), g.cpu.map(|c| format!("{c:.0} %")).unwrap_or_else(|| "…".into())),
-        ("RAM", Some(mem_frac), format!("{} / {}", fmt_gb(g.used), fmt_gb(g.total))),
-    ];
     for (i, (name, frac, value)) in rows.into_iter().enumerate() {
         let y = rect.top() + i as f32 * (ROW + 2.0) + ROW / 2.0;
         let x0 = rect.left() + INDENT;
@@ -437,10 +448,10 @@ pub fn glance(ui: &mut egui::Ui, g: &crate::memory::Glance) -> egui::Response {
     }
     let vmmem = g.vmmem.map(fmt_bytes).unwrap_or_else(|| "?".into());
     let cpu = g.cpu.map(|c| format!("{c:.1} %")).unwrap_or_else(|| "…".into());
-    let (used, total, cache) = (fmt_bytes(g.used), fmt_bytes(g.total), fmt_bytes(g.cache));
+    let (used, total, cache, ram) = (fmt_bytes(g.used), fmt_bytes(g.total), fmt_bytes(g.cache), fmt_bytes(g.ram));
     resp.on_hover_text(tf!(
-        "Celá WSL VM (všechny distribuce)\nCPU: {cpu}\nPaměť použitá procesy: {used} z {total}\nCache souborů: {cache}\nVmmemWSL ve Windows: {vmmem}\nKlikni pro Přehled",
-        "Whole WSL VM (all distributions)\nCPU: {cpu}\nMemory used by processes: {used} of {total}\nFile cache: {cache}\nVmmemWSL in Windows: {vmmem}\nClick for the Overview"
+        "Celá WSL VM (všechny distribuce)\nCPU: {cpu}\nRAM – paměť použitá procesy v Linuxu: {used} z {total}\nCache souborů: {cache}\nWin – kolik si VM bere z RAM Windows (VmmemWSL): {vmmem} z {ram}\n(obsahuje i cache a paměť, kterou Linux ještě nevrátil)\nKlikni pro Přehled",
+        "Whole WSL VM (all distributions)\nCPU: {cpu}\nRAM – memory used by Linux processes: {used} of {total}\nFile cache: {cache}\nWin – Windows RAM taken by the VM (VmmemWSL): {vmmem} of {ram}\n(includes cache and memory Linux has not returned yet)\nClick for the Overview"
     ))
     .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -675,6 +686,29 @@ mod tests {
         assert_eq!(super::fmt_bytes(512), "512 B");
         assert_eq!(super::fmt_bytes(1536), "1.5 KB");
         assert_eq!(super::fmt_bytes(3 * 1024 * 1024 * 1024), "3.0 GB");
+    }
+
+    #[test]
+    fn glance_shows_windows_ram_taken_by_vm() {
+        const G: u64 = 1024 * 1024 * 1024;
+        let g = crate::memory::Glance { used: 2 * G, total: 16 * G, cache: G, vmmem: Some(6 * G), ram: 32 * G, cpu: Some(12.0) };
+        let rows = super::glance_rows(&g);
+        assert_eq!(rows.iter().map(|r| r.0).collect::<Vec<_>>(), ["CPU", "RAM", "Win"]);
+        assert_eq!(rows[2].1, Some(6.0 / 32.0));
+        assert_eq!(rows[2].2, "6.0 GB / 32.0 GB");
+        // VmmemWSL nezměřený → řádek Win chybí; neznámá RAM Windows → bez pruhu
+        assert_eq!(super::glance_rows(&crate::memory::Glance { vmmem: None, ..g }).len(), 2);
+        let r = super::glance_rows(&crate::memory::Glance { ram: 0, ..g });
+        assert_eq!((r[2].1, r[2].2.as_str()), (None, "6.0 GB"));
+
+        // vykreslení bez okna: tři řádky = vyšší blok
+        use super::egui;
+        let ctx = egui::Context::default();
+        let mut h = 0.0;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| h = super::glance(ui, &g).rect.height());
+        });
+        assert_eq!(h, 3.0 * 18.0);
     }
 }
 
