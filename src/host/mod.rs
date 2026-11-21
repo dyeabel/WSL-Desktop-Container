@@ -1,0 +1,227 @@
+//! Abstrakce hostitele: vše, co se dnes spouští přes `wsl.exe`, půjde přes trait [`Host`].
+
+use std::sync::atomic::AtomicBool;
+
+use crate::activity;
+use crate::config::Config;
+pub use crate::error::HostError;
+
+/// Pod jakým uživatelem se příkaz spustí.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Privilege {
+    /// výchozí uživatel distribuce (bez `-u`)
+    User,
+    /// uživatel, pod kterým běží engine (ve WSL root)
+    Engine,
+    Root,
+}
+
+/// Požadavek na spuštění programu u hostitele.
+pub struct ExecReq<'a> {
+    pub args: &'a [&'a str],
+    pub privilege: Privilege,
+    pub cwd: Option<&'a str>,
+    /// bez vstupu = `Stdio::null()`
+    pub stdin: Option<&'a [u8]>,
+}
+
+impl<'a> ExecReq<'a> {
+    pub fn new(args: &'a [&'a str]) -> Self {
+        ExecReq { args, privilege: Privilege::User, cwd: None, stdin: None }
+    }
+
+    pub fn privilege(mut self, p: Privilege) -> Self {
+        self.privilege = p;
+        self
+    }
+
+    pub fn cwd(mut self, cwd: Option<&'a str>) -> Self {
+        self.cwd = cwd;
+        self
+    }
+
+    pub fn stdin(mut self, input: &'a [u8]) -> Self {
+        self.stdin = Some(input);
+        self
+    }
+}
+
+/// Surový výsledek spuštěného procesu.
+pub struct ExecOut {
+    pub code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+pub trait Host: Send + Sync {
+    fn label(&self) -> String;
+
+    /// `Err` jen když se proces nespustil; nenulový kód je `Ok`.
+    fn exec(&self, req: &ExecReq) -> Result<ExecOut, HostError>;
+
+    /// Průběžně předává řádky výstupu, vrací návratový kód.
+    fn exec_stream(
+        &self,
+        req: &ExecReq,
+        cancel: Option<&AtomicBool>,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<i32, HostError>;
+
+    fn open_terminal(&self, title: &str, req: &ExecReq) -> Result<(), HostError>;
+
+    fn to_guest_path(&self, path: &str) -> Result<String, HostError>;
+
+    fn engine_endpoint(&self, cfg: &Config) -> crate::http::Endpoint;
+}
+
+/// Pohodlné obálky nad [`Host::exec`] se záznamem do přehledu „Na pozadí“.
+pub trait HostExt: Host {
+    fn run(&self, p: Privilege, cwd: Option<&str>, args: &[&str]) -> Result<String, HostError>;
+    fn run_owned(&self, p: Privilege, cwd: Option<&str>, args: &[String]) -> Result<String, HostError>;
+    fn run_stdin(&self, p: Privilege, args: &[&str], input: &str) -> Result<String, HostError>;
+}
+
+impl<T: Host + ?Sized> HostExt for T {
+    fn run(&self, p: Privilege, cwd: Option<&str>, args: &[&str]) -> Result<String, HostError> {
+        let mut g = track(&self.label(), p, args);
+        let r = self.exec(&ExecReq::new(args).privilege(p).cwd(cwd)).and_then(finish);
+        g.set_ok(r.is_ok());
+        r
+    }
+
+    fn run_owned(&self, p: Privilege, cwd: Option<&str>, args: &[String]) -> Result<String, HostError> {
+        let a: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        self.run(p, cwd, &a)
+    }
+
+    fn run_stdin(&self, p: Privilege, args: &[&str], input: &str) -> Result<String, HostError> {
+        let _g = track(&self.label(), p, args);
+        self.exec(&ExecReq::new(args).privilege(p).stdin(input.as_bytes())).and_then(finish)
+    }
+}
+
+/// wsl.exe vrací podle verze buď UTF-8, nebo UTF-16LE.
+pub fn decode(bytes: &[u8]) -> String {
+    let zeros = bytes.iter().filter(|b| **b == 0).count();
+    if bytes.len() >= 2 && zeros * 4 > bytes.len() {
+        let u16s: Vec<u16> = bytes
+            .as_chunks::<2>().0.iter()
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&u16s).replace('\u{feff}', "")
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
+/// Nulový kód = stdout (+stderr); jinak chyba s textem stderr, případně stdout.
+pub fn finish(out: ExecOut) -> Result<String, HostError> {
+    let stdout = decode(&out.stdout);
+    let stderr = decode(&out.stderr);
+    if out.code == 0 {
+        let mut s = stdout;
+        if !stderr.trim().is_empty() {
+            if !s.is_empty() && !s.ends_with('\n') {
+                s.push('\n');
+            }
+            s.push_str(&stderr);
+        }
+        Ok(s)
+    } else {
+        let output = if stderr.trim().is_empty() { stdout } else { stderr };
+        Err(HostError::Failed { code: out.code, output })
+    }
+}
+
+/// Záznam do přehledu „Na pozadí“ (hostitel, oprávnění, zkrácený příkaz).
+pub(crate) fn track(label: &str, p: Privilege, args: &[&str]) -> activity::Guard {
+    let title = match p {
+        Privilege::User => label.to_string(),
+        _ => format!("{label} (root)"),
+    };
+    activity::start(activity::Kind::Wsl, title, activity::describe_cmd(args, 160))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    struct FakeHost {
+        out: Mutex<Option<ExecOut>>,
+        seen_stdin: Mutex<Option<Vec<u8>>>,
+    }
+
+    impl FakeHost {
+        fn new(code: i32, stdout: &[u8], stderr: &[u8]) -> Self {
+            FakeHost {
+                out: Mutex::new(Some(ExecOut { code, stdout: stdout.to_vec(), stderr: stderr.to_vec() })),
+                seen_stdin: Mutex::new(None),
+            }
+        }
+    }
+
+    impl Host for FakeHost {
+        fn label(&self) -> String {
+            "fake".into()
+        }
+        fn exec(&self, req: &ExecReq) -> Result<ExecOut, HostError> {
+            *self.seen_stdin.lock().unwrap() = req.stdin.map(|s| s.to_vec());
+            Ok(self.out.lock().unwrap().take().expect("jedno volání"))
+        }
+        fn exec_stream(&self, _: &ExecReq, _: Option<&AtomicBool>, _: &mut dyn FnMut(&str)) -> Result<i32, HostError> {
+            Ok(0)
+        }
+        fn open_terminal(&self, _: &str, _: &ExecReq) -> Result<(), HostError> {
+            Ok(())
+        }
+        fn to_guest_path(&self, path: &str) -> Result<String, HostError> {
+            Ok(path.to_string())
+        }
+        fn engine_endpoint(&self, _: &Config) -> crate::http::Endpoint {
+            crate::http::Endpoint::Tcp { port: 1 }
+        }
+    }
+
+    #[test]
+    fn run_ok_appends_stderr() {
+        let h = FakeHost::new(0, b"a", b"w");
+        assert_eq!(h.run(Privilege::User, None, &["x"]), Ok("a\nw".to_string()));
+    }
+
+    #[test]
+    fn run_err_prefers_stderr() {
+        let h = FakeHost::new(2, b"x", b"boom");
+        assert_eq!(
+            h.run(Privilege::User, None, &["x"]),
+            Err(HostError::Failed { code: 2, output: "boom".into() })
+        );
+    }
+
+    #[test]
+    fn run_err_falls_back_to_stdout() {
+        let h = FakeHost::new(1, b"only out", b"");
+        assert_eq!(
+            h.run(Privilege::Root, None, &["x"]),
+            Err(HostError::Failed { code: 1, output: "only out".into() })
+        );
+    }
+
+    #[test]
+    fn utf16_stderr_is_readable() {
+        let mut err = vec![0xff, 0xfe];
+        for u in "Neexistuje".encode_utf16() {
+            err.extend_from_slice(&u.to_le_bytes());
+        }
+        let h = FakeHost::new(1, b"", &err);
+        let e = h.run(Privilege::User, None, &["x"]).unwrap_err();
+        assert_eq!(e, HostError::Failed { code: 1, output: "Neexistuje".into() });
+    }
+
+    #[test]
+    fn run_stdin_passes_input() {
+        let h = FakeHost::new(0, b"", b"");
+        h.run_stdin(Privilege::User, &["cat"], "data").unwrap();
+        assert_eq!(h.seen_stdin.lock().unwrap().as_deref(), Some(&b"data"[..]));
+    }
+}

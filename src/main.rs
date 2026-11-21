@@ -16,6 +16,10 @@ mod error;
 mod eventlog;
 mod fs;
 mod history;
+#[allow(dead_code)] // typy hostitele; používat se začnou v dalších krocích refaktoru
+mod host;
+#[allow(dead_code)] // zatím jen Endpoint
+mod http;
 mod icon_art;
 mod notify;
 mod npipe;

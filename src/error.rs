@@ -79,50 +79,50 @@ impl From<std::io::Error> for ApiError {
 
 /// Chyba příkazu ve WSL: `wsl.exe` nejde spustit, nebo příkaz skončil nenulovým kódem.
 #[derive(Debug, Clone, PartialEq)]
-pub enum WslError {
+pub enum HostError {
     /// wsl.exe se nepodařilo spustit (chybí, odepřeno…)
     Spawn(String),
     /// příkaz doběhl s chybou – kód a text (stderr, jinak stdout)
     Failed { code: i32, output: String },
 }
 
-impl WslError {
+impl HostError {
     /// Návratový kód příkazu (None = nespustil se).
     pub fn code(&self) -> Option<i32> {
         match self {
-            WslError::Failed { code, .. } => Some(*code),
-            WslError::Spawn(_) => None,
+            HostError::Failed { code, .. } => Some(*code),
+            HostError::Spawn(_) => None,
         }
     }
 
     /// Výstup / popis chyby bez kódu.
     pub fn output(&self) -> &str {
         match self {
-            WslError::Failed { output, .. } => output,
-            WslError::Spawn(e) => e,
+            HostError::Failed { output, .. } => output,
+            HostError::Spawn(e) => e,
         }
     }
 }
 
-impl fmt::Display for WslError {
+impl fmt::Display for HostError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WslError::Spawn(e) => f.write_str(e),
-            WslError::Failed { code, output } => f.write_str(&tf!("{} (kód {code})", "{} (code {code})", output.trim())),
+            HostError::Spawn(e) => f.write_str(e),
+            HostError::Failed { code, output } => f.write_str(&tf!("{} (kód {code})", "{} (code {code})", output.trim())),
         }
     }
 }
 
-impl std::error::Error for WslError {}
+impl std::error::Error for HostError {}
 
-impl From<WslError> for String {
-    fn from(e: WslError) -> String {
+impl From<HostError> for String {
+    fn from(e: HostError) -> String {
         e.to_string()
     }
 }
 
 /// Text výstupu (bez kódu) – pro logy a hledání v hlášce (`e.contains(…)`).
-impl std::ops::Deref for WslError {
+impl std::ops::Deref for HostError {
     type Target = str;
     fn deref(&self) -> &str {
         self.output()
@@ -130,17 +130,20 @@ impl std::ops::Deref for WslError {
 }
 
 /// Chyby, které vzniknou ještě před spuštěním (např. převod cesty) – jako `Spawn`.
-impl From<String> for WslError {
+impl From<String> for HostError {
     fn from(e: String) -> Self {
-        WslError::Spawn(e)
+        HostError::Spawn(e)
     }
 }
 
-impl From<std::io::Error> for WslError {
+impl From<std::io::Error> for HostError {
     fn from(e: std::io::Error) -> Self {
-        WslError::Spawn(e.to_string())
+        HostError::Spawn(e.to_string())
     }
 }
+
+/// Starý název; zůstává, aby zbytek kódu šel sestavit.
+pub type WslError = HostError;
 
 #[cfg(test)]
 mod tests {
@@ -148,11 +151,11 @@ mod tests {
 
     #[test]
     fn wsl_error() {
-        let e = WslError::Failed { code: 2, output: "nope\n".into() };
+        let e = HostError::Failed { code: 2, output: "nope\n".into() };
         assert_eq!(e.code(), Some(2));
         assert_eq!(e.output(), "nope\n");
         assert!(String::from(e).starts_with("nope ("));
-        assert_eq!(WslError::Spawn("x".into()).code(), None);
+        assert_eq!(HostError::Spawn("x".into()).code(), None);
     }
 
     #[test]

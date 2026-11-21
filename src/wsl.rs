@@ -31,38 +31,15 @@ pub fn hidden(program: &str) -> Command {
     c
 }
 
-/// wsl.exe vrací podle verze buď UTF-8, nebo UTF-16LE.
-pub fn decode(bytes: &[u8]) -> String {
-    let zeros = bytes.iter().filter(|b| **b == 0).count();
-    if bytes.len() >= 2 && zeros * 4 > bytes.len() {
-        let u16s: Vec<u16> = bytes
-            .as_chunks::<2>().0.iter()
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        String::from_utf16_lossy(&u16s).replace('\u{feff}', "")
-    } else {
-        String::from_utf8_lossy(bytes).into_owned()
-    }
-}
-
+pub use crate::host::decode;
 pub use crate::error::WslError;
 
 fn finish(out: std::process::Output) -> Result<String, WslError> {
-    let stdout = decode(&out.stdout);
-    let stderr = decode(&out.stderr);
-    if out.status.success() {
-        let mut s = stdout;
-        if !stderr.trim().is_empty() {
-            if !s.is_empty() && !s.ends_with('\n') {
-                s.push('\n');
-            }
-            s.push_str(&stderr);
-        }
-        Ok(s)
-    } else {
-        let output = if stderr.trim().is_empty() { stdout } else { stderr };
-        Err(WslError::Failed { code: out.status.code().unwrap_or(-1), output })
-    }
+    crate::host::finish(crate::host::ExecOut {
+        code: out.status.code().unwrap_or(-1),
+        stdout: out.stdout,
+        stderr: out.stderr,
+    })
 }
 
 pub fn list() -> Result<Vec<Distro>, String> {
