@@ -3,6 +3,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+pub mod discover;
 pub mod wsl;
 
 use crate::activity;
