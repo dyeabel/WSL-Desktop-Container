@@ -139,7 +139,7 @@ fn live_docker_e2e() {
     std::fs::write(dir.join("Dockerfile"), "FROM docker.io/library/alpine:3.20\nRUN echo built > /built\nLABEL e2e=yes\n").unwrap();
     let bspec = crate::worker::BuildSpec { context: dir.to_string_lossy().to_string(), tags: "e2e-build:1".into(), ..Default::default() };
     let mut lines = 0;
-    let b = crate::worker::build::run_build(DISTRO, Engine::Docker, PORT, false, &bspec, |_| lines += 1);
+    let b = crate::worker::build::run_build(&crate::host::wsl::WslHost::new(DISTRO), Engine::Docker, PORT, false, &bspec, |_| lines += 1);
     assert!(b.is_ok(), "{b:?}");
     let img: serde_json::Value = d.get("/images/e2e-build:1/json").expect("image");
     assert_eq!(img.pointer("/Config/Labels/e2e").and_then(|x| x.as_str()), Some("yes"));

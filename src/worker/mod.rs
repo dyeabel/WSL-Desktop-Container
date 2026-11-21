@@ -68,6 +68,8 @@ pub enum Term {
     Logs { id: String, name: String },
     Distro(String),
     Dir(String),
+    /// `kubectl logs -f` poda v clusteru k3s (v kontejneru enginu)
+    PodLogs { ns: String, pod: String },
 }
 
 
@@ -329,7 +331,6 @@ impl Worker {
     fn cfg(&self) -> Config {
         self.cfg.read().map(|c| c.clone()).unwrap_or_default()
     }
-    #[allow(dead_code)] // použije se od kroku 3
     fn host(&self) -> std::sync::Arc<dyn crate::host::Host> {
         crate::host::current(&self.cfg())
     }

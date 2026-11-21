@@ -347,7 +347,6 @@ fn env_tab(app: &mut App, ui: &mut egui::Ui) {
         return;
     };
     section(ui, tf!("Pody ({})", "Pods ({})", env.pods.len()).as_str());
-    let (distro, engine) = app.cfg.read().map(|c| (c.distro.clone(), c.engine)).unwrap_or_default();
     let cols = [
         (t!("POD", "POD"), W::Fr(2.0)),
         (t!("KOMPONENTA", "COMPONENT"), W::Fr(1.0)),
@@ -386,17 +385,7 @@ fn env_tab(app: &mut App, ui: &mut egui::Ui) {
                 });
                 r.col(|ui| {
                     if icon(ui, "\u{E2F0}", t!("Logy ve Windows Terminalu", "Logs in Windows Terminal")) {
-                        let cli = match engine {
-                            crate::engine::Engine::Docker => "docker",
-                            crate::engine::Engine::Podman => "podman",
-                        };
-                        let args: Vec<String> = ["-d", &distro, "-u", "root", "--", cli, "exec", "-it", crate::k8s::cluster::NAME, "kubectl", "logs", "-f", "--tail", "300", "-n", &env.ns, &p.name]
-                            .iter()
-                            .map(|s| s.to_string())
-                            .collect();
-                        if let Err(e) = crate::wsl::open_terminal(&format!("logs {}", p.name), &args) {
-                            app.toast(false, e);
-                        }
+                        app.send(crate::worker::Cmd::Terminal(crate::worker::Term::PodLogs { ns: env.ns.clone(), pod: p.name.clone() }));
                     }
                 });
             });

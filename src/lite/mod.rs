@@ -3,6 +3,7 @@
 //! přes minimální náhradu `systemctl` (`systemctl.sh`), takže stávající skripty nastavení
 //! enginu fungují beze změny. Distribuce leží v datové složce aplikace (portable).
 
+use crate::host::{Host, HostExt, Privilege};
 use crate::wsl;
 use std::path::{Path, PathBuf};
 
@@ -99,8 +100,8 @@ printf '# WSLCD Lite (bez systemd)\n[engine]\ncgroup_manager = "cgroupfs"\nevent
 echo "WSLCD Lite: Alpine $(cat /etc/alpine-release) připraven"
 "#;
 
-pub fn prepare(name: &str) -> Result<String, String> {
-    wsl::run_stdin(name, Some("root"), &["sh", "-c", PREPARE], SYSTEMCTL).map_err(|e| e.to_string())
+pub fn prepare(host: &dyn Host) -> Result<String, String> {
+    host.run_stdin(Privilege::Root, &["sh", "-c", PREPARE], SYSTEMCTL).map_err(|e| e.to_string())
 }
 
 /// Obnoví náhradu systemctl v už existující distribuci WSLCD Lite (opravy skriptu se tak
@@ -110,8 +111,8 @@ if [ -d /run/systemd/system ] || ! grep -qs 'WSL Container Desktop' /usr/local/b
 printf '%s\n' "$S" > /usr/local/bin/systemctl.new && chmod 755 /usr/local/bin/systemctl.new && mv -f /usr/local/bin/systemctl.new /usr/local/bin/systemctl
 "#;
 
-pub fn refresh_shim(distro: &str) {
-    let _ = wsl::run_stdin(distro, Some("root"), &["sh", "-c", REFRESH], SYSTEMCTL);
+pub fn refresh_shim(host: &dyn Host) {
+    let _ = host.run_stdin(Privilege::Root, &["sh", "-c", REFRESH], SYSTEMCTL);
 }
 
 /// Shell test „běží systemd, nebo náhrada WSLCD Lite“ (pro `sh -c`); `/run/wslcd-init`

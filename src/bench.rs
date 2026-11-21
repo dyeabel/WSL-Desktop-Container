@@ -393,7 +393,7 @@ fn checks(t: &Target, shim: Option<&Path>) -> Vec<Check> {
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         std::fs::write(dir.join("Dockerfile"), format!("FROM {IMAGE}\nRUN echo built > /built\nLABEL wslcd-bench=1\n")).map_err(|e| e.to_string())?;
         let spec = crate::worker::BuildSpec { context: dir.to_string_lossy().into(), tags: format!("{PREFIX}-build:1"), ..Default::default() };
-        crate::worker::build::run_build(&t.distro, t.engine, t.port, true, &spec, |_| {})?;
+        crate::worker::build::run_build(&crate::host::wsl::WslHost::new(&t.distro), t.engine, t.port, true, &spec, |_| {})?;
         let _ = d.delete(&format!("/images/{PREFIX}-build:1?force=1"));
         Ok(String::new())
     });

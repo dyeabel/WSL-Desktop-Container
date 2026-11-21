@@ -127,26 +127,6 @@ pub fn run_stdin(distro: &str, user: Option<&str>, args: &[&str], input: &str) -
     finish(child.wait_with_output().map_err(|e| e.to_string())?)
 }
 
-/// Spustí program v distribuci a průběžně předává řádky výstupu (stdout i stderr
-/// sloučené v pořadí, jak přicházejí) do `on_line`. Vrací návratový kód programu.
-/// Řádek s `\r` (průběh) se zkrátí na poslední úsek.
-pub fn run_stream(
-    distro: &str,
-    user: Option<&str>,
-    cwd: Option<&str>,
-    args: &[String],
-    cancel: Option<&std::sync::atomic::AtomicBool>,
-    on_line: &mut dyn FnMut(&str),
-) -> Result<i32, String> {
-    let a: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let mut g = track(distro, user, &a);
-    let mut cmd = base(distro, user, cwd);
-    cmd.args(args);
-    let code = stream_command(&mut cmd, cancel, on_line)?;
-    g.set_ok(code == 0);
-    Ok(code)
-}
-
 /// Společná logika streamování: spustí `cmd` (stdin null), předává řádky a vrací kód.
 /// Bez záznamu do přehledu „Na pozadí“ – ten řeší volající.
 pub(crate) fn stream_command(

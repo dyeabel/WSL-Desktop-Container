@@ -3,6 +3,7 @@
 use super::{Msg, Worker};
 use crate::config::Config;
 use crate::engine::Engine;
+use crate::host::{Host, HostExt, Privilege};
 use crate::wsl;
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -25,9 +26,9 @@ impl Worker {
     }
 
     /// Ukončí udržovací proces – náš i případný z jiné instance aplikace.
-    pub(super) fn kill_keepalive_all(&self, distro: &str) {
+    pub(super) fn kill_keepalive_all(&self, host: &dyn Host) {
         self.kill_keepalive();
-        let _ = wsl::run(distro, Some("root"), None, &["sh", "-c", "pkill -f 'flock -n /tmp/\\.w[a-z-]*-desktop-keepalive\\.lock' || true"]);
+        let _ = host.run(Privilege::Root, None, &["sh", "-c", "pkill -f 'flock -n /tmp/\\.w[a-z-]*-desktop-keepalive\\.lock' || true"]);
     }
 
     pub(super) fn kill_keepalive(&self) {
@@ -61,10 +62,9 @@ impl Worker {
     }
 
     fn free_memory_inner(&self, auto: bool) -> Result<crate::memory::FreeEvent, String> {
-        let distro = self.cfg().distro;
         let t = crate::memory::now_secs();
         let before = crate::memory::vmmem_now();
-        let out = wsl::run(&distro, Some("root"), None, &["sh", "-c", FREE_MEMORY_SCRIPT])?;
+        let out = self.host().run(Privilege::Root, None, &["sh", "-c", FREE_MEMORY_SCRIPT])?;
         let cached = |tag: &str| -> u64 {
             out.lines().find_map(|l| l.strip_prefix(tag)).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0) * 1024
         };
@@ -102,8 +102,7 @@ impl Worker {
         }
         let w = self.clone();
         thread::spawn(move || {
-            let distro = w.cfg().distro;
-            let cached = wsl::run(&distro, None, None, &["sh", "-c", "awk '/^Cached:/{print $2}' /proc/meminfo"])
+            let cached = w.host().run(Privilege::User, None, &["sh", "-c", "awk '/^Cached:/{print $2}' /proc/meminfo"])
                 .ok()
                 .and_then(|s| s.trim().parse::<u64>().ok())
                 .unwrap_or(0);
@@ -114,12 +113,12 @@ impl Worker {
     }
 
     /// Zkopíruje klientský certifikát, klíč a CA z distribuce do %APPDATA%\WSL_Container_Desktop\tls.
-    fn fetch_client_certs(&self, distro: &str) -> Result<(), String> {
+    fn fetch_client_certs(&self, host: &dyn Host) -> Result<(), String> {
         let dir = crate::docker::tls_dir().ok_or("APPDATA")?;
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         for f in ["ca.pem", "cert.pem", "key.pem"] {
             let src = format!("{}/{f}", crate::engine::TLS_DIR);
-            let pem = wsl::run(distro, Some("root"), None, &["cat", &src]).map_err(|e| format!("{src}: {e}"))?;
+            let pem = host.run(Privilege::Root, None, &["cat", &src]).map_err(|e| format!("{src}: {e}"))?;
             if !pem.contains("-----BEGIN") {
                 return Err(tf!("{src} není platný PEM soubor", "{src} is not a valid PEM file"));
             }
@@ -203,7 +202,10 @@ impl Worker {
         }
 
         step(log, &tf!("Enginy v distribuci {distro}", "Engines in {distro}"));
-        let out = wsl::run(distro, Some("root"), None, &["sh", "-c", crate::engine::DETECT_ENGINES])
+        let cur = self.host();
+        let target = cur.wsl().expect("WSL").for_distro(distro);
+        let out = target
+            .run(Privilege::Root, None, &["sh", "-c", crate::engine::DETECT_ENGINES])
             .map_err(|e| tf!("Distribuci {distro} nelze spustit: {e}", "Cannot start {distro}: {e}"))?;
         let installed = crate::engine::parse_engines(&out);
         log.push_str(&if installed.is_empty() {
@@ -222,7 +224,7 @@ impl Worker {
         }
         for o in &others {
             let script = format!("{}\n{}", crate::engine::LEGACY_CLEANUP, crate::engine::API_RELEASE);
-            match wsl::run(o, Some("root"), None, &["sh", "-c", &script]) {
+            match cur.wsl().expect("WSL").for_distro(o).run(Privilege::Root, None, &["sh", "-c", &script]) {
                 Ok(r) if r.trim().is_empty() => log.push_str(&tf!("{o}: API tu nebylo\n", "{o}: no API here\n")),
                 Ok(r) => log.push_str(&format!("{o}: {}\n", r.trim().replace('\n', ", "))),
                 Err(e) => log.push_str(&format!("{o}: {e}\n")),
@@ -234,7 +236,7 @@ impl Worker {
         if sleep_old && old.distro != distro {
             step(log, &tf!("Uspání {}", "Putting {} to sleep", old.distro));
             // i udržovací proces jiné instance aplikace, jinak by distribuci hned znovu probudil
-            self.kill_keepalive_all(&old.distro);
+            self.kill_keepalive_all(&cur.wsl().expect("WSL").for_distro(&old.distro));
             match wsl::terminate(&old.distro) {
                 Ok(_) => {
                     slept = true;
@@ -320,12 +322,12 @@ impl Worker {
 
     fn setup_api_with(&self, cfg: &Config, regen: bool) -> Result<(String, bool), String> {
         let port = cfg.port.to_string();
-        crate::lite::refresh_shim(&cfg.distro);
+        let host = crate::host::current(cfg);
+        crate::lite::refresh_shim(host.as_ref());
         // výchozí uživatel distribuce – v režimu TLS dostane přístup k unix socketu enginu
-        let user = wsl::run(&cfg.distro, None, None, &["id", "-un"]).map(|u| u.trim().to_string()).unwrap_or_default();
-        let out = wsl::run(
-            &cfg.distro,
-            Some("root"),
+        let user = host.run(Privilege::User, None, &["id", "-un"]).map(|u| u.trim().to_string()).unwrap_or_default();
+        let out = host.run(
+            Privilege::Root,
             None,
             &[
                 "env",
@@ -341,7 +343,7 @@ impl Worker {
         self.check_engine();
         let mut out = out?;
         if cfg.tls {
-            self.fetch_client_certs(&cfg.distro)?;
+            self.fetch_client_certs(host.as_ref())?;
             out.push_str(&tf!(
                 "\nKlientský certifikát uložen do {}",
                 "\nClient certificate saved to {}",
@@ -375,7 +377,8 @@ impl Worker {
             true,
             tf!("Instaluji {} do {distro}… (může trvat několik minut)", "Installing {} into {distro}… (may take several minutes)", engine.name()),
         ));
-        match wsl::run(&distro, Some("root"), None, &["sh", "-c", &engine.install_script()]) {
+        let host = self.host();
+        match host.run(Privilege::Root, None, &["sh", "-c", &engine.install_script()]) {
             Ok(o) => log.push_str(&o),
             Err(e) => {
                 log.push_str(&e);
@@ -385,13 +388,13 @@ impl Worker {
 
         // 2) systemd
         step(log, t!("Kontrola systemd", "Checking systemd"));
-        if wsl::run(&distro, Some("root"), None, &["sh", "-c", crate::lite::HAS_INIT]).is_err() {
+        if host.run(Privilege::Root, None, &["sh", "-c", crate::lite::HAS_INIT]).is_err() {
             log.push_str(t!(
                 "systemd neběží – zapínám v /etc/wsl.conf a restartuji distribuci\n",
                 "systemd is not running – enabling it in /etc/wsl.conf and restarting the distribution\n"
             ));
             let script = "grep -q '^systemd=true' /etc/wsl.conf 2>/dev/null || printf '\\n[boot]\\nsystemd=true\\n' >> /etc/wsl.conf";
-            wsl::run(&distro, Some("root"), None, &["sh", "-c", script]).map_err(|e| {
+            host.run(Privilege::Root, None, &["sh", "-c", script]).map_err(|e| {
                 log.push_str(&e);
                 t!("Nelze upravit /etc/wsl.conf", "Cannot modify /etc/wsl.conf").to_string()
             })?;
@@ -404,7 +407,7 @@ impl Worker {
                 wsl::start(&distro)?;
             }
             thread::sleep(Duration::from_secs(3));
-            if wsl::run(&distro, Some("root"), None, &["sh", "-c", crate::lite::HAS_INIT]).is_err() {
+            if host.run(Privilege::Root, None, &["sh", "-c", crate::lite::HAS_INIT]).is_err() {
                 log.push_str(t!(
                     "systemd stále neběží – zkus „Vypnout celé WSL“ a znovu.\n",
                     "systemd is still not running – try “Shut down all of WSL” and retry.\n"
@@ -459,7 +462,7 @@ impl Worker {
         let name = cfg.engine.name();
         let mut a = vec!["systemctl", "start"];
         a.extend(cfg.engine.services());
-        wsl::run(&distro, Some("root"), None, &a)?;
+        self.host().run(Privilege::Root, None, &a)?;
         if self.wait_ping(20) {
             Ok(tf!("{name} běží", "{name} is running"))
         } else {
@@ -474,21 +477,19 @@ impl Worker {
 
     pub(super) fn engine_stop(&self) -> Result<String, String> {
         let cfg = self.cfg();
-        let distro = cfg.distro.clone();
         self.suppress_tracking();
         let mut a = vec!["systemctl", "stop"];
         a.extend(cfg.engine.stop_units());
-        wsl::run(&distro, Some("root"), None, &a)?;
+        self.host().run(Privilege::Root, None, &a)?;
         Ok(tf!("{} zastaven", "{} stopped", cfg.engine.name()))
     }
 
     pub(super) fn engine_restart(&self) -> Result<String, String> {
         let cfg = self.cfg();
-        let distro = cfg.distro.clone();
         self.suppress_tracking();
         let mut a = vec!["systemctl", "restart"];
         a.extend(cfg.engine.services());
-        wsl::run(&distro, Some("root"), None, &a)?;
+        self.host().run(Privilege::Root, None, &a)?;
         if self.wait_ping(20) {
             // další obnovení bere jako nové připojení (obnova kontejnerů + zapnutí sledování)
             self.shared.was_connected.store(false, Ordering::SeqCst);
@@ -499,11 +500,9 @@ impl Worker {
     }
 
     pub(super) fn uninstall_engine(&self, engine: Engine, purge: bool) -> Result<String, String> {
-        let distro = self.cfg().distro;
         self.send(Msg::Toast(true, tf!("Odinstalovávám {}…", "Uninstalling {}…", engine.name())));
-        let r = wsl::run(
-            &distro,
-            Some("root"),
+        let r = self.host().run(
+            Privilege::Root,
             None,
             &["env", &format!("PURGE={}", if purge { 1 } else { 0 }), "sh", "-c", &engine.uninstall_script()],
         );
@@ -543,7 +542,7 @@ impl Worker {
             self.ensure_keepalive(&distro)?;
             Ok(t!("Udržování distribuce zapnuto", "Keep-alive for the distribution enabled").into())
         } else {
-            self.kill_keepalive_all(&distro);
+            self.kill_keepalive_all(self.host().as_ref());
             Ok(t!(
                 "Udržování distribuce vypnuto – WSL se může po nečinnosti zastavit",
                 "Keep-alive for the distribution disabled – WSL may stop after inactivity"
@@ -553,14 +552,12 @@ impl Worker {
     }
 
     pub(super) fn load_daemon_json(&self) -> Result<String, String> {
-        let distro = self.cfg().distro;
-        let t = wsl::run(&distro, Some("root"), None, &["sh", "-c", "cat /etc/docker/daemon.json 2>/dev/null || echo '{}'"])?;
+        let t = self.host().run(Privilege::Root, None, &["sh", "-c", "cat /etc/docker/daemon.json 2>/dev/null || echo '{}'"])?;
         self.send(Msg::DaemonJson(t));
         Ok(String::new())
     }
 
     pub(super) fn save_daemon_json(&self, text: String) -> Result<String, String> {
-        let distro = self.cfg().distro;
         let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| tf!("Neplatný JSON: {e}", "Invalid JSON: {e}"))?;
         if v.get("hosts").is_some() {
             return Err(t!(
@@ -570,8 +567,9 @@ impl Worker {
             .into());
         }
         let pretty = serde_json::to_string_pretty(&v).unwrap_or(text);
-        wsl::run_stdin(&distro, Some("root"), &["sh", "-c", "mkdir -p /etc/docker && cat > /etc/docker/daemon.json"], &pretty)?;
-        wsl::run(&distro, Some("root"), None, &["systemctl", "restart", "docker"])?;
+        let host = self.host();
+        host.run_stdin(Privilege::Root, &["sh", "-c", "mkdir -p /etc/docker && cat > /etc/docker/daemon.json"], &pretty)?;
+        host.run(Privilege::Root, None, &["systemctl", "restart", "docker"])?;
         if self.wait_ping(20) {
             Ok(t!("daemon.json uložen, Docker restartován", "daemon.json saved, Docker restarted").into())
         } else {

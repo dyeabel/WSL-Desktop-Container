@@ -1,6 +1,7 @@
 //! Kontejnery: spuštění z image, hromadné pozastavení, terminál.
 
 use super::{RunSpec, Term, Worker};
+use crate::host::{ExecReq, HostExt, Privilege};
 use crate::wsl;
 use std::thread;
 use std::time::Duration;
@@ -11,15 +12,14 @@ const ENV_FILE_SCRIPT: &str = r#"umask 077; f=$(mktemp "${TMPDIR:-/tmp}/wslcd-en
 impl Worker {
     pub(super) fn run_container(&self, spec: RunSpec) -> Result<String, String> {
         let cfg = self.cfg();
-        let distro = cfg.distro.clone();
+        let host = self.host();
         let d = self.docker();
         let image = crate::engine::short_image(spec.image.trim());
         let args = spec.args_for(cfg.engine, cfg.port, cfg.tls);
         if spec.interactive {
             // interaktivně ve Windows Terminalu – kontejner se po ukončení smaže (--rm)
-            let mut w: Vec<String> = vec!["-d".into(), distro.clone(), "-e".into()];
-            w.extend(args);
-            wsl::open_terminal(&tf!("{image} (interaktivně)", "{image} (interactive)"), &w)?;
+            let w: Vec<&str> = args.iter().map(|a| a.as_str()).collect();
+            host.open_terminal(&tf!("{image} (interaktivně)", "{image} (interactive)"), &ExecReq::new(&w))?;
             return Ok(tf!("{image} spuštěn interaktivně v terminálu", "{image} started interactively in a terminal"));
         }
         // proměnné prostředí přes dočasný soubor (0600) místo `-e K=V` v příkazové řádce,
@@ -28,7 +28,7 @@ impl Worker {
         let (args, env_file) = if env.is_empty() {
             (args, None)
         } else {
-            let file = wsl::run_stdin(&distro, None, &["sh", "-c", ENV_FILE_SCRIPT], &format!("{}\n", env.join("\n")))?;
+            let file = host.run_stdin(Privilege::User, &["sh", "-c", ENV_FILE_SCRIPT], &format!("{}\n", env.join("\n")))?;
             let file = file.trim().to_string();
             let spec2 = RunSpec { env: String::new(), ..spec.clone() };
             let mut a = spec2.args_for(cfg.engine, cfg.port, cfg.tls);
@@ -36,9 +36,9 @@ impl Worker {
             a.splice(at..at, ["--env-file".to_string(), file.clone()]);
             (a, Some(file))
         };
-        let out = wsl::run_owned(&distro, None, None, &args);
+        let out = host.run_owned(Privilege::User, None, &args);
         if let Some(f) = &env_file {
-            let _ = wsl::run(&distro, None, None, &["rm", "-f", "--", f]);
+            let _ = host.run(Privilege::User, None, &["rm", "-f", "--", f]);
         }
         let out = out?;
         // ID je poslední řádek výstupu (před ním může být průběh stahování)
@@ -82,28 +82,36 @@ impl Worker {
 
     pub(super) fn terminal(&self, t: Term) -> Result<String, String> {
         let cfg = self.cfg();
-        let distro = cfg.distro.clone();
-        let shell = "command -v bash >/dev/null && exec bash || exec sh".to_string();
+        let host = self.host();
+        let shell = "command -v bash >/dev/null && exec bash || exec sh";
         let cli = cfg.engine.cli(cfg.port, cfg.tls);
-        let with_cli = |rest: Vec<String>| {
-            let mut v: Vec<String> = vec!["-d".into(), distro.clone(), "-e".into()];
-            v.extend(cli.iter().cloned());
-            v.extend(rest);
-            v
+        // příkaz enginu v distribuci hostitele, v novém terminálu
+        let open_cli = |title: &str, rest: &[&str]| {
+            let mut v: Vec<&str> = cli.iter().map(|a| a.as_str()).collect();
+            v.extend_from_slice(rest);
+            host.open_terminal(title, &ExecReq::new(&v))
         };
-        let (title, args): (String, Vec<String>) = match t {
-            Term::Container { id, name } => (
-                name,
-                with_cli(vec!["exec".into(), "-it".into(), id, "sh".into(), "-c".into(), shell]),
-            ),
-            Term::Logs { id, name } => (
-                format!("logs {name}"),
-                with_cli(vec!["logs".into(), "-f".into(), "--tail".into(), "300".into(), id]),
-            ),
-            Term::Distro(n) => (n.clone(), vec!["-d".into(), n, "--cd".into(), "~".into()]),
-            Term::Dir(dir) => (dir.clone(), vec!["-d".into(), distro, "--cd".into(), dir]),
-        };
-        wsl::open_terminal(&title, &args)
+        match t {
+            Term::Container { id, name } => open_cli(&name, &["exec", "-it", &id, "sh", "-c", shell])?,
+            Term::Logs { id, name } => open_cli(&format!("logs {name}"), &["logs", "-f", "--tail", "300", &id])?,
+            Term::PodLogs { ns, pod } => {
+                let kubectl = ["exec", "-it", crate::k8s::cluster::NAME, "kubectl", "logs", "-f", "--tail", "300", "-n", &ns, &pod];
+                let mut v = vec![match cfg.engine {
+                    crate::engine::Engine::Docker => "docker",
+                    crate::engine::Engine::Podman => "podman",
+                }];
+                v.extend_from_slice(&kubectl);
+                host.open_terminal(&format!("logs {pod}"), &ExecReq::new(&v).privilege(Privilege::Engine))?
+            }
+            // shell distribuce (bez příkazu) – jen WSL
+            Term::Distro(n) => wsl::open_terminal(&n, &["-d".into(), n.clone(), "--cd".into(), "~".into()])
+                .map(|_| ())?,
+            Term::Dir(dir) => {
+                let distro = host.wsl().expect("WSL").distro().to_string();
+                wsl::open_terminal(&dir, &["-d".into(), distro, "--cd".into(), dir.clone()]).map(|_| ())?
+            }
+        }
+        Ok(String::new())
     }
 
 }

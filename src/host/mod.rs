@@ -10,6 +10,15 @@ use crate::config::Config;
 pub use crate::error::HostError;
 
 /// Pod jakým uživatelem se příkaz spustí.
+///
+/// Pravidlo pro `Engine` a `Root`:
+/// - `Engine`: příkaz jen volá CLI enginu (`docker`, `podman`, `kubectl` přes `docker exec`)
+///   nebo testuje či čte jeho soubory (marker API, `/var/lib/docker` a `/var/lib/containers`
+///   jen pro čtení).
+/// - `Root`: cokoli jiného. Patří sem `systemctl`, zápis do `/etc` nebo `/usr/local`, `nsenter`,
+///   `ss -p`, `conntrack`, `iptables`, `sysctl` a `drop_caches`, soubory v režimu root a
+///   instalační a nastavovací skripty z `engine.rs` a `lite/mod.rs`.
+/// - Skript, který dělá obojí, je `Root`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Privilege {
     /// výchozí uživatel distribuce (bez `-u`)

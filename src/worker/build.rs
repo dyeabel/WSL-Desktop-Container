@@ -3,7 +3,7 @@
 use super::spec::{is_windows_path, BuildSpec};
 use super::{Msg, Worker};
 use crate::engine::Engine;
-use crate::wsl;
+use crate::host::{ExecReq, Host, HostExt, Privilege};
 
 /// Ukončí právě prováděné RUN kroky buildů Podmanu: potomky služby wslcd-podman-api
 /// s názvem `exe` (izolace buildah) / `buildah-oci-runtime` – kontejnery mají rodiče conmon, ne službu.
@@ -16,7 +16,7 @@ if [ -n "$M" ] && [ "$M" != 0 ]; then
 fi
 true"#;
 
-/// Požadavek na zrušení běžícího sestavení (nastaví UI, čte `run_stream`).
+/// Požadavek na zrušení běžícího sestavení (nastaví UI, čte `exec_stream`).
 static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Zruší běžící sestavení: ukončí CLI a uvnitř distribuce i proces `build`.
@@ -28,7 +28,7 @@ impl Worker {
     pub(super) fn build_image(&self, spec: BuildSpec) -> Result<String, String> {
         CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
         let cfg = self.cfg();
-        let res = run_build(&cfg.distro, cfg.engine, cfg.port, cfg.tls, &spec, |line| self.send(Msg::BuildOutput(line.to_string())));
+        let res = run_build(self.host().as_ref(), cfg.engine, cfg.port, cfg.tls, &spec, |line| self.send(Msg::BuildOutput(line.to_string())));
         self.send(Msg::BuildDone(res.clone()));
         res
     }
@@ -37,22 +37,22 @@ impl Worker {
 /// Sestaví image: převede cesty na linuxové, ověří kontext a Dockerfile a spustí
 /// `<cli> build … .` v adresáři kontextu. Každý řádek výstupu předá `on_line`.
 /// Vrací text pro oznámení (úspěch) nebo chybu.
-pub fn run_build(distro: &str, engine: Engine, port: u16, tls: bool, spec: &BuildSpec, mut on_line: impl FnMut(&str)) -> Result<String, String> {
+pub fn run_build(host: &dyn Host, engine: Engine, port: u16, tls: bool, spec: &BuildSpec, mut on_line: impl FnMut(&str)) -> Result<String, String> {
     if spec.context.trim().is_empty() {
         return Err(t!("Není zadaná složka kontextu", "No build context folder given").into());
     }
-    let ctx = wsl::to_linux_path(distro, &spec.context)?;
+    let ctx = host.to_guest_path(&spec.context)?;
     let mut spec = spec.clone();
     if is_windows_path(&spec.dockerfile) {
-        spec.dockerfile = wsl::to_linux_path(distro, &spec.dockerfile)?;
+        spec.dockerfile = host.to_guest_path(&spec.dockerfile)?;
     }
-    if wsl::run(distro, None, None, &["test", "-d", &ctx]).is_err() {
+    if host.run(Privilege::User, None, &["test", "-d", &ctx]).is_err() {
         let e = tf!("Složka kontextu {ctx} neexistuje", "Build context folder {ctx} does not exist");
         on_line(&e);
         return Err(e);
     }
     let df = spec.dockerfile_arg().unwrap_or_else(|| "Dockerfile".into());
-    if wsl::run(distro, None, Some(&ctx), &["test", "-f", &df]).is_err() {
+    if host.run(Privilege::User, Some(&ctx), &["test", "-f", &df]).is_err() {
         let e = tf!("Dockerfile {df} v {ctx} neexistuje", "Dockerfile {df} not found in {ctx}");
         on_line(&e);
         return Err(e);
@@ -68,16 +68,17 @@ pub fn run_build(distro: &str, engine: Engine, port: u16, tls: bool, spec: &Buil
         })
         .collect();
     on_line(&format!("$ {}", shown.join(" ")));
-    let code = wsl::run_stream(distro, None, Some(&ctx), &args, Some(&CANCEL), &mut on_line)?;
+    let argv: Vec<&str> = args.iter().map(|a| a.as_str()).collect();
+    let code = host.exec_stream(&ExecReq::new(&argv).cwd(Some(&ctx)), Some(&CANCEL), &mut on_line)?;
     if CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
         // zabitý wsl.exe nemusí ukončit CLI uvnitř distribuce – dorazit ho tam (jen náš build s tímto kontextem)
         let end = args.iter().position(|a| a == "build").map(|i| i + 1).unwrap_or(args.len());
         let pattern = args[..end].join(" ");
-        let _ = wsl::run(distro, None, None, &["pkill", "-INT", "-f", &pattern]);
+        let _ = host.run(Privilege::User, None, &["pkill", "-INT", "-f", &pattern]);
         if engine == Engine::Podman {
             // Podman (vzdálený build) provádí RUN dál i po odpojení klienta – ukončit kroky,
             // které běží pod buildah-oci-runtime (procesy buildů služby Podman API)
-            let _ = wsl::run(distro, Some("root"), None, &["sh", "-c", KILL_PODMAN_BUILD_STEPS]);
+            let _ = host.run(Privilege::Root, None, &["sh", "-c", KILL_PODMAN_BUILD_STEPS]);
         }
         let e = t!("Sestavení zrušeno", "Build cancelled").to_string();
         on_line(&e);

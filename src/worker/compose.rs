@@ -1,9 +1,7 @@
 //! Compose: příkazy pro stacky, nový stack ze šablony, editor souborů a jejich kontrola.
 
 use super::{is_windows_path, Msg, Worker};
-use crate::wsl;
-use std::io::Write;
-use std::process::Stdio;
+use crate::host::{decode, ExecReq, Host, HostExt, Privilege};
 
 /// Nový stack: soubory se zapíšou do složky (Windows / Linux cesta, `~` = domov uživatele distribuce).
 #[derive(Debug, Clone, Default)]
@@ -83,31 +81,17 @@ pub fn clean_output(s: &str) -> String {
         .to_string()
 }
 
-/// Spustí program v distribuci s textem na stdin (zapisuje se z vlastního vlákna, ať se nezablokuje).
-fn run_input(distro: &str, cwd: Option<&str>, args: &[String], input: &str) -> Result<String, String> {
-    let mut child = wsl::base(distro, None, cwd)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    let writer = child.stdin.take().map(|mut si| {
-        let data = input.as_bytes().to_vec();
-        std::thread::spawn(move || {
-            let _ = si.write_all(&data);
-        })
-    });
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    if let Some(w) = writer {
-        let _ = w.join();
-    }
-    let text = format!("{}\n{}", wsl::decode(&out.stdout), wsl::decode(&out.stderr));
+/// Spustí program u hostitele s textem na stdin.
+fn run_input(host: &dyn Host, cwd: Option<&str>, args: &[String], input: &str) -> Result<String, String> {
+    let a: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let out = host.exec(&ExecReq::new(&a).cwd(cwd).stdin(input.as_bytes()))?;
+    let text = format!("{}
+{}", decode(&out.stdout), decode(&out.stderr));
     let text = clean_output(&text);
-    if out.status.success() {
+    if out.code == 0 {
         Ok(text)
     } else if text.is_empty() {
-        Err(tf!("kód {}", "code {}", out.status.code().unwrap_or(-1)))
+        Err(tf!("kód {}", "code {}", out.code))
     } else {
         Err(text)
     }
@@ -138,7 +122,7 @@ pub fn check_args(cli: &[String], project: &str, dir: &str, files: &[String], en
 /// Kontrola stacku `config -q`. `compose_stdin` = obsah compose souboru označeného v `files` jako `-`.
 #[allow(clippy::too_many_arguments)]
 pub fn validate(
-    distro: &str,
+    host: &dyn Host,
     cli: &[String],
     project: &str,
     dir: &str,
@@ -147,13 +131,13 @@ pub fn validate(
     compose_stdin: &str,
 ) -> Result<String, String> {
     let args = check_args(cli, project, dir, files, env_text);
-    run_input(distro, None, &args, compose_stdin)
+    run_input(host, None, &args, compose_stdin)
 }
 
 impl Worker {
     pub(super) fn compose(&self, dir: String, project: Option<String>, args: Vec<String>) -> Result<String, String> {
         let cfg = self.cfg();
-        let distro = cfg.distro.clone();
+        let host = self.host();
         let mut a: Vec<String> = cfg.engine.cli(cfg.port, cfg.tls);
         a.push("compose".into());
         if let Some(p) = &project {
@@ -165,9 +149,9 @@ impl Worker {
         // že labely nepodstrčil image a že složka opravdu obsahuje compose projekt (F-05)
         let runs = args.iter().any(|x| matches!(x.as_str(), "up" | "build" | "pull" | "create" | "run" | "restart" | "start"));
         if let (Some(p), true) = (&project, runs) {
-            self.check_stack_trusted(&distro, &dir, p, &args)?;
+            self.check_stack_trusted(&dir, p, &args)?;
         }
-        let r = wsl::run_owned(&distro, None, Some(&dir), &a);
+        let r = host.run_owned(Privilege::User, Some(&dir), &a);
         match r {
             Ok(out) => {
                 self.send(Msg::Output(title, clean_output(&out)));
@@ -183,7 +167,7 @@ impl Worker {
     /// Kontroly před spuštěním stacku poznaného z labelů (F-05):
     /// - labely compose nesmí pocházet z image (to by si je mohl nastavit autor image),
     /// - pracovní složka musí existovat a (bez vlastního -f) obsahovat compose soubor.
-    fn check_stack_trusted(&self, distro: &str, dir: &str, project: &str, args: &[String]) -> Result<(), String> {
+    fn check_stack_trusted(&self, dir: &str, project: &str, args: &[String]) -> Result<(), String> {
         let d = self.docker();
         let filter = serde_json::json!({ "label": [format!("com.docker.compose.project={project}")] }).to_string();
         let list: Vec<serde_json::Value> = d
@@ -211,7 +195,7 @@ impl Worker {
         let script = r#"[ -d "$1" ] || { echo "nodir"; exit 0; }
 for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do [ -f "$1/$f" ] && { echo ok; exit 0; }; done
 echo nofile"#;
-        let out = wsl::run(distro, None, None, &["sh", "-c", script, "sh", dir]).unwrap_or_default();
+        let out = self.host().run(Privilege::User, None, &["sh", "-c", script, "sh", dir]).unwrap_or_default();
         let custom_file = args.iter().any(|x| x == "-f" || x == "--file");
         match out.trim() {
             "nodir" => Err(tf!("Složka stacku {dir} neexistuje", "The stack folder {dir} does not exist")),
@@ -225,12 +209,13 @@ echo nofile"#;
 
     pub(super) fn stack_op(&self, op: StackOp) -> Result<String, String> {
         let cfg = self.cfg();
-        let distro = cfg.distro.clone();
+        let host = self.host();
+        let host = host.as_ref();
         let cli = cfg.engine.cli(cfg.port, cfg.tls);
         match op {
             StackOp::Create(spec) => {
                 let project = spec.project.clone();
-                match create_stack(&distro, &cli, &spec) {
+                match create_stack(host, &cli, &spec) {
                     Ok(dir) => {
                         self.send(Msg::Stack(StackMsg::Created(Ok(dir.clone()))));
                         if spec.start {
@@ -246,16 +231,16 @@ echo nofile"#;
                 }
             }
             StackOp::Read { path, missing_ok } => {
-                let result = if missing_ok && wsl::run(&distro, None, None, &["test", "-e", &path]).is_err() {
+                let result = if missing_ok && host.run(Privilege::User, None, &["test", "-e", &path]).is_err() {
                     Ok((String::new(), false))
                 } else {
-                    crate::fs::read_text(&distro, false, &path).map(|t| (t, true))
+                    crate::fs::read_text(host, false, &path).map(|t| (t, true))
                 };
                 self.send(Msg::Stack(StackMsg::File { path, result }));
                 Ok(String::new())
             }
             StackOp::Save { path, text } => {
-                let r = crate::fs::write_text(&distro, false, &path, &text).map(|_| ());
+                let r = crate::fs::write_text(host, false, &path, &text).map(|_| ());
                 let ok = r.is_ok();
                 self.send(Msg::Stack(StackMsg::Saved { path: path.clone(), result: r }));
                 Ok(if ok { tf!("Uloženo: {path}", "Saved: {path}") } else { String::new() })
@@ -268,9 +253,9 @@ echo nofile"#;
                     } else {
                         files.iter().map(|f| if f == &path { "-".to_string() } else { f.clone() }).collect()
                     };
-                    validate(&distro, &cli, &project, &dir, &fl, None, &text)
+                    validate(host, &cli, &project, &dir, &fl, None, &text)
                 } else {
-                    validate(&distro, &cli, &project, &dir, &files, Some(&text), "")
+                    validate(host, &cli, &project, &dir, &files, Some(&text), "")
                 };
                 self.send(Msg::Stack(StackMsg::Validated { path, result }));
                 Ok(String::new())
@@ -280,7 +265,7 @@ echo nofile"#;
 }
 
 /// Vytvoří složku stacku a zapíše `compose.yaml` a `.env` (po kontrole `config -q`). Vrací absolutní cestu.
-pub fn create_stack(distro: &str, cli: &[String], spec: &NewStackSpec) -> Result<String, String> {
+pub fn create_stack(host: &dyn Host, cli: &[String], spec: &NewStackSpec) -> Result<String, String> {
     let project = spec.project.trim();
     if !crate::compose_templates::valid_project(project) {
         return Err(t!(
@@ -292,13 +277,13 @@ pub fn create_stack(distro: &str, cli: &[String], spec: &NewStackSpec) -> Result
     let raw = spec.dir.trim().trim_matches('"');
     let raw = if raw.is_empty() { format!("~/stacks/{project}") } else { raw.to_string() };
     let path = if is_windows_path(&raw) {
-        wsl::to_linux_path(distro, &raw)?
+        host.to_guest_path(&raw)?
     } else if raw.starts_with('/') || raw.starts_with('~') {
         raw
     } else {
         return Err(t!("Zadej absolutní cestu (Windows, /… nebo ~/…)", "Enter an absolute path (Windows, /… or ~/…)").into());
     };
-    let out = wsl::run(distro, None, None, &["sh", "-c", RESOLVE_SCRIPT, "sh", &path])?;
+    let out = host.run(Privilege::User, None, &["sh", "-c", RESOLVE_SCRIPT, "sh", &path])?;
     let line = out.lines().map(str::trim).find(|l| l.starts_with("PATH ") || l.starts_with("EXISTS ")).unwrap_or("");
     if let Some(f) = line.strip_prefix("EXISTS ") {
         return Err(tf!("Ve složce {path} už je {f} – zvol jinou složku", "{path} already contains {f} – choose another folder"));
@@ -308,15 +293,15 @@ pub fn create_stack(distro: &str, cli: &[String], spec: &NewStackSpec) -> Result
         return Err(t!("Kořenová složka není povolená", "The root folder is not allowed").into());
     }
     // kontrola ještě před vytvořením složky (compose ji k tomu nepotřebuje)
-    validate(distro, cli, project, &dir, &["-".into()], Some(&spec.env), &spec.compose)
+    validate(host, cli, project, &dir, &["-".into()], Some(&spec.env), &spec.compose)
         .map_err(|e| tf!("Kontrola compose souboru selhala:\n{e}", "The compose file check failed:\n{e}"))?;
-    crate::fs::mkdir(distro, false, &dir)?;
+    crate::fs::mkdir(host, false, &dir)?;
     let compose = crate::fs::join(&dir, "compose.yaml");
     let env = crate::fs::join(&dir, ".env");
-    crate::fs::write_text(distro, false, &env, &spec.env)?;
+    crate::fs::write_text(host, false, &env, &spec.env)?;
     // hesla – jen pro vlastníka
-    let _ = crate::fs::chmod(distro, false, "600", &env);
-    crate::fs::write_text(distro, false, &compose, &spec.compose)?;
+    let _ = crate::fs::chmod(host, false, "600", &env);
+    crate::fs::write_text(host, false, &compose, &spec.compose)?;
     Ok(dir)
 }
 
@@ -332,7 +317,7 @@ pub fn check_stack_for_test(cfg: crate::config::Config, dir: &str, project: &str
         cmd,
         shared: std::sync::Arc::new(super::Shared::default()),
     };
-    w.check_stack_trusted(&w.cfg().distro, dir, project, &["up".into(), "-d".into()])
+    w.check_stack_trusted(dir, project, &["up".into(), "-d".into()])
 }
 
 #[cfg(test)]

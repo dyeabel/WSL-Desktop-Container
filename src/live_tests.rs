@@ -2,7 +2,12 @@
 //! Spouštěj ručně: `cargo test -- --ignored --test-threads=1`
 //! (distribuce se bere z WSLCD_DISTRO, výchozí Ubuntu)
 
+use crate::host::wsl::WslHost;
 use crate::{docker::Docker, fs, wsl};
+
+fn host() -> WslHost {
+    WslHost::new(distro())
+}
 
 fn distro() -> String {
     std::env::var("WSLCD_DISTRO").unwrap_or_else(|_| "Ubuntu".into())
@@ -18,29 +23,28 @@ fn live_wsl_list_contains_distro() {
 #[test]
 #[ignore]
 fn live_fs_roundtrip() {
-    let d = distro();
-    let (home, _) = fs::list(&d, false, "~").expect("list ~");
+    let (home, _) = fs::list(&host(), false, "~").expect("list ~");
     assert!(home.starts_with('/'), "{home}");
     let dir = fs::join(&home, ".wls-desktop-test");
-    let _ = fs::delete(&d, false, std::slice::from_ref(&dir));
-    fs::mkdir(&d, false, &dir).unwrap();
+    let _ = fs::delete(&host(), false, std::slice::from_ref(&dir));
+    fs::mkdir(&host(), false, &dir).unwrap();
     let file = fs::join(&dir, "a b.txt");
-    fs::write_text(&d, false, &file, "ahoj\nsvěte\n").unwrap();
-    assert_eq!(fs::read_text(&d, false, &file).unwrap(), "ahoj\nsvěte\n");
-    fs::rename(&d, false, &file, &fs::join(&dir, "c.txt")).unwrap();
-    let (cwd, e) = fs::list(&d, false, &dir).unwrap();
+    fs::write_text(&host(), false, &file, "ahoj\nsvěte\n").unwrap();
+    assert_eq!(fs::read_text(&host(), false, &file).unwrap(), "ahoj\nsvěte\n");
+    fs::rename(&host(), false, &file, &fs::join(&dir, "c.txt")).unwrap();
+    let (cwd, e) = fs::list(&host(), false, &dir).unwrap();
     assert_eq!(cwd, dir);
     assert_eq!(e.len(), 1);
     assert_eq!(e[0].name, "c.txt");
     assert_eq!(e[0].size, "ahoj\nsvěte\n".len() as u64);
-    fs::delete(&d, false, std::slice::from_ref(&dir)).unwrap();
-    assert!(fs::list(&d, false, &dir).is_err());
+    fs::delete(&host(), false, std::slice::from_ref(&dir)).unwrap();
+    assert!(fs::list(&host(), false, &dir).is_err());
 }
 
 #[test]
 #[ignore]
 fn live_fs_root_lists_docker_dir() {
-    let (cwd, e) = fs::list(&distro(), true, "/var/lib/docker").expect("root list");
+    let (cwd, e) = fs::list(&host(), true, "/var/lib/docker").expect("root list");
     assert_eq!(cwd, "/var/lib/docker");
     assert!(e.iter().any(|x| x.name == "volumes"), "{:?}", e.iter().map(|x| &x.name).collect::<Vec<_>>());
 }
@@ -466,7 +470,7 @@ fn live_build_image() {
         ..Default::default()
     };
     let mut lines = Vec::new();
-    let res = crate::worker::build::run_build(&distro, cfg.engine, port, false, &spec, |l| {
+    let res = crate::worker::build::run_build(&WslHost::new(&distro), cfg.engine, port, false, &spec, |l| {
         eprintln!("| {l}");
         lines.push(l.to_string());
     });
@@ -583,9 +587,9 @@ fn live_fs_root_symlink_safe() {
     let dir = "/tmp/wslcd-test-fs-root";
     let root = |a: &[&str]| wsl::run(&d, Some("root"), None, a);
     root(&["sh", "-c", "rm -rf /tmp/wslcd-test-fs-root && mkdir /tmp/wslcd-test-fs-root && cd /tmp/wslcd-test-fs-root && echo tajne > secret && chmod 600 secret && ln -s secret link && echo a > plain && chmod 640 plain"]).unwrap();
-    let w = fs::write_text(&d, true, &format!("{dir}/link"), "pwned\n");
-    let c = fs::chmod(&d, true, "666", &format!("{dir}/link"));
-    let p = fs::write_text(&d, true, &format!("{dir}/plain"), "b\n");
+    let w = fs::write_text(&host(), true, &format!("{dir}/link"), "pwned\n");
+    let c = fs::chmod(&host(), true, "666", &format!("{dir}/link"));
+    let p = fs::write_text(&host(), true, &format!("{dir}/plain"), "b\n");
     let state = root(&["sh", "-c", "cd /tmp/wslcd-test-fs-root && cat secret && stat -c '%a %n' secret plain && cat plain && ls -a"]).unwrap();
     let _ = root(&["rm", "-rf", dir]);
     eprintln!("{w:?} {c:?} {p:?}\n{state}");
@@ -699,7 +703,7 @@ fn live_build_cancel() {
         crate::worker::cancel_build();
     });
     let t = std::time::Instant::now();
-    let res = crate::worker::build::run_build(&distro, cfg.engine, cfg.port, cfg.tls, &spec, |l| eprintln!("| {l}"));
+    let res = crate::worker::build::run_build(&WslHost::new(&distro), cfg.engine, cfg.port, cfg.tls, &spec, |l| eprintln!("| {l}"));
     let took = t.elapsed();
     std::thread::sleep(std::time::Duration::from_secs(3));
     let ps = wsl::run(&distro, Some("root"), None, &["sh", "-c", "ps -eo args | grep 'sleep 45' | grep -v grep || true"]).unwrap_or_default();
@@ -737,18 +741,18 @@ fn live_compose_new_stack() {
         a.extend(args.iter().map(|s| s.to_string()));
         wsl::run_owned(&distro, None, Some(&dir), &a)
     };
-    let created = create_stack(&distro, &cli, &spec);
+    let created = create_stack(&WslHost::new(&distro), &cli, &spec);
     eprintln!("create_stack: {created:?}");
-    let again = create_stack(&distro, &cli, &spec);
+    let again = create_stack(&WslHost::new(&distro), &cli, &spec);
     eprintln!("znovu do stejné složky: {again:?}");
-    let files = fs::list(&distro, false, &dir).map(|(_, e)| e.iter().map(|x| format!("{} {}", x.mode, x.name)).collect::<Vec<_>>());
+    let files = fs::list(&WslHost::new(&distro), false, &dir).map(|(_, e)| e.iter().map(|x| format!("{} {}", x.mode, x.name)).collect::<Vec<_>>());
     eprintln!("soubory: {files:?}");
     let compose_file = fs::join(&dir, "compose.yaml");
-    let check_file = validate(&distro, &cli, project, &dir, std::slice::from_ref(&compose_file), None, "");
+    let check_file = validate(&WslHost::new(&distro), &cli, project, &dir, std::slice::from_ref(&compose_file), None, "");
     eprintln!("config -q (soubor): {check_file:?}");
-    let check_bad = validate(&distro, &cli, project, &dir, &["-".into()], None, "services:\n  redis: [\n");
+    let check_bad = validate(&WslHost::new(&distro), &cli, project, &dir, &["-".into()], None, "services:\n  redis: [\n");
     eprintln!("config -q (rozbitý obsah editoru): {check_bad:?}");
-    let check_env = validate(&distro, &cli, project, &dir, std::slice::from_ref(&compose_file), Some("REDIS_PORT=1\n"), "");
+    let check_env = validate(&WslHost::new(&distro), &cli, project, &dir, std::slice::from_ref(&compose_file), Some("REDIS_PORT=1\n"), "");
     eprintln!("config -q (.env z editoru bez hesla): {check_env:?}");
     let up = compose_cmd(&["up", "-d"]);
     eprintln!("up -d: {up:?}");
@@ -763,7 +767,7 @@ fn live_compose_new_stack() {
     }
     let down = compose_cmd(&["down", "-v"]);
     eprintln!("down -v: {down:?}");
-    let rm = fs::delete(&distro, false, std::slice::from_ref(&dir));
+    let rm = fs::delete(&WslHost::new(&distro), false, std::slice::from_ref(&dir));
     eprintln!("rm složky: {rm:?}");
     let left = d.snapshot().containers.into_iter().any(|c| c.project() == Some(project));
 
@@ -781,7 +785,7 @@ fn live_compose_new_stack() {
     assert!(c.ports_text().contains(&host_port.to_string()), "{}", c.ports_text());
     assert!(down.is_ok(), "{down:?}");
     assert!(!left, "kontejnery stacku zůstaly");
-    assert!(rm.is_ok() && fs::list(&distro, false, &dir).is_err());
+    assert!(rm.is_ok() && fs::list(&WslHost::new(&distro), false, &dir).is_err());
 }
 
 /// Správa distribucí: rootfs alpine (export kontejneru přes engine v WSLCD_DISTRO) -> wsl --import
@@ -922,7 +926,7 @@ fn live_compose_label_trust() {
     )
     .unwrap();
     let spec = crate::worker::BuildSpec { context: dir.to_string_lossy().to_string(), tags: "wslcd-test-trust:latest".into(), ..Default::default() };
-    crate::worker::build::run_build(&cfg.distro, cfg.engine, cfg.port, cfg.tls, &spec, |_| {}).expect("build");
+    crate::worker::build::run_build(&WslHost::new(&cfg.distro), cfg.engine, cfg.port, cfg.tls, &spec, |_| {}).expect("build");
     run(&["create", "--name", "wslcd-test-trust-a", "wslcd-test-trust:latest", "true"]).expect("create a");
     let evil = crate::worker::check_stack_for_test(cfg.clone(), "/tmp", "wslcd-test-evil");
     // label na kontejneru (ne z image), ale složka neexistuje

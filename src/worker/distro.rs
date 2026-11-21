@@ -1,6 +1,7 @@
 //! Instalace a příprava nové WSL distribuce.
 
 use super::{AddDistroSpec, Msg, Worker};
+use crate::host::{HostExt, Privilege};
 use crate::wsl;
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -34,7 +35,8 @@ impl Worker {
         thread::sleep(Duration::from_secs(3));
         wsl::start(&name)?;
         thread::sleep(Duration::from_secs(if lite { 1 } else { 3 }));
-        let systemd = wsl::run(&name, Some("root"), None, &["sh", "-c", crate::lite::HAS_INIT]).is_ok();
+        let cur = self.host();
+        let systemd = cur.wsl().expect("WSL").for_distro(&name).run(Privilege::Root, None, &["sh", "-c", crate::lite::HAS_INIT]).is_ok();
         log.push_str(if systemd {
             t!("systemd (nebo náhrada WSLCD Lite) běží\n", "systemd (or the WSLCD Lite replacement) is running\n")
         } else {
@@ -57,7 +59,7 @@ impl Worker {
             }
         }
         log.push_str(&format!("\n=== {} ===\n", t!("Příprava (nástroje, náhrada systemctl, wsl.conf)", "Preparation (tools, systemctl replacement, wsl.conf)")));
-        match crate::lite::prepare(name) {
+        match crate::lite::prepare(&self.host().wsl().expect("WSL").for_distro(name)) {
             Ok(o) => log.push_str(&o),
             Err(e) => {
                 log.push_str(&e);
@@ -87,7 +89,9 @@ impl Worker {
         // 2) systemd, uživatel, sudo
         step(log, t!("Příprava (systemd, uživatel, sudo)", "Preparation (systemd, user, sudo)"));
         let user = spec.user.trim().to_string();
-        match wsl::run(name, Some("root"), None, &["env", &format!("U={user}"), "sh", "-c", &crate::engine::distro_prepare_script()]) {
+        let cur = self.host();
+        let target = cur.wsl().expect("WSL").for_distro(name);
+        match target.run(Privilege::Root, None, &["env", &format!("U={user}"), "sh", "-c", &crate::engine::distro_prepare_script()]) {
             Ok(o) => log.push_str(&o),
             Err(e) => {
                 log.push_str(&e);
@@ -97,7 +101,7 @@ impl Worker {
         if spec.password.contains(['\n', '\r']) {
             log.push_str(t!("Heslo obsahuje konec řádku – nenastaveno\n", "The password contains a line break – not set\n"));
         } else if !user.is_empty() && !spec.password.is_empty() {
-            match wsl::run_stdin(name, Some("root"), &["chpasswd"], &format!("{user}:{}\n", spec.password)) {
+            match target.run_stdin(Privilege::Root, &["chpasswd"], &format!("{user}:{}\n", spec.password)) {
                 Ok(_) => log.push_str(t!("Heslo nastaveno\n", "Password set\n")),
                 Err(e) => log.push_str(&tf!("Heslo se nepodařilo nastavit: {e}\n", "Failed to set the password: {e}\n")),
             }
@@ -138,7 +142,8 @@ impl Worker {
         }
         if let Some(e) = spec.engine {
             step(log, &tf!("Instalace {} (bez nastavení API)", "Installing {} (without API setup)", e.name()));
-            match wsl::run(&name, Some("root"), None, &["sh", "-c", &e.install_script()]) {
+            let cur = self.host();
+            match cur.wsl().expect("WSL").for_distro(&name).run(Privilege::Root, None, &["sh", "-c", &e.install_script()]) {
                 Ok(o) => log.push_str(&o),
                 Err(err) => {
                     log.push_str(&err);

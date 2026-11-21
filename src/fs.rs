@@ -1,8 +1,7 @@
 //! Správa souborů uvnitř WSL distribuce – vše přes wsl.exe, takže funguje
 //! pro libovolnou distribuci a volitelně i jako root.
 
-use crate::wsl;
-use std::process::Stdio;
+use crate::host::{decode, ExecReq, Host, HostExt, Privilege};
 
 #[derive(Debug, Clone, Default)]
 pub struct Entry {
@@ -34,8 +33,8 @@ pwd
 find . -mindepth 1 -maxdepth 1 -printf '%y\t%Y\t%s\t%T@\t%u\t%m\t%f\0' 2>/dev/null
 exit 0"#;
 
-fn user(root: bool) -> Option<&'static str> {
-    if root { Some("root") } else { None }
+fn privilege(root: bool) -> Privilege {
+    if root { Privilege::Root } else { Privilege::User }
 }
 
 pub fn parse_listing(out: &str) -> (String, Vec<Entry>) {
@@ -63,14 +62,11 @@ pub fn parse_listing(out: &str) -> (String, Vec<Entry>) {
     (cwd.trim().to_string(), v)
 }
 
-pub fn list(distro: &str, root: bool, path: &str) -> Result<(String, Vec<Entry>), String> {
-    let out = wsl::base(distro, user(root), None)
-        .args(["sh", "-c", LIST_SCRIPT, "sh", path])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        let e = wsl::decode(&out.stderr);
+pub fn list(host: &dyn Host, root: bool, path: &str) -> Result<(String, Vec<Entry>), String> {
+    let args = ["sh", "-c", LIST_SCRIPT, "sh", path];
+    let out = host.exec(&ExecReq::new(&args).privilege(privilege(root)))?;
+    if out.code != 0 {
+        let e = decode(&out.stderr);
         return Err(if e.trim().is_empty() { tf!("Adresář {path} nelze otevřít", "Cannot open directory {path}") } else { e.trim().to_string() });
     }
     Ok(parse_listing(&String::from_utf8_lossy(&out.stdout)))
@@ -88,23 +84,23 @@ pub fn parent(path: &str) -> String {
     }
 }
 
-fn run(distro: &str, root: bool, args: &[&str]) -> Result<String, String> {
-    Ok(wsl::run(distro, user(root), None, args)?)
+fn run(host: &dyn Host, root: bool, args: &[&str]) -> Result<String, String> {
+    Ok(host.run(privilege(root), None, args)?)
 }
 
-pub fn mkdir(distro: &str, root: bool, path: &str) -> Result<String, String> {
-    run(distro, root, &["mkdir", "-p", "--", path])
+pub fn mkdir(host: &dyn Host, root: bool, path: &str) -> Result<String, String> {
+    run(host, root, &["mkdir", "-p", "--", path])
 }
 
-pub fn touch(distro: &str, root: bool, path: &str) -> Result<String, String> {
-    run(distro, root, &["touch", "--", path])
+pub fn touch(host: &dyn Host, root: bool, path: &str) -> Result<String, String> {
+    run(host, root, &["touch", "--", path])
 }
 
-pub fn rename(distro: &str, root: bool, from: &str, to: &str) -> Result<String, String> {
-    run(distro, root, &["mv", "-n", "--", from, to])
+pub fn rename(host: &dyn Host, root: bool, from: &str, to: &str) -> Result<String, String> {
+    run(host, root, &["mv", "-n", "--", from, to])
 }
 
-pub fn delete(distro: &str, root: bool, paths: &[String]) -> Result<String, String> {
+pub fn delete(host: &dyn Host, root: bool, paths: &[String]) -> Result<String, String> {
     let mut a: Vec<&str> = vec!["rm", "-rf", "--"];
     for p in paths {
         if p == "/" || p.is_empty() {
@@ -112,36 +108,34 @@ pub fn delete(distro: &str, root: bool, paths: &[String]) -> Result<String, Stri
         }
         a.push(p);
     }
-    run(distro, root, &a)
+    run(host, root, &a)
 }
 
-pub fn copy(distro: &str, root: bool, sources: &[String], dest_dir: &str) -> Result<String, String> {
+pub fn copy(host: &dyn Host, root: bool, sources: &[String], dest_dir: &str) -> Result<String, String> {
     // -P: symlinky kopírovat jako symlinky, --remove-destination: nepsat skrz existující symlink v cíli
     let mut a: Vec<&str> = vec!["cp", "-rP", "--remove-destination", "--"];
     a.extend(sources.iter().map(|s| s.as_str()));
     a.push(dest_dir);
-    run(distro, root, &a)
+    run(host, root, &a)
 }
 
-pub fn chmod(distro: &str, root: bool, mode: &str, path: &str) -> Result<String, String> {
+pub fn chmod(host: &dyn Host, root: bool, mode: &str, path: &str) -> Result<String, String> {
     if root {
         // jako root neměnit práva cíle symlinku (třeba /etc/shadow) – F-10
-        return run(distro, root, &["sh", "-c", SAFE_CHMOD, "sh", mode, path]);
+        return run(host, root, &["sh", "-c", SAFE_CHMOD, "sh", mode, path]);
     }
-    run(distro, root, &["chmod", "--", mode, path])
+    run(host, root, &["chmod", "--", mode, path])
 }
 
 /// Max. velikost souboru, který otevřeme ve vestavěném editoru.
 pub const MAX_EDIT: usize = 2 * 1024 * 1024;
 
-pub fn read_text(distro: &str, root: bool, path: &str) -> Result<String, String> {
-    let out = wsl::base(distro, user(root), None)
-        .args(["head", "-c", &(MAX_EDIT + 1).to_string(), "--", path])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(wsl::decode(&out.stderr).trim().to_string());
+pub fn read_text(host: &dyn Host, root: bool, path: &str) -> Result<String, String> {
+    let n = (MAX_EDIT + 1).to_string();
+    let args = ["head", "-c", &n, "--", path];
+    let out = host.exec(&ExecReq::new(&args).privilege(privilege(root)))?;
+    if out.code != 0 {
+        return Err(decode(&out.stderr).trim().to_string());
     }
     if out.stdout.len() > MAX_EDIT {
         return Err(t!(
@@ -170,9 +164,9 @@ if ! cat > "$t"; then rm -f -- "$t"; exit 1; fi
 if [ -e "$f" ]; then chmod --reference="$f" -- "$t" 2>/dev/null; chown --reference="$f" -- "$t" 2>/dev/null; else chmod 644 -- "$t"; fi
 mv -fT -- "$t" "$f""#;
 
-pub fn write_text(distro: &str, root: bool, path: &str, text: &str) -> Result<String, String> {
+pub fn write_text(host: &dyn Host, root: bool, path: &str, text: &str) -> Result<String, String> {
     let script = if root { SAFE_WRITE } else { "cat > \"$1\"" };
-    Ok(wsl::run_stdin(distro, user(root), &["sh", "-c", script, "sh", path], text)?)
+    Ok(host.run_stdin(privilege(root), &["sh", "-c", script, "sh", path], text)?)
 }
 
 #[cfg(test)]
