@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 pub use crate::error::ApiError;
 use crate::http::client::{http_response, Client, Request};
-use crate::http::conn::{Connect, TcpConnect};
+use crate::http::conn::{Connect, TcpConnect, UnixConnect};
 use crate::http::Endpoint;
 
 /// Časový limit navázání spojení s API.
@@ -534,6 +534,8 @@ impl Docker {
     fn for_endpoint(ep: &Endpoint, tls: Option<Arc<rustls::ClientConfig>>) -> Self {
         match ep {
             Endpoint::Tcp { port } => Self::with_tls(*port, tls),
+            // TLS se na unix socketu nepoužije
+            Endpoint::Unix(path) => Self::with_connect(Arc::new(UnixConnect { path: path.clone() })),
         }
     }
 
