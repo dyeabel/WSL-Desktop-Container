@@ -59,6 +59,10 @@ pub struct Confirm {
 
 pub use crate::ui::logs::LogView;
 
+/// Výška tlačítka navigace a mezera mezi nimi v postranním panelu (hustší seznam jako v Kiri).
+const NAV_H: f32 = 34.0;
+const NAV_GAP: f32 = 2.0;
+
 pub struct App {
     /// historie celkového CPU kontejnerů (čas s, % všech CPU WSL) – dlaždice CPU
     pub cpu_hist: std::collections::VecDeque<(f64, f64)>,
@@ -102,6 +106,8 @@ pub struct App {
     pub compose: ui::compose::ComposeState,
     /// stránka Kubernetes (cluster, prostředí, mapa toků, pravidla)
     pub k8s: ui::k8s::K8sUi,
+    /// výška spodní části postranního panelu s metrikami na kartě enginu (z posledního snímku)
+    nav_bottom_full: f32,
     pub daemon_json: String,
     pub daemon_loaded: bool,
     pub cfg_draft: Config,
@@ -265,6 +271,7 @@ impl App {
             compose_dir: String::new(),
             compose: ui::compose::ComposeState::default(),
             k8s: ui::k8s::K8sUi::default(),
+            nav_bottom_full: 0.0,
             daemon_json: String::new(),
             daemon_loaded: false,
             cfg_draft,
@@ -581,8 +588,14 @@ impl App {
             .resizable(false)
             .frame(egui::Frame::new().fill(theme::sidebar()).inner_margin(egui::Margin::same(10)))
             .show(ctx, |ui| {
+                // metriky na kartě enginu jen tehdy, když se nad kartu vejde celá hlavní navigace
+                // (výška spodní části s metrikami je z posledního snímku, napoprvé odhad)
+                let nav_h = Page::MAIN.len() as f32 * (NAV_H + NAV_GAP) + 8.0;
+                let bottom_full = if self.nav_bottom_full > 0.0 { self.nav_bottom_full } else { 360.0 };
+                let roomy = ui.available_height() >= nav_h + bottom_full;
+                let mut drew_metrics = false;
                 // spodní část panelu: stav enginu + WSL engine / Nastavení – drží se spodního okraje
-                egui::TopBottomPanel::bottom("nav-bottom")
+                let bottom = egui::TopBottomPanel::bottom("nav-bottom")
                     .frame(egui::Frame::new())
                     .show_separator_line(false)
                     .show_inside(ui, |ui| {
@@ -669,7 +682,6 @@ impl App {
                                 }
                                 // CPU a RAM celé WSL VM (poslední vzorek paměti); klik = Přehled
                                 // v nízkém okně jen stav a tlačítka (navigace nad kartou musí zůstat vidět)
-                                let roomy = ui.ctx().screen_rect().height() >= 700.0;
                                 if distro_running && roomy {
                                     let g = self.shared.memory.lock().ok().and_then(|m| m.glance);
                                     if let Some(g) = g {
@@ -681,6 +693,7 @@ impl App {
                                             k8s: self.snap.containers.iter().find(|c| c.name() == crate::k8s::cluster::NAME).map(|c| c.state == "running"),
                                         };
                                         ui.add_space(2.0);
+                                        drew_metrics = true;
                                         if ui::glance(ui, &g, &x).clicked() {
                                             self.page = Page::Dashboard;
                                         }
@@ -728,7 +741,8 @@ impl App {
                                     }
                                 });
                             });
-                        ui.add_space(8.0);
+                        ui.add_space(6.0);
+                        ui.spacing_mut().item_spacing.y = NAV_GAP;
                         for p in Page::BOTTOM {
                             self.nav_button(ui, p);
                         }
@@ -749,10 +763,14 @@ impl App {
                             ui::activity::indicator(self, ui);
                         });
                     });
+                if drew_metrics {
+                    self.nav_bottom_full = bottom.response.rect.height();
+                }
                 // název a ikona aplikace jsou v záhlaví okna; panel začíná rovnou navigací
                 ui.add_space(4.0);
                 // v nízkém okně se hlavní navigace posouvá místo překrytí kartou enginu
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = NAV_GAP;
                     for p in Page::MAIN {
                         self.nav_button(ui, p);
                     }
@@ -768,7 +786,7 @@ impl App {
             egui::Button::new(text)
                 .selected(sel)
                 .frame(sel)
-                .min_size(egui::vec2(ui.available_width(), 36.0)),
+                .min_size(egui::vec2(ui.available_width(), NAV_H)),
         );
         // odznak s počtem nových problémů kontejnerů
         let unread = if p == Page::Events && !sel { ui::events::unread(self) } else { 0 };

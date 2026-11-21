@@ -455,12 +455,14 @@ pub fn glance_rows(g: &crate::memory::Glance, x: &GlanceCtx) -> Vec<GlanceRow> {
 }
 
 /// Výška řádku karty enginu: text, u metriky navíc pruh pod ním.
-const GLANCE_TEXT: f32 = 18.0;
+/// Pruh má vlastní místo pod textem (mezera, pruh, mezera k dalšímu řádku) – nepřetíná písmena.
+const GLANCE_TEXT: f32 = 16.0;
+const GLANCE_BAR_GAP: f32 = 3.0;
 const GLANCE_BAR: f32 = 3.0;
-const GLANCE_BAR_AFTER: f32 = 5.0;
+const GLANCE_BAR_AFTER: f32 = 6.0;
 
 fn glance_row_h(r: &GlanceRow) -> f32 {
-    GLANCE_TEXT + if r.bar.is_some() { GLANCE_BAR + GLANCE_BAR_AFTER } else { 0.0 }
+    GLANCE_TEXT + if r.bar.is_some() { GLANCE_BAR_GAP + GLANCE_BAR + GLANCE_BAR_AFTER } else { 0.0 }
 }
 
 /// Karta enginu v bočním panelu (styl Kiri): kontejnery, Kubernetes, CPU, paměť ve VM a ve
@@ -483,7 +485,7 @@ pub fn glance(ui: &mut egui::Ui, g: &crate::memory::Glance, x: &GlanceCtx) -> eg
             p.circle_filled(egui::pos2(vr.left() - 7.0, y), 3.0, if on { theme::green() } else { theme::muted() });
         }
         if let Some(f) = r.bar {
-            let by = top + GLANCE_TEXT - 1.0;
+            let by = top + GLANCE_TEXT + GLANCE_BAR_GAP;
             let bar = egui::Rect::from_min_max(egui::pos2(x0, by), egui::pos2(x1.max(x0 + 10.0), by + GLANCE_BAR));
             p.rect_filled(bar, 2.0, theme::card_stroke());
             let f = f.clamp(0.0, 1.0);
@@ -761,7 +763,7 @@ mod tests {
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| h = super::glance(ui, &g, &x).rect.height());
         });
-        assert_eq!(h, 5.0 * 18.0 + 3.0 * 8.0 - 5.0);
+        assert_eq!(h, 5.0 * 16.0 + 3.0 * 12.0 - 6.0, "pruh pod textem, ne přes něj");
     }
 }
 
