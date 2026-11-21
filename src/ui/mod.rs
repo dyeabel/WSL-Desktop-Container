@@ -449,10 +449,10 @@ pub fn glance_rows(g: &crate::memory::Glance, x: &GlanceCtx) -> Vec<GlanceRow> {
 }
 
 /// Výška řádku karty enginu: text, u pruhu navíc pruh pod ním.
-const GLANCE_TEXT: f32 = 18.0;
-const GLANCE_BAR: f32 = 3.0;
-const GLANCE_BAR_GAP: f32 = 1.0;
-const GLANCE_BAR_AFTER: f32 = 5.0;
+const GLANCE_TEXT: f32 = 20.0;
+const GLANCE_BAR: f32 = 4.0;
+const GLANCE_BAR_GAP: f32 = 2.0;
+const GLANCE_BAR_AFTER: f32 = 6.0;
 
 fn glance_row_h(r: &GlanceRow) -> f32 {
     GLANCE_TEXT + if r.bar.is_some() { GLANCE_BAR_GAP + GLANCE_BAR + GLANCE_BAR_AFTER } else { 0.0 }
@@ -461,7 +461,6 @@ fn glance_row_h(r: &GlanceRow) -> f32 {
 /// Karta enginu v bočním panelu (styl Kiri): kontejnery, CPU, paměť ve VM a ve Windows
 /// (VmmemWSL) s tenkým pruhem, stav Kubernetes. Celý blok je klikací, detail v bublině.
 pub fn glance(ui: &mut egui::Ui, g: &crate::memory::Glance, x: &GlanceCtx) -> egui::Response {
-    const INDENT: f32 = 20.0;
     let rows = glance_rows(g, x);
     let w = ui.available_width();
     let h: f32 = rows.iter().map(glance_row_h).sum();
@@ -469,7 +468,8 @@ pub fn glance(ui: &mut egui::Ui, g: &crate::memory::Glance, x: &GlanceCtx) -> eg
     let p = ui.painter_at(rect);
     let font = egui::TextStyle::Small.resolve(ui.style());
     let strong = egui::FontId::new(font.size + 1.0, font.family.clone());
-    let (x0, x1) = (rect.left() + INDENT, rect.right());
+    // přes celou šířku karty (zarovnané s tlačítky pod ním)
+    let (x0, x1) = (rect.left(), rect.right());
     let mut top = rect.top();
     for r in &rows {
         let y = top + GLANCE_TEXT / 2.0;
@@ -758,7 +758,7 @@ mod tests {
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| h = super::glance(ui, &g, &x).rect.height());
         });
-        assert_eq!(h, 5.0 * 18.0 + 2.0 * 9.0);
+        assert_eq!(h, 5.0 * 20.0 + 2.0 * 12.0);
     }
 }
 

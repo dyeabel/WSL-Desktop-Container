@@ -64,13 +64,15 @@ main_pid() {
 is_active() { [ "$(main_pid "$1")" != 0 ]; }
 
 # Vestavěný podman-restart (Alpine jednotku nemá): po startu spustí kontejnery s restart
-# policy always a unless-stopped. Ručně zastavený unless-stopped zůstane stát – pozná se
-# podle FinishedAt: po pádu/uspání distribuce je nulový, po `podman stop` skutečný čas.
+# policy always a unless-stopped. Ručně zastavený unless-stopped zůstane stát: po `podman stop`
+# je FinishedAt po StartedAt, kdežto po uspání/pádu distribuce Podman FinishedAt nezapíše
+# (zůstane nulový nebo starší než poslední start).
 podman_restart() {
   command -v podman >/dev/null 2>&1 || return 0
   podman start --all --filter restart-policy=always
-  for c in $(podman ps -a -q --filter restart-policy=unless-stopped --filter status=exited --filter status=created); do
-    case "$(podman inspect --format '{{.State.FinishedAt}}' "$c")" in 0001-01-01*) podman start "$c" ;; esac
+  for c in $(podman ps -a -q --filter restart-policy=unless-stopped --filter status=exited); do
+    set -- $(podman inspect --format '{{.State.FinishedAt.Unix}} {{.State.StartedAt.Unix}}' "$c")
+    [ "$#" = 2 ] && [ "$1" -lt "$2" ] && podman start "$c"
   done
   return 0
 }

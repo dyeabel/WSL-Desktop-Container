@@ -621,7 +621,8 @@ impl App {
                                 let mut pick = None;
                                 let mut sleep = None;
                                 ui.horizontal(|ui| {
-                                    ui.add_space(20.0);
+                                    // zarovnat s přehledem pod ním (celá šířka karty)
+                                    ui.spacing_mut().button_padding.x = 0.0;
                                     // počet kontejnerů je v přehledu níž – tady jen distribuce
                                     let label = if distro_running { distro.clone() } else { detail.clone() };
                                     let btn = egui::Button::new(RichText::new(format!("{label}  \u{E136}")).small().color(theme::muted())).frame(false);
@@ -667,7 +668,6 @@ impl App {
                                 // chyba API při běžícím enginu (dřív ve stavové liště)
                                 if let Some(e) = self.snap.error.as_ref().filter(|_| connected) {
                                     ui.horizontal(|ui| {
-                                        ui.add_space(20.0);
                                         ui.label(RichText::new(format!("\u{E4E0} {e}")).small().color(theme::red())).on_hover_text(e);
                                     });
                                 }
