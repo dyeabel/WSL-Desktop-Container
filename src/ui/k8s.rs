@@ -158,6 +158,12 @@ fn cluster_tab(app: &mut App, ui: &mut egui::Ui) {
             range.1
         )));
         ui.label(muted(tf!("Image {image}", "Image {image}")));
+        if !distro.starts_with(crate::lite::DEFAULT_NAME) {
+            ui.label(muted(t!(
+                "Tip: nejrychlejší start má lehká distribuce WSLCD Lite (Nastavení → Přidat distribuci) – API do ~2 s, bez systemd.",
+                "Tip: the light WSLCD Lite distribution starts fastest (Settings → Add distribution) – API within ~2 s, no systemd."
+            )));
+        }
         if let Some(ClusterState::Error(e)) = &state {
             ui.label(RichText::new(e).color(theme::red()));
         }
