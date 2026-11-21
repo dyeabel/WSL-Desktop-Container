@@ -222,7 +222,7 @@ fn body(ui: &mut egui::Ui, dv: &mut DetailView, c: Option<&Container>, nets: &[S
     let detail = dv.info.as_ref().and_then(|r| r.as_ref().ok());
     // záhlaví: stav, image a akce
     let (state, status) = match (c, detail) {
-        (Some(c), _) => (c.state.clone(), c.status.clone()),
+        (Some(c), _) => (c.state.clone(), containers::display_status(c)),
         (None, Some(d)) => (d.status.clone(), String::new()),
         _ => (String::new(), String::new()),
     };

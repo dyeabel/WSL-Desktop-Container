@@ -110,7 +110,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn row(app: &mut App, r: &mut TableRow<'_>, c: &Container) {
-    let st = state_info(&c.state, &c.status);
+    let st = state_info(&c.state, &display_status(c));
     let color = st.color;
     r.col(|ui| dot(ui, color));
     r.col(|ui| two_line(ui, RichText::new(c.name()).strong(), RichText::new(short_id(&c.id)).small().monospace().color(theme::muted())));
@@ -230,6 +230,21 @@ pub fn cz_duration(s: &str) -> String {
 
 /// Rozebere `State` + `Status` z Docker API (např. „Exited (137) 5 minutes ago“,
 /// „Up 2 hours (healthy)“) na český štítek, barvu a doplňující text.
+/// Text stavu pro `state_info`: k3s končí při řádném zastavení kódem 255, takže u uzlu
+/// Kubernetes laboratoře to není chyba, ale „Zastaven“.
+pub fn display_status(c: &Container) -> String {
+    let node = c.labels.as_ref().and_then(|l| l.get("wslcd.role")).is_some_and(|r| r == "k8s-node") || c.name() == crate::k8s::cluster::NAME;
+    clean_exit_status(node, &c.state, &c.status)
+}
+
+fn clean_exit_status(k8s_node: bool, state: &str, status: &str) -> String {
+    if k8s_node && state == "exited" {
+        status.replacen("(255)", "(0)", 1)
+    } else {
+        status.to_string()
+    }
+}
+
 pub fn state_info(state: &str, status: &str) -> StateInfo {
     let health = if status.contains("(healthy)") {
         Some((t!("zdravý", "healthy").to_string(), theme::green()))
@@ -465,6 +480,16 @@ mod tests {
         let s = state_info("exited", "Exited (0) 6 seconds ago");
         assert_eq!(s.label, "Zastaven");
         assert_eq!(s.detail, "ukončen před 6 s");
+    }
+
+    #[test]
+    fn k8s_node_exit_255_is_stopped() {
+        // k3s končí při řádném zastavení kódem 255 – u uzlu laboratoře „Zastaven“, jinde chyba
+        let s = state_info("exited", &clean_exit_status(true, "exited", "Exited (255) 50 seconds ago"));
+        assert_eq!((s.label.as_str(), s.detail.as_str()), ("Zastaven", "ukončen před 50 s"));
+        assert_eq!(state_info("exited", &clean_exit_status(false, "exited", "Exited (255) 50 seconds ago")).label, "Chyba (255)");
+        assert_eq!(state_info("exited", &clean_exit_status(true, "exited", "Exited (1) 5 seconds ago")).label, "Chyba (1)", "skutečná chyba k3s zůstane");
+        assert_eq!(clean_exit_status(true, "running", "Up 2 minutes"), "Up 2 minutes");
     }
 
     #[test]
