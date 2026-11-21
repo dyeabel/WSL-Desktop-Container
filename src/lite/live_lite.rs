@@ -26,6 +26,11 @@ impl Drop for Cleanup {
         }
         let _ = std::process::Command::new("wsl.exe").args(["--unregister", NAME]).output();
         eprintln!("úklid: {NAME} odregistrována");
+        if std::env::var("WSLCD_LITE_ENGINE").as_deref() == Ok("docker") {
+            // Docker nechal ve sdílené síti WSL politiku FORWARD DROP – vrátit pro ostatní enginy
+            let r = std::process::Command::new("wsl.exe").args(["-u", "root", "-e", "sh", "-c", "iptables -P FORWARD ACCEPT; iptables -S FORWARD | head -1"]).output();
+            eprintln!("úklid: FORWARD {:?}", r.map(|o| String::from_utf8_lossy(&o.stdout).to_string()));
+        }
     }
 }
 
@@ -49,8 +54,11 @@ fn live_lite_distro() {
     std::fs::create_dir_all(&data).unwrap();
     std::env::set_var("WSLCD_DATA_DIR", &data);
     let _clean = Cleanup;
+    // WSLCD_LITE_ENGINE=docker: Docker místo Podmanu (pozor: Docker nastaví ve sdílené síti WSL
+    // iptables FORWARD DROP – test ji na konci vrátí na ACCEPT, viz spike)
+    let engine = if std::env::var("WSLCD_LITE_ENGINE").as_deref() == Ok("docker") { Engine::Docker } else { Engine::Podman };
     let cfg = Config { port: PORT, keep_alive: false, ..Config::default() };
-    let spec = AddDistroSpec { distro: crate::lite::LITE_ID.into(), name: NAME.into(), engine: Some(Engine::Podman), use_for_app: true, tls: true, ..Default::default() };
+    let spec = AddDistroSpec { distro: crate::lite::LITE_ID.into(), name: NAME.into(), engine: Some(engine), use_for_app: true, tls: true, ..Default::default() };
     let t = Instant::now();
     let (r, log, cfg) = testkit::add_distro(cfg, spec);
     eprintln!("{log}\n--- přidání za {:?}: {r:?}", t.elapsed());
@@ -82,7 +90,8 @@ fn live_lite_distro() {
 
     // kontejner přes API (jako aplikace)
     assert!(d.pull("docker.io/library/alpine:3.20").is_ok());
-    let out = wsl::run(NAME, Some("root"), None, &["podman", "run", "--rm", "docker.io/library/alpine:3.20", "echo", "lite-ok"]).unwrap();
+    let cli = if engine == Engine::Docker { "docker" } else { "podman" };
+    let out = wsl::run(NAME, Some("root"), None, &[cli, "run", "--rm", "docker.io/library/alpine:3.20", "echo", "lite-ok"]).unwrap();
     assert!(out.contains("lite-ok"), "{out}");
 
     if std::env::var("WSLCD_LITE_K8S").is_ok() {

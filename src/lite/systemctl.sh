@@ -5,6 +5,8 @@
 # Procesy hlídá jednoduchý supervisor (restart po pádu), logy jsou v /var/log/wslcd/.
 # Při startu distribuce ho spouští /etc/wsl.conf: [boot] command = systemctl --boot
 set -u
+# [boot] command z wsl.conf běží s minimálním PATH (dockerd by nenašel docker-proxy)
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 UNITS=/etc/systemd/system
 STATE=/etc/wslcd-init/enabled
 RUN=/run/wslcd-init
@@ -66,6 +68,8 @@ start_unit() {
     return 1
   fi
   cmd=$(unescape "$cmd")
+  # socket activation systemd tu není: dockerd -H fd:// → vlastní unix socket
+  case "$cmd" in *"-H fd://"*) cmd=$(printf '%s' "$cmd" | sed 's#-H fd://#-H unix:///var/run/docker.sock#') ;; esac
   restart=$(get_last "$u" Restart)
   log="$LOGS/${u%.service}.log"
   [ -f "$log" ] && [ "$(wc -c < "$log")" -gt 1048576 ] && mv -f "$log" "$log.1"
