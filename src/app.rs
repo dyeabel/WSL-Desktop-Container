@@ -729,8 +729,16 @@ impl App {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.add_space(6.0);
-                            ui.label(RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).small().color(theme::muted()))
-                                .on_hover_text(format!("WSL Container Desktop {}", env!("CARGO_PKG_VERSION")));
+                            // testovací build z jiné větve než main: verze + commit (build.rs)
+                            let build = env!("WSLCD_BUILD");
+                            let (label, hover) = match build.split_once('@') {
+                                Some((branch, commit)) => (
+                                    format!("v{} · {commit}", env!("CARGO_PKG_VERSION")),
+                                    format!("WSL Container Desktop {} – {branch} @ {commit}", env!("CARGO_PKG_VERSION")),
+                                ),
+                                None => (format!("v{}", env!("CARGO_PKG_VERSION")), format!("WSL Container Desktop {}", env!("CARGO_PKG_VERSION"))),
+                            };
+                            ui.label(RichText::new(label).small().color(theme::muted())).on_hover_text(hover);
                             ui::activity::indicator(self, ui);
                         });
                     });
