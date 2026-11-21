@@ -136,13 +136,26 @@ pub fn run_stream(
     cwd: Option<&str>,
     args: &[String],
     cancel: Option<&std::sync::atomic::AtomicBool>,
-    mut on_line: impl FnMut(&str),
+    on_line: &mut dyn FnMut(&str),
 ) -> Result<i32, String> {
-    use std::io::{BufRead, BufReader, Read};
     let a: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let mut g = track(distro, user, &a);
-    let mut child = base(distro, user, cwd)
-        .args(args)
+    let mut cmd = base(distro, user, cwd);
+    cmd.args(args);
+    let code = stream_command(&mut cmd, cancel, on_line)?;
+    g.set_ok(code == 0);
+    Ok(code)
+}
+
+/// Společná logika streamování: spustí `cmd` (stdin null), předává řádky a vrací kód.
+/// Bez záznamu do přehledu „Na pozadí“ – ten řeší volající.
+pub(crate) fn stream_command(
+    cmd: &mut Command,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    on_line: &mut dyn FnMut(&str),
+) -> Result<i32, String> {
+    use std::io::{BufRead, BufReader, Read};
+    let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -196,7 +209,6 @@ pub fn run_stream(
     }
     let st = child.wait().map_err(|e| e.to_string())?;
     let code = st.code().unwrap_or(-1);
-    g.set_ok(code == 0);
     Ok(code)
 }
 

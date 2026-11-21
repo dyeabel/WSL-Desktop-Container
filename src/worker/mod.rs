@@ -329,6 +329,10 @@ impl Worker {
     fn cfg(&self) -> Config {
         self.cfg.read().map(|c| c.clone()).unwrap_or_default()
     }
+    #[allow(dead_code)] // použije se od kroku 3
+    fn host(&self) -> std::sync::Arc<dyn crate::host::Host> {
+        crate::host::current(&self.cfg())
+    }
     fn docker(&self) -> Docker {
         Docker::new(self.cfg().port)
     }

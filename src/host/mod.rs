@@ -1,6 +1,9 @@
 //! Abstrakce hostitele: vše, co se dnes spouští přes `wsl.exe`, půjde přes trait [`Host`].
 
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
+pub mod wsl;
 
 use crate::activity;
 use crate::config::Config;
@@ -72,6 +75,21 @@ pub trait Host: Send + Sync {
     fn to_guest_path(&self, path: &str) -> Result<String, HostError>;
 
     fn engine_endpoint(&self, cfg: &Config) -> crate::http::Endpoint;
+
+    /// Konkrétní WSL hostitel (pro kód, který potřebuje věci mimo trait).
+    fn wsl(&self) -> Option<&wsl::WslHost> {
+        None
+    }
+}
+
+/// Aktuální hostitel podle konfigurace (nic se necachuje).
+pub fn current(cfg: &Config) -> Arc<dyn Host> {
+    Arc::new(wsl::WslHost::new(&cfg.distro))
+}
+
+/// Kudy se z aplikace dostaneme k API enginu aktuálního hostitele.
+pub fn endpoint(cfg: &Config) -> crate::http::Endpoint {
+    current(cfg).engine_endpoint(cfg)
 }
 
 /// Pohodlné obálky nad [`Host::exec`] se záznamem do přehledu „Na pozadí“.
