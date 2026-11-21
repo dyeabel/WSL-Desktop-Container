@@ -624,7 +624,11 @@ fn bench_engine(distro: &str, engine: Engine, cfg_port: u16, bench_port: u16, sh
     r.daemon_rss_mb = daemon_rss_mb(distro, engine);
     eprintln!("-- RSS démona v klidu: {} MB", r.daemon_rss_mb);
     eprintln!("-- exec true (30×)");
-    r.exec_true = measure(30, 1, || wsl::run(distro, None, None, &["true"]).map(|_| ()).map_err(|e| e.to_string()));
+    r.exec_true = {
+        use crate::host::HostExt as _;
+        let host = crate::host::current(&Config { distro: distro.into(), engine, ..Default::default() });
+        measure(30, 1, || host.run(crate::host::Privilege::User, None, &["true"]).map(|_| ()).map_err(|e| e.to_string()))
+    };
     eprintln!("  exec_true  p50 {:>8.1} ms  p95 {:>8.1} ms  err {}", r.exec_true.p50, r.exec_true.p95, r.exec_true.errors);
     eprintln!("-- latence");
     r.latency = if quick { latency(&t, shim, 5, 3) } else { latency(&t, shim, 20, 8) };
