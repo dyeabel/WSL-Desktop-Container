@@ -187,7 +187,7 @@ fn live_docker_e2e() {
     let shim = Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("debug").join("docker.exe")).filter(|p| p.exists());
     let shim_ps = |label: &str| {
         if let Some(s) = &shim {
-            let o = std::process::Command::new(s).args(["ps", "--format", "{{.Names}}"]).env("WSLCD_SHIM_DEBUG", "1").output().unwrap();
+            let o = std::process::Command::new(s).args(["ps", "--format", "{{.Names}}"]).env("WSLCD_SHIM_DEBUG", "1").env("WSLCD_SHIM_AUTOSTART", "0").output().unwrap();
             let out = String::from_utf8_lossy(&o.stdout).to_string();
             let err = String::from_utf8_lossy(&o.stderr).to_string();
             eprintln!("shim ({label}): {:?} | {}", out.trim(), err.lines().filter(|l| l.contains("fast path") || l.contains("context")).collect::<Vec<_>>().join(" | "));

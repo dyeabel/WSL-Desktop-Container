@@ -252,7 +252,8 @@ impl Target {
     }
     fn shim(&self, exe: &Path) -> Command {
         let mut c = wsl::hidden(&exe.to_string_lossy());
-        c.env("WSLCD_DATA_DIR", &self.data).env_remove("DOCKER_HOST").env_remove("DOCKER_CONTEXT");
+        // shim nesmí spustit GUI aplikaci (ta zapisuje do registru: Run, AppUserModelId)
+        c.env("WSLCD_DATA_DIR", &self.data).env("WSLCD_SHIM_AUTOSTART", "0").env_remove("DOCKER_HOST").env_remove("DOCKER_CONTEXT");
         c
     }
 }

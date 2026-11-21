@@ -216,11 +216,48 @@ pub fn data_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("WSLCD_DATA_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(d));
     }
+    // testy nikdy nečtou ani nepíšou %APPDATA% ani skutečná data portable instalace
+    #[cfg(test)]
+    return Some(test_data_dir().clone());
+    #[cfg(not(test))]
     if let Some(d) = portable_dir() {
         return Some(d.join("data"));
     }
-    let base = PathBuf::from(std::env::var_os("APPDATA")?);
-    Some(migrate_dir(&base.join(LEGACY_DATA_DIR), &base.join(DATA_DIR)))
+    #[cfg(not(test))]
+    {
+        let base = PathBuf::from(std::env::var_os("APPDATA")?);
+        Some(migrate_dir(&base.join(LEGACY_DATA_DIR), &base.join(DATA_DIR)))
+    }
+}
+
+/// Portable instalace, ze které testy berou konfiguraci (WSLCD_PORTABLE_DIR ji přepíše).
+#[cfg(test)]
+pub const TEST_PORTABLE_DIR: &str = r"C:\WSLContainerDesktop";
+
+/// Datová složka testů bez WSLCD_DATA_DIR: `target\test-data\<pid>` s kopií `config.json`
+/// a `tls\` z portable instalace. Testy tak vidí skutečnou primární distribuci, port a
+/// certifikáty, ale nic nezapíšou do `%APPDATA%` ani do dat instalace.
+#[cfg(test)]
+fn test_data_dir() -> &'static PathBuf {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let portable = std::env::var_os("WSLCD_PORTABLE_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(TEST_PORTABLE_DIR));
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("test-data").join(std::process::id().to_string());
+        copy_test_data(&portable.join("data"), &dir);
+        dir
+    })
+}
+
+/// Zkopíruje z datové složky jen `config.json` a `tls\*` (ne distribuce, historii ani cache).
+#[cfg(test)]
+fn copy_test_data(src: &std::path::Path, dst: &std::path::Path) {
+    let _ = std::fs::create_dir_all(dst.join("tls"));
+    let _ = std::fs::copy(src.join("config.json"), dst.join("config.json"));
+    if let Ok(rd) = std::fs::read_dir(src.join("tls")) {
+        for e in rd.flatten().filter(|e| e.path().is_file()) {
+            let _ = std::fs::copy(e.path(), dst.join("tls").join(e.file_name()));
+        }
+    }
 }
 
 /// Výchozí image uzlu Kubernetes laboratoře (ověřeno ve spiku, viz docs/superpowers/specs).
@@ -290,6 +327,30 @@ mod migrate_tests {
         std::fs::create_dir_all(&old).unwrap();
         assert_eq!(super::migrate_dir(&old, &new), new);
         assert!(old.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn tests_never_use_appdata() {
+        let d = super::data_dir().unwrap();
+        if let Some(app) = std::env::var_os("APPDATA") {
+            assert!(!d.starts_with(app), "{}", d.display());
+        }
+        assert!(!d.starts_with(super::TEST_PORTABLE_DIR), "testy nesmí psát do dat instalace: {}", d.display());
+    }
+
+    #[test]
+    fn test_data_copies_only_config_and_tls() {
+        let base = std::env::temp_dir().join(format!("wslcd-testdata-{}", std::process::id()));
+        let (src, dst) = (base.join("src"), base.join("dst"));
+        std::fs::create_dir_all(src.join("tls")).unwrap();
+        std::fs::create_dir_all(src.join("distros").join("X")).unwrap();
+        std::fs::write(src.join("config.json"), r#"{"distro":"P"}"#).unwrap();
+        std::fs::write(src.join("tls").join("cert.pem"), "c").unwrap();
+        std::fs::write(src.join("distros").join("X").join("ext4.vhdx"), "v").unwrap();
+        super::copy_test_data(&src, &dst);
+        assert!(dst.join("config.json").is_file() && dst.join("tls").join("cert.pem").is_file());
+        assert!(!dst.join("distros").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 }
