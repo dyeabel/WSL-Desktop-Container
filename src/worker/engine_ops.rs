@@ -188,6 +188,20 @@ impl Worker {
         let old = self.cfg();
         let step = |log: &mut String, s: &str| log.push_str(&format!("\n=== {s} ===\n"));
 
+        // Kubernetes laboratoř předchozího enginu drží porty 6443 a NodePort (síť WSL je
+        // sdílená) – zastavit, nesmazat; po návratu jde znovu spustit
+        if distro != old.distro {
+            use crate::k8s::cluster::{self, ClusterState};
+            let d = self.docker();
+            if matches!(cluster::state(&d), ClusterState::Running | ClusterState::Starting) {
+                step(log, t!("Zastavení clusteru Kubernetes v předchozí distribuci", "Stopping the Kubernetes cluster in the previous distribution"));
+                match cluster::stop(&d) {
+                    Ok(()) => log.push_str(t!("cluster zastaven\n", "cluster stopped\n")),
+                    Err(e) => log.push_str(&format!("{e}\n")),
+                }
+            }
+        }
+
         step(log, &tf!("Enginy v distribuci {distro}", "Engines in {distro}"));
         let out = wsl::run(distro, Some("root"), None, &["sh", "-c", crate::engine::DETECT_ENGINES])
             .map_err(|e| tf!("Distribuci {distro} nelze spustit: {e}", "Cannot start {distro}: {e}"))?;

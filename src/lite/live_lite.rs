@@ -16,6 +16,16 @@ use std::time::{Duration, Instant};
 const NAME: &str = "WSLCD-Lite-Test";
 const PORT: u16 = 2387;
 
+/// Udržovací proces distribuce; při konci (i při panice) se ukončí a počká se na něj.
+struct Keep(std::process::Child);
+
+impl Drop for Keep {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 struct Cleanup;
 
 impl Drop for Cleanup {
@@ -68,15 +78,15 @@ fn live_lite_distro() {
     crate::docker::configure_tls(true).unwrap();
     let d = Docker::new(PORT);
     // drž distribuci naživu (jinak ji WSL po chvíli bez relace uspí)
-    let mut keep = wsl::keepalive(NAME).unwrap();
+    let keep = Keep(wsl::keepalive(NAME).unwrap());
     assert!(wait_api(&d, 30).is_some(), "API po instalaci");
 
     // studený start: terminate → první příkaz → API
-    let _ = keep.kill();
+    drop(keep);
     let _ = wsl::terminate(NAME);
     std::thread::sleep(Duration::from_secs(2));
     let t = Instant::now();
-    let mut keep = wsl::keepalive(NAME).unwrap();
+    let keep = Keep(wsl::keepalive(NAME).unwrap());
     let up = wait_api(&d, 60).expect("API po studeném startu");
     eprintln!("studený start distribuce → API přes TLS: {:?} (od spuštění {:?})", up, t.elapsed());
     let size = std::fs::metadata(data.join("distros").join(NAME).join("ext4.vhdx")).map(|m| m.len()).unwrap_or(0);
@@ -101,5 +111,5 @@ fn live_lite_distro() {
         let (r, _) = testkit::k8s(cfg.clone(), crate::worker::K8sOp::Delete);
         r.unwrap();
     }
-    let _ = keep.kill();
+    drop(keep);
 }
