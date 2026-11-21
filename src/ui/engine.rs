@@ -294,7 +294,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             }
                             ui.add_enabled_ui(!checking && s.source_ok, |ui| {
                                 let label = if s.installed && s.in_path { t!("\u{E094} Aktualizovat", "\u{E094} Update") } else { t!("\u{E3D4} Přidat do PATH", "\u{E3D4} Add to PATH") };
-                                if ui.button(label).on_hover_text(tf!("docker.exe, docker-compose.exe a wslcd.exe do {}", "docker.exe, docker-compose.exe and wslcd.exe into {}", crate::shim_install::bin_dir().display())).clicked() {
+                                let mut hover = tf!("docker.exe, docker-compose.exe a wslcd.exe do {}", "docker.exe, docker-compose.exe and wslcd.exe into {}", crate::shim_install::bin_dir().display());
+                                if s.missing_copies {
+                                    hover.push_str(&format!("
+{}", t!("Chybí wslcd.exe / docker-compose.exe – Aktualizovat je doplní", "wslcd.exe / docker-compose.exe missing – Update adds them")));
+                                }
+                                if ui.button(label).on_hover_text(hover).clicked() {
                                     app.shim_action(ui.ctx(), crate::shim_install::Action::Install);
                                 }
                             });

@@ -9,6 +9,8 @@ pub struct Status {
     pub installed: bool,
     /// cílová složka je v uživatelském PATH
     pub in_path: bool,
+    /// vedle nainstalovaného docker.exe chybí docker-compose.exe nebo wslcd.exe (po aktualizaci ze starší verze)
+    pub missing_copies: bool,
     /// jiný docker, který má v PATH přednost (je před naší složkou; když naše složka
     /// v PATH není, každý nalezený)
     pub other_docker: Vec<OtherDocker>,
@@ -103,9 +105,9 @@ const SHIM_FILES: [&str; 3] = ["docker.exe", "docker-compose.exe", "wslcd.exe"];
 /// Soubory, které vedle `docker.exe` v portable balíčku přibývají (kopie shimu).
 const SHIM_COPIES: &[&str] = SHIM_FILES.split_at(1).1;
 
-/// Jsou vedle docker.exe všechny kopie shimu? (chybí např. wslcd.exe po aktualizaci ze starší verze)
-fn shims_complete(dir: &std::path::Path) -> bool {
-    dir.join("docker.exe").exists() && SHIM_COPIES.iter().all(|n| dir.join(n).is_file())
+/// Chybí vedle docker.exe některá kopie shimu? (chybí např. wslcd.exe po aktualizaci ze starší verze)
+fn missing_copies(dir: &std::path::Path) -> bool {
+    dir.join("docker.exe").exists() && !SHIM_COPIES.iter().all(|n| dir.join(n).is_file())
 }
 
 /// Kam patří docker.exe v PATH: v portable režimu přímo složka aplikace (nic se nekopíruje),
@@ -176,8 +178,8 @@ pub fn shadowing(entries: &[String], ours: &str, exts: &[String], exists: impl F
 
 pub fn status() -> Status {
     let dir = bin_dir();
-    // neúplná sada (chybí wslcd.exe / docker-compose.exe) = „neinstalováno“ -> UI nabídne instalaci/aktualizaci
-    let installed = shims_complete(&dir);
+    let installed = dir.join("docker.exe").exists();
+    let missing_copies = missing_copies(&dir);
     let (entries, user_path) = registry_path();
     let d = dir.display().to_string();
     let in_path = user_path.split(';').any(|p| norm(p) == norm(&d));
@@ -197,7 +199,7 @@ pub fn status() -> Status {
     let docker_host = powershell("[Environment]::GetEnvironmentVariable('DOCKER_HOST','User')")
         .ok()
         .filter(|s| !s.trim().is_empty());
-    Status { installed, in_path, other_docker, duplicates, source_ok: source().is_some(), docker_host }
+    Status { installed, in_path, missing_copies, other_docker, duplicates, source_ok: source().is_some(), docker_host }
 }
 
 /// Značka v binárce shimu (User-Agent rychlé cesty) – pozná kopii shimu WSL Container Desktop.
@@ -500,14 +502,16 @@ mod tests {
     }
 
     #[test]
-    fn status_needs_update_when_wslcd_missing() {
+    fn status_reports_missing_copies() {
         let dir = temp_dir("complete");
         std::fs::write(dir.join("docker.exe"), b"shim").unwrap();
-        assert!(!shims_complete(&dir));
+        assert!(missing_copies(&dir));
         copy_shim_files(&dir.join("docker.exe"), &dir).unwrap();
-        assert!(shims_complete(&dir));
+        assert!(!missing_copies(&dir));
         std::fs::remove_file(dir.join("wslcd.exe")).unwrap();
-        assert!(!shims_complete(&dir));
+        assert!(missing_copies(&dir));
+        std::fs::remove_file(dir.join("docker.exe")).unwrap();
+        assert!(!missing_copies(&dir), "bez docker.exe není co aktualizovat");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
