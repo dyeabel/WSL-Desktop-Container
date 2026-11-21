@@ -298,3 +298,37 @@ mod tests {
         assert_eq!(idle, vec![(Node::Localhost, c("fe"), 80), (c("api"), c("db"), 5432)]);
     }
 }
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use crate::k8s::flows::Edge;
+
+    #[test]
+    fn draw_headless_does_not_panic() {
+        let mut pods = Vec::new();
+        for (c, t) in [("fe", "frontend"), ("api", "backend"), ("db", "database"), ("worker", "x")] {
+            let mut p = Pod { name: format!("{c}-1"), component: c.into(), ready: (1, 1), ..Default::default() };
+            p.labels.insert("tier".into(), t.into());
+            pods.push(p);
+        }
+        let c = |s: &str| Node::Component(s.into());
+        let edges = collapse(&[
+            Edge { from: Node::Localhost, to: Node::Service("fe".into()), port: 30080, live: 1, recent: 0 },
+            Edge { from: Node::Service("fe".into()), to: c("fe"), port: 80, live: 1, recent: 0 },
+            Edge { from: c("fe"), to: c("api"), port: 3000, live: 0, recent: 5 },
+            Edge { from: c("api"), to: Node::Dns, port: 53, live: 3, recent: 0 },
+            Edge { from: c("api"), to: Node::Outside("1.2.3.4".into()), port: 443, live: 1, recent: 0 },
+            Edge { from: c("db"), to: c("db"), port: 1, live: 1, recent: 0 },
+        ]);
+        let ctx = egui::Context::default();
+        for rules in [RuleSet::default(), RuleSet::demo()] {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw(ui, &pods, &edges, &rules);
+                    draw(ui, &[], &[], &rules);
+                });
+            });
+        }
+    }
+}
