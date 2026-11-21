@@ -17,7 +17,6 @@ mod eventlog;
 mod fs;
 mod history;
 mod host;
-#[allow(dead_code)] // zatím jen Endpoint
 mod http;
 mod icon_art;
 mod notify;

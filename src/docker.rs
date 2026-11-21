@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::time::Duration;
 pub use crate::error::ApiError;
+use crate::http::client::http_response;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Port {
@@ -915,109 +916,9 @@ impl StreamCloser {
 trait ReadWriteSend: Read + std::io::Write + Send {}
 impl<T: Read + std::io::Write + Send> ReadWriteSend for T {}
 
-/// Přečte stavový řádek a hlavičky HTTP/1.1 odpovědi; vrací (status, čtečka těla) –
-/// tělo je dekódované z `chunked`, případně omezené `Content-Length`.
-fn http_response<R: std::io::BufRead + Send + 'static>(mut r: R) -> Result<(u16, Box<dyn Read + Send>), String> {
-    let mut line = String::new();
-    r.read_line(&mut line).map_err(|e| e.to_string())?;
-    let status: u16 = line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| format!("invalid HTTP response: {}", line.trim()))?;
-    let (mut chunked, mut len) = (false, None);
-    loop {
-        line.clear();
-        if r.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
-            return Err("unexpected end of HTTP headers".into());
-        }
-        let l = line.trim_end();
-        if l.is_empty() {
-            break;
-        }
-        if let Some((k, v)) = l.split_once(':') {
-            let (k, v) = (k.trim(), v.trim());
-            if k.eq_ignore_ascii_case("transfer-encoding") && v.to_ascii_lowercase().contains("chunked") {
-                chunked = true;
-            } else if k.eq_ignore_ascii_case("content-length") {
-                len = v.parse::<u64>().ok();
-            }
-        }
-    }
-    let body: Box<dyn Read + Send> = if chunked {
-        Box::new(Chunked { r, left: 0, done: false })
-    } else if let Some(n) = len {
-        Box::new(r.take(n))
-    } else {
-        Box::new(r)
-    };
-    Ok((status, body))
-}
-
-/// Dekodér `Transfer-Encoding: chunked`.
-struct Chunked<R> {
-    r: R,
-    /// zbývá bajtů v aktuálním bloku
-    left: u64,
-    done: bool,
-}
-
-impl<R: std::io::BufRead> Read for Chunked<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        use std::io::{Error, ErrorKind};
-        if self.done || buf.is_empty() {
-            return Ok(0);
-        }
-        if self.left == 0 {
-            let mut line = String::new();
-            if self.r.read_line(&mut line)? == 0 {
-                return Err(Error::new(ErrorKind::UnexpectedEof, "chunked: unexpected end"));
-            }
-            let hex = line.trim().split(';').next().unwrap_or("").trim();
-            let size = u64::from_str_radix(hex, 16).map_err(|_| Error::new(ErrorKind::InvalidData, format!("chunked: bad size {hex:?}")))?;
-            if size == 0 {
-                self.done = true;
-                return Ok(0);
-            }
-            self.left = size;
-        }
-        let want = buf.len().min(self.left as usize);
-        let n = self.r.read(&mut buf[..want])?;
-        if n == 0 {
-            return Err(Error::new(ErrorKind::UnexpectedEof, "chunked: unexpected end"));
-        }
-        self.left -= n as u64;
-        if self.left == 0 {
-            // CRLF za blokem
-            let mut crlf = String::new();
-            self.r.read_line(&mut crlf)?;
-        }
-        Ok(n)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn http_response_chunked_and_errors() {
-        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n7;ext=1\r\n, world\r\n0\r\n\r\n";
-        let (st, mut body) = http_response(std::io::Cursor::new(raw.to_vec())).unwrap();
-        assert_eq!(st, 200);
-        let mut s = String::new();
-        body.read_to_string(&mut s).unwrap();
-        assert_eq!(s, "hello, world");
-
-        let raw = b"HTTP/1.1 404 Not Found\r\nContent-Length: 22\r\n\r\n{\"message\":\"no such\"}\nEXTRA";
-        let (st, mut body) = http_response(std::io::Cursor::new(raw.to_vec())).unwrap();
-        assert_eq!(st, 404);
-        let mut s = String::new();
-        body.read_to_string(&mut s).unwrap();
-        assert_eq!(s, "{\"message\":\"no such\"}\n");
-
-        assert!(http_response(std::io::Cursor::new(b"garbage\r\n".to_vec())).is_err());
-    }
 
     #[test]
     fn closer_rejects_attach_after_close() {
