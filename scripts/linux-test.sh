@@ -10,6 +10,8 @@ shift 2
 
 here=$(cd "$(dirname "$0")" && pwd)
 image=wslcd-rust-dev
+# Cílový adresář cargo je pro každý worktree zvlášť (souběžné běhy); registr je sdílený.
+target_vol="wslcd-rust-target-$(basename "$repo" | tr A-Z a-z | sed "s/[^a-z0-9-]/-/g")"
 
 # Obraz se sestaví jen jednou (WSLCD_REBUILD=1 vynutí nové sestavení).
 if [ "${WSLCD_REBUILD:-0}" = 1 ] || ! podman image exists "$image"; then
@@ -19,7 +21,7 @@ fi
 run() {
     podman run --rm \
         -v "$repo:/src:ro" \
-        -v wslcd-rust-target:/target \
+        -v "$target_vol:/target" \
         -v wslcd-cargo-registry:/usr/local/cargo/registry \
         -e CARGO_TARGET_DIR=/target \
         -w /src \

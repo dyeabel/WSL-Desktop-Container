@@ -11,6 +11,8 @@
   powershell -ExecutionPolicy Bypass -File scripts\linux-test.ps1 check
   scripts\linux-test.ps1 test -- host::local
   scripts\linux-test.ps1 live -- host::local
+  Přes "powershell -File" parametr "--" nefunguje (PowerShell ho odmítne), filtr tam zadejte bez něj:
+  powershell -ExecutionPolicy Bypass -File scripts\linux-test.ps1 live host::local
 #>
 param(
     [Parameter(Mandatory = $true, Position = 0)]
