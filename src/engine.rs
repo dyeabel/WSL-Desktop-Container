@@ -180,7 +180,7 @@ impl Engine {
 /// docker.io z Debianu/Ubuntu, moby-engine z Fedory, docker z openSUSE/Arch).
 const DOCKER_UNINSTALL: &str = r#"echo "Zastavuji Docker…"
 systemctl disable --now docker.socket docker containerd >/dev/null 2>&1 || true
-rm -f /etc/systemd/system/docker.service.d/10-wsl-container-desktop-tcp.conf
+rm -f /etc/systemd/system/docker.service.d/10-wsl-container-desktop-tcp.conf /etc/systemd/system/docker.service.d/20-wsl-container-desktop-shared-net.conf
 systemctl disable --now wslcd-tls-proxy >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/wslcd-tls-proxy.service
 systemctl disable --now wslcd-dns >/dev/null 2>&1 || true
@@ -265,6 +265,12 @@ if [ "$TLS" = "1" ]; then
 else
   printf '[Service]\nExecStart=\nExecStart=%s -H fd:// -H tcp://127.0.0.1:%s %s\n' "$D" "$PORT" "$EXTRA" > /etc/systemd/system/docker.service.d/10-wsl-container-desktop-tcp.conf
 fi
+# Distribuce WSL sdílejí síť: Docker nastaví iptables FORWARD DROP a kontejnery Podmanu
+# v jiné distribuci (mosty podman*) by ztratily internet – povolit je v DOCKER-USER
+cat > /etc/systemd/system/docker.service.d/20-wsl-container-desktop-shared-net.conf <<'EOF'
+[Service]
+ExecStartPost=-/bin/sh -c 'for i in $$(seq 20); do iptables -n -L DOCKER-USER >/dev/null 2>&1 && break; sleep 0.5; done; for t in iptables ip6tables; do for d in -i -o; do $$t -C DOCKER-USER $$d podman+ -j ACCEPT 2>/dev/null || $$t -I DOCKER-USER $$d podman+ -j ACCEPT 2>/dev/null; done; done; true'
+EOF
 if [ -f /etc/docker/daemon.json ] && grep -q '"hosts"' /etc/docker/daemon.json; then echo "VAROVANI: /etc/docker/daemon.json obsahuje 'hosts' - koliduje s -H, odstran ho." >&2; fi
 systemctl daemon-reload
 systemctl enable docker >/dev/null 2>&1 || true
@@ -562,6 +568,15 @@ pub fn distro_prepare_script() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn docker_keeps_podman_bridges_forwarding() {
+        let s = Engine::Docker.setup_script();
+        assert!(s.contains("20-wsl-container-desktop-shared-net.conf"));
+        assert!(s.contains("-I DOCKER-USER $$d podman+ -j ACCEPT"), "systemd escapuje $ jako $$");
+        assert!(s.contains("<<'EOF'\n[Service]\nExecStartPost=-/bin/sh"), "heredoc bez expanze, chyba se ignoruje");
+        assert!(Engine::Docker.uninstall_script().contains("20-wsl-container-desktop-shared-net.conf"));
+    }
 
     #[test]
     fn parse_engines_from_detect_output() {

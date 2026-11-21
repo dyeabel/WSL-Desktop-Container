@@ -23,5 +23,13 @@ i stávající funkce „nechat předchozí primární běžet“ (`keep_previou
 Podman. Po zastavení Dockeru politika zůstává DROP, dokud se ručně nevrátí
 (`iptables -P FORWARD ACCEPT`) nebo se nerestartuje WSL. Během spiku jsem politiku vrátil na ACCEPT.
 
-Návrh opravy (samostatný úkol): při startu Podmanu přidat do `DOCKER-USER` pravidlo `ACCEPT` pro
-rozhraní `podman*`, případně na stránce WSL engine upozornit na souběh Dockeru a Podmanu.
+Docker nastaví DROP jen tehdy, když `net.ipv4.ip_forward` zapíná sám, tedy když naběhne
+po startu WSL dřív než Podman.
+
+**Opraveno:** nastavení Dockeru (`DOCKER_SETUP` v `src/engine.rs`) zapisuje drop-in
+`docker.service.d/20-wsl-container-desktop-shared-net.conf`. Jeho `ExecStartPost` vloží do
+`DOCKER-USER` (iptables i ip6tables) pravidla `-i podman+ -j ACCEPT` a `-o podman+ -j ACCEPT`.
+Funguje se systemd i s náhradou systemctl ve WSLCD Lite. Odinstalace Dockeru drop-in maže.
+
+Ověřeno naživo s Dockerem 29.1.3 v Ubuntu a Podmanem v Debianu. Při `FORWARD DROP` s pravidly
+kontejner Podmanu internet má, po smazání pravidel spojení vyprší.
