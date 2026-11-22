@@ -708,7 +708,21 @@ pub fn network_map(app: &mut App, ui: &mut egui::Ui) {
 /// Záložka Síť v detailu kontejneru: porty dovnitř (naslouchá × publikováno) a ven (spojení).
 pub fn container_tab(ui: &mut egui::Ui, feed: &NsFeed, id: &str, c: Option<&Container>, running: bool) {
     feed.touch();
-    let d = feed.data.lock().map(|g| g.clone()).unwrap_or_default();
+    // z cizího (sdíleného) NsData se kopíruje jen záznam tohoto kontejneru, ne celá mapa
+    let d = feed
+        .data
+        .lock()
+        .map(|g| crate::worker::net_overview::NsData {
+            by_id: g.by_id.get(id).map(|x| std::collections::HashMap::from([(id.to_string(), x.clone())])).unwrap_or_default(),
+            pid: g.pid.get(id).map(|p| std::collections::HashMap::from([(id.to_string(), *p)])).unwrap_or_default(),
+            error: g.error.clone(),
+            updated: g.updated,
+            live: g.live.clone(),
+            closed: g.closed.clone(),
+            traffic: g.traffic.clone(),
+            now: g.now,
+        })
+        .unwrap_or_default();
     let published = netinfo::published_of(c.and_then(|c| c.ports.as_deref()).unwrap_or(&[]));
     let dump = d.by_id.get(id).cloned().unwrap_or_default();
     egui::ScrollArea::vertical().id_salt("detail-network").auto_shrink([false, false]).show(ui, |ui| {

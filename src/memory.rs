@@ -468,7 +468,8 @@ fn vmmem_toolhelp() -> Option<Option<u64>> {
 /// Get-Process), takže funguje i u chráněného vmmemWSL.
 #[cfg(windows)]
 fn vmmem_ntquery() -> Option<Option<u64>> {
-    // buffer (512 KB) se mezi vzorky znovu používá; po vrácení vlastnictví se zase uloží
+    // buffer (512 KB) se mezi vzorky znovu používá; po vrácení vlastnictví se zase uloží.
+    // Cena: paměť zůstává alokovaná po dobu života vlákna, které vzorkuje (jeden buffer na vlákno).
     thread_local! {
         static NT_BUF: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
     }
