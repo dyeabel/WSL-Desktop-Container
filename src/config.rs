@@ -223,11 +223,44 @@ pub fn data_dir() -> Option<PathBuf> {
     if let Some(d) = portable_dir() {
         return Some(d.join("data"));
     }
-    #[cfg(not(test))]
+    #[cfg(all(not(test), windows))]
     {
         let base = PathBuf::from(std::env::var_os("APPDATA")?);
         Some(migrate_dir(&base.join(LEGACY_DATA_DIR), &base.join(DATA_DIR)))
     }
+    // Linux: $XDG_DATA_HOME/wsl-container-desktop (výchozí ~/.local/share/...)
+    #[cfg(all(not(test), not(windows)))]
+    {
+        xdg_dirs(|k| std::env::var_os(k)).map(|(data, _)| data)
+    }
+}
+
+/// Název složky aplikace v XDG adresářích (Linux).
+pub const XDG_DIR: &str = "wsl-container-desktop";
+
+/// Absolutní, neprázdná hodnota proměnné prostředí (XDG specifikace ignoruje prázdné a relativní).
+fn abs_env(env: &impl Fn(&str) -> Option<std::ffi::OsString>, key: &str) -> Option<PathBuf> {
+    env(key).filter(|v| !v.is_empty()).map(PathBuf::from).filter(|p| p.has_root())
+}
+
+/// Základ pro konfiguraci: `$XDG_CONFIG_HOME`, jinak `$HOME/.config`.
+#[cfg_attr(windows, allow(dead_code))] // jen Linux; čistá logika se testuje i na Windows
+pub fn xdg_config_home(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    abs_env(&env, "XDG_CONFIG_HOME").or_else(|| abs_env(&env, "HOME").map(|h| h.join(".config")))
+}
+
+/// Základ pro data: `$XDG_DATA_HOME`, jinak `$HOME/.local/share`.
+#[cfg_attr(windows, allow(dead_code))]
+fn xdg_data_home(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    abs_env(&env, "XDG_DATA_HOME").or_else(|| abs_env(&env, "HOME").map(|h| h.join(".local").join("share")))
+}
+
+/// Složky aplikace podle XDG: `(data, config)`. Čistá funkce, prostředí se předává zvenku.
+#[cfg_attr(windows, allow(dead_code))]
+pub fn xdg_dirs(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<(PathBuf, PathBuf)> {
+    let data = xdg_data_home(&env)?.join(XDG_DIR);
+    let config = xdg_config_home(&env)?.join(XDG_DIR);
+    Some((data, config))
 }
 
 /// Portable instalace, ze které testy berou konfiguraci (WSLCD_PORTABLE_DIR ji přepíše).
@@ -292,6 +325,7 @@ pub const LEGACY_DATA_DIR: &str = "WLS_Desktop";
 
 /// Přejmenuje starou složku na novou, pokud nová ještě není; vrací složku, kterou použít
 /// (když přejmenování selže – soubor drží jiný proces –, zůstane se u staré).
+#[cfg_attr(not(windows), allow(dead_code))] // jen Windows (%APPDATA%); logika se testuje i na Linuxu
 pub fn migrate_dir(old: &std::path::Path, new: &std::path::Path) -> PathBuf {
     if new.exists() || !old.exists() {
         return new.to_path_buf();
@@ -309,6 +343,12 @@ pub fn isolated() -> bool {
 }
 
 fn path() -> Option<PathBuf> {
+    // Linux: konfigurace v $XDG_CONFIG_HOME/wsl-container-desktop, data jinde; s WSLCD_DATA_DIR
+    // nebo v portable režimu zůstává `config.json` v datové složce (jako na Windows)
+    #[cfg(all(not(test), not(windows)))]
+    if !isolated() && portable_dir().is_none() {
+        return xdg_dirs(|k| std::env::var_os(k)).map(|(_, config)| config.join("config.json"));
+    }
     data_dir().map(|d| d.join("config.json"))
 }
 
@@ -326,7 +366,11 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<(), String> {
-        let p = path().ok_or("Proměnná APPDATA není nastavená")?;
+        #[cfg(windows)]
+        let missing = "Proměnná APPDATA není nastavená";
+        #[cfg(not(windows))]
+        let missing = "Proměnná HOME není nastavená";
+        let p = path().ok_or(missing)?;
         if let Some(dir) = p.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -396,5 +440,43 @@ mod migrate_tests {
             assert!(base.join(d).exists(), "{d}");
         }
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod xdg_tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| OsString::from(v))
+    }
+
+    #[test]
+    fn xdg_paths() {
+        let app = super::XDG_DIR;
+        // proměnné XDG mají přednost před HOME
+        let (data, cfg) = super::xdg_dirs(env(&[("XDG_DATA_HOME", "/x/data"), ("XDG_CONFIG_HOME", "/x/cfg"), ("HOME", "/h")])).unwrap();
+        assert_eq!(data, PathBuf::from("/x/data").join(app));
+        assert_eq!(cfg, PathBuf::from("/x/cfg").join(app));
+        // výchozí hodnoty podle HOME
+        let (data, cfg) = super::xdg_dirs(env(&[("HOME", "/h")])).unwrap();
+        assert_eq!(data, PathBuf::from("/h/.local/share").join(app));
+        assert_eq!(cfg, PathBuf::from("/h/.config").join(app));
+        // prázdné a relativní hodnoty XDG se podle specifikace ignorují
+        let (data, cfg) = super::xdg_dirs(env(&[("XDG_DATA_HOME", ""), ("XDG_CONFIG_HOME", "rel/cfg"), ("HOME", "/h")])).unwrap();
+        assert_eq!(data, PathBuf::from("/h/.local/share").join(app));
+        assert_eq!(cfg, PathBuf::from("/h/.config").join(app));
+        // bez HOME a bez XDG nic
+        assert!(super::xdg_dirs(env(&[])).is_none());
+        // jen XDG bez HOME stačí
+        assert!(super::xdg_dirs(env(&[("XDG_DATA_HOME", "/x/data"), ("XDG_CONFIG_HOME", "/x/cfg")])).is_some());
+    }
+
+    #[test]
+    fn xdg_config_home_base() {
+        assert_eq!(super::xdg_config_home(env(&[("XDG_CONFIG_HOME", "/x/cfg")])), Some(PathBuf::from("/x/cfg")));
+        assert_eq!(super::xdg_config_home(env(&[("HOME", "/h")])), Some(PathBuf::from("/h/.config")));
+        assert_eq!(super::xdg_config_home(env(&[])), None);
     }
 }

@@ -1,6 +1,7 @@
 //! Oznámení ve Windows (toast). Aplikace se registruje jako odesílatel přes
 //! AppUserModelId v HKCU (bez instalace a zástupce), aby oznámení nesla její název a ikonu.
 
+#[cfg(windows)]
 pub const AUMID: &str = "WSL.Container.Desktop";
 
 #[cfg(windows)]
@@ -58,5 +59,42 @@ pub fn show_with(title: &str, body: &str, on_click: impl Fn() + Send + 'static) 
     }
 }
 
+/// Argumenty `notify-send`. `--` brání tomu, aby titulek začínající pomlčkou byl přepínač.
+#[cfg_attr(windows, allow(dead_code))] // jen Linux; čistá logika se testuje i na Windows
+pub fn notify_send_args(title: &str, body: &str) -> Vec<String> {
+    vec!["--app-name=WSL Container Desktop".into(), "--".into(), title.into(), body.into()]
+}
+
+/// Linux: `notify-send`. Když chybí (nebo selže), nic se nestane – záznam v historii zůstává.
+/// `on_click` se na Linuxu nevolá (`notify-send` kliknutí nehlásí).
 #[cfg(not(windows))]
-pub fn show_with(_: &str, _: &str, _: impl Fn() + Send + 'static) {}
+pub fn show_with(title: &str, body: &str, _on_click: impl Fn() + Send + 'static) {
+    use std::process::{Command, Stdio};
+    let child = Command::new("notify-send")
+        .args(notify_send_args(title, body))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    // proces se musí převzít, jinak zůstane zombie
+    if let Ok(mut c) = child {
+        std::thread::spawn(move || {
+            let _ = c.wait();
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn notify_send_args() {
+        let a = super::notify_send_args("Kontejner spadl", "web
+kód 1");
+        assert_eq!(a, ["--app-name=WSL Container Desktop", "--", "Kontejner spadl", "web
+kód 1"]);
+        // titulek začínající pomlčkou se nesmí vyložit jako přepínač
+        let a = super::notify_send_args("-h", "x");
+        assert_eq!(a[1], "--");
+        assert_eq!(a[2], "-h");
+    }
+}
