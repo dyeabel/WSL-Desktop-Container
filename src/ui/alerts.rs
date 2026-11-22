@@ -36,25 +36,29 @@ pub fn banner(app: &mut App, ui: &mut egui::Ui) {
                 ui.label(&a.body);
                 ui.add_space(4.0);
                 // každá položka je jeden widget – řádek se zalomí
+                // odkazy jen do sekcí, které hostitel ukazuje (Linux: bez paměti VM a disku distribuce)
+                let caps = app.caps();
                 ui.horizontal_wrapped(|ui| match a.kind {
                     Kind::Memory => {
-                        ui.add_enabled_ui(!app.mem.freeing, |ui| {
-                            if accent_button(ui, t!("\u{EC54} Uvolnit paměť", "\u{EC54} Free memory")).clicked() {
-                                free = true;
+                        if caps.vm_memory {
+                            ui.add_enabled_ui(!app.mem.freeing, |ui| {
+                                if accent_button(ui, t!("\u{EC54} Uvolnit paměť", "\u{EC54} Free memory")).clicked() {
+                                    free = true;
+                                }
+                            });
+                            if ui.button(t!("Zobrazit paměť", "Show memory")).clicked() {
+                                nav = Some(Target::Memory);
                             }
-                        });
-                        if ui.button(t!("Zobrazit paměť", "Show memory")).clicked() {
-                            nav = Some(Target::Memory);
                         }
                     }
                     Kind::Pressure => {
-                        if ui.button(t!("Zobrazit paměť", "Show memory")).clicked() {
+                        if caps.vm_memory && ui.button(t!("Zobrazit paměť", "Show memory")).clicked() {
                             nav = Some(Target::Memory);
                         }
                     }
                     _ => {
-                        ui.add_enabled_ui(app.snap.connected, |ui| cleanup = super::dashboard::cleanup_menu(ui, app.caps().vm_memory));
-                        if ui.button(t!("\u{EB02} Disk distribuce…", "\u{EB02} Distribution disk…")).clicked() {
+                        ui.add_enabled_ui(app.snap.connected, |ui| cleanup = super::dashboard::cleanup_menu(ui, caps.vm_memory));
+                        if caps.vm_disk && ui.button(t!("\u{EB02} Disk distribuce…", "\u{EB02} Distribution disk…")).clicked() {
                             nav = Some(Target::Engine);
                         }
                     }

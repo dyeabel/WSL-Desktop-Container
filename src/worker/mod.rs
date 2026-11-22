@@ -335,6 +335,10 @@ impl Worker {
     fn host(&self) -> std::sync::Arc<dyn crate::host::Host> {
         crate::host::current(&self.cfg())
     }
+    /// WSL hostitel pro akce, které existují jen ve WSL (jinde chyba místo paniky).
+    fn wsl_host(&self) -> Result<crate::host::wsl::WslHost, String> {
+        self.host().wsl().map(|w| w.for_distro(w.distro())).ok_or_else(crate::host::unavailable)
+    }
     fn docker(&self) -> Docker {
         Docker::new(&crate::host::endpoint(&self.cfg()))
     }
@@ -348,7 +352,12 @@ impl Worker {
         // spuštěno ze shimu = někdo právě potřebuje engine
         if self.cfg().autostart_engine || crate::wake::launched_from_shim() {
             let w = self.clone();
-            thread::spawn(move || w.exec(Cmd::EngineStart));
+            // Linux: bez kliknutí nikdy pkexec (běžící engine nechat, systémovou službu přeskočit)
+            if self.host().wsl().is_none() {
+                thread::spawn(move || w.autostart_local());
+            } else {
+                thread::spawn(move || w.exec(Cmd::EngineStart));
+            }
         }
         // docker shim žádá o start enginu (aplikace už běží, engine ne)
         let tx = self.cmd.clone();
@@ -406,7 +415,20 @@ impl Worker {
         }
         self.send(Msg::Snapshot(Box::new(snap)));
         let mut distro_running = false;
-        if let Ok(list) = wsl::list() {
+        if crate::host::current_kind() == crate::host::HostKind::Local {
+            // Linux: hostitel běží vždy, žádné distribuce ani keepalive
+            distro_running = true;
+            if let Ok(mut st) = self.shared.status.lock() {
+                *st = EngineStatus {
+                    connected,
+                    distro_running: true,
+                    distro: self.host().label(),
+                    engine: self.cfg().engine.name().to_string(),
+                    running: n_run,
+                    total: n_total,
+                };
+            }
+        } else if let Ok(list) = wsl::list() {
             let distro = self.cfg().distro;
             let running = list.iter().any(|d| d.name == distro && d.running());
             distro_running = running;
@@ -495,7 +517,12 @@ impl Worker {
 
     fn check_engine(&self) {
         let c = self.cfg();
-        let ok = crate::host::current(&c).run(Privilege::Engine, None, &["test", "-f", c.engine.api_marker()]).is_ok();
+        let host = crate::host::current(&c);
+        // Linux: aplikace API nenastavuje (marker v /etc nemá smysl) – API je socket enginu
+        if !host.caps().engine_install {
+            return;
+        }
+        let ok = host.run(Privilege::Engine, None, &["test", "-f", c.engine.api_marker()]).is_ok();
         self.send(Msg::EngineInfo { tcp_configured: ok });
     }
 
@@ -562,6 +589,12 @@ impl Worker {
 
     fn exec_inner(&self, cmd: Cmd) -> Result<String, String> {
         let cfg = self.cfg();
+        let caps = crate::host::current_caps();
+        // pojistka: akce jen pro WSL (instalační a nastavovací skripty, wsl.exe, Windows
+        // programy) se na jiném hostiteli nikdy nespustí, i kdyby je UI poslalo
+        if !supported(caps, &cmd) {
+            return Err(crate::host::unavailable());
+        }
         let distro = cfg.distro.clone();
         let d = self.docker();
         match cmd {
@@ -613,7 +646,8 @@ impl Worker {
             Cmd::Stack(op) => self.stack_op(op),
             Cmd::K8s(op) => self.k8s_op(op),
             Cmd::ComposeUpPath(path) => {
-                let dir = wsl::to_linux_path(&distro, &path)?;
+                // Linux: cesta je rovnou místní
+                let dir = if self.host().wsl().is_some() { wsl::to_linux_path(&distro, &path)? } else { path };
                 self.exec_inner(Cmd::Compose { dir, project: None, args: vec!["up".into(), "-d".into()] })
             }
             Cmd::Wsl(w) => match w {
@@ -639,13 +673,28 @@ impl Worker {
                 }
                 WslCmd::SetDefault(n) => wsl::set_default(&n).map(|_| tf!("{n} je nyní výchozí distribuce", "{n} is now the default distribution")).map_err(String::from),
             },
+            // po startu / restartu hledat engine znovu (Linux: socket mohl vzniknout až teď)
             Cmd::EngineStart => {
                 crate::host::refresh_discovery();
-                self.engine_start()
+                let r = self.engine_start();
+                crate::host::refresh_discovery();
+                r
             }
-            Cmd::EngineStop => self.engine_stop(),
-            Cmd::EngineRestart => self.engine_restart(),
-            Cmd::SetupEngine => self.setup_api(&cfg).map(|(out, _)| out),
+            Cmd::EngineStop => {
+                let r = self.engine_stop();
+                crate::host::refresh_discovery();
+                r
+            }
+            Cmd::EngineRestart => {
+                let r = self.engine_restart();
+                crate::host::refresh_discovery();
+                r
+            }
+            Cmd::SetupEngine => {
+                let r = self.setup_api(&cfg).map(|(out, _)| out);
+                crate::host::refresh_discovery();
+                r
+            }
             Cmd::SetPrimary { distro, engine, sleep_old } => {
                 let mut log = String::new();
                 let r = self.set_primary(&distro, engine, sleep_old, &mut log);
@@ -710,6 +759,28 @@ impl Worker {
     }
 }
 
+/// Umí aktuální hostitel akci? Na WSL (všechny schopnosti) vždy ano.
+fn supported(caps: crate::host::Caps, c: &Cmd) -> bool {
+    match c {
+        Cmd::Wsl(_)
+        | Cmd::ListOnline
+        | Cmd::AddDistro(_)
+        | Cmd::Distro(_)
+        | Cmd::SetPrimary { .. }
+        | Cmd::Sleep
+        | Cmd::SetKeepAlive(_)
+        // Windows programy nad UNC cestou distribuce
+        | Cmd::Notepad(_)
+        | Cmd::Explorer(_) => caps.distros,
+        Cmd::InstallEngine(..) | Cmd::UninstallEngine { .. } | Cmd::SetupEngine => caps.engine_install,
+        Cmd::SetTls(_) | Cmd::RegenCerts => caps.api_tls,
+        Cmd::LoadDaemonJson | Cmd::SaveDaemonJson(_) => caps.daemon_json,
+        Cmd::FreeMemory => caps.vm_memory,
+        Cmd::Fs { root: true, .. } => caps.files_root,
+        _ => true,
+    }
+}
+
 /// Popis akce pro přehled „Na pozadí“.
 fn activity_label(c: &Cmd) -> String {
     let short = |id: &str| id.chars().take(12).collect::<String>();
@@ -754,5 +825,42 @@ fn activity_label(c: &Cmd) -> String {
         Cmd::UpdateLimits { name, .. } => tf!("Limity kontejneru {name}", "Container limits {name}"),
         // ostatní: název varianty
         other => format!("{other:?}").split(['(', ' ', '{']).next().unwrap_or("").to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::Caps;
+
+    /// Akce jen pro WSL (skripty z engine.rs, wsl.exe, Windows programy) mimo WSL neprojdou;
+    /// na WSL projde vše.
+    #[test]
+    fn wsl_only_commands_refused_locally() {
+        let wsl_only = [
+            Cmd::SetupEngine,
+            Cmd::InstallEngine(Engine::Docker, true),
+            Cmd::UninstallEngine { engine: Engine::Podman, purge: false },
+            Cmd::SetTls(true),
+            Cmd::RegenCerts,
+            Cmd::LoadDaemonJson,
+            Cmd::SaveDaemonJson("{}".into()),
+            Cmd::FreeMemory,
+            Cmd::Sleep,
+            Cmd::Wsl(WslCmd::Shutdown),
+            Cmd::ListOnline,
+            Cmd::SetPrimary { distro: "x".into(), engine: None, sleep_old: false },
+            Cmd::SetKeepAlive(true),
+            Cmd::Notepad("/x".into()),
+            Cmd::Explorer("/x".into()),
+            Cmd::Fs { root: true, op: FsOp::List("/".into()) },
+        ];
+        for c in &wsl_only {
+            assert!(!supported(Caps::LOCAL, c), "{c:?}");
+            assert!(supported(Caps::WSL, c), "{c:?}");
+        }
+        for c in [Cmd::EngineStart, Cmd::EngineStop, Cmd::EngineRestart, Cmd::Refresh, Cmd::Fs { root: false, op: FsOp::List("/".into()) }] {
+            assert!(supported(Caps::LOCAL, &c), "{c:?}");
+        }
     }
 }

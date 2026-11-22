@@ -179,7 +179,7 @@ impl App {
         let mut cfg = Config::load();
         if !Config::exists() {
             // první spuštění (i nový portable balíček): výchozí distribuce WSL místo „Ubuntu“
-            if let Some(d) = crate::wsl::list().ok().and_then(|l| l.into_iter().find(|d| d.default)) {
+            if let Some(d) = crate::host::current_caps().distros.then(crate::wsl::list).and_then(|r| r.ok()).and_then(|l| l.into_iter().find(|d| d.default)) {
                 cfg.distro = d.name;
             }
             let _ = cfg.save();
@@ -647,6 +647,9 @@ impl App {
                         let (c, _) = self.engine_status();
                         let ename = self.cfg.read().map(|c| c.engine.name()).unwrap_or("Engine");
                         let port = self.cfg.read().map(|c| c.port).unwrap_or(0);
+                        // Linux: skutečný endpoint enginu (socket), na Windows TCP API aplikace
+                        let api = if self.kind() == crate::host::HostKind::Local { ui::engine::endpoint_text(&self.engine_endpoint()) } else { format!("tcp://127.0.0.1:{port}") };
+                        let sleep_cap = self.caps().distros;
                         let distro = self.distro();
                         let connected = self.snap.connected;
                         let distro_running = self.current_distro().map(|d| d.running()).unwrap_or(false);
@@ -675,8 +678,8 @@ impl App {
                                         ui::badge(ui, state, c).on_hover_text(ename);
                                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                                             ui.label(RichText::new(&distro).strong()).on_hover_text(tf!(
-                                                "{ename} · {detail}\nAPI: tcp://127.0.0.1:{port}",
-                                                "{ename} · {detail}\nAPI: tcp://127.0.0.1:{port}"
+                                                "{ename} · {detail}\nAPI: {api}",
+                                                "{ename} · {detail}\nAPI: {api}"
                                             ));
                                         });
                                     });
@@ -712,11 +715,13 @@ impl App {
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 6.0;
                                     if connected {
-                                        let half = egui::vec2((w - 6.0) / 2.0, 26.0);
+                                        // bez distribucí (Linux) není co uspat – Stop přes celou šířku
+                                        let half = if sleep_cap { egui::vec2((w - 6.0) / 2.0, 26.0) } else { egui::vec2(w, 26.0) };
                                         if ui.add(egui::Button::new("\u{E46C} Stop").min_size(half)).clicked() {
                                             self.send(Cmd::EngineStop);
                                         }
-                                        if ui
+                                        if sleep_cap
+                                            && ui
                                             .add(egui::Button::new(t!("\u{E330} Uspat", "\u{E330} Sleep")).min_size(half))
                                             .on_hover_text(t!("Ukončí distribuci a uvolní paměť", "Terminates the distribution and frees memory"))
                                             .clicked()

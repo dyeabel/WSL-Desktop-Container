@@ -89,6 +89,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         // paměť WSL se měří i bez enginu
         if app.caps().vm_memory {
             super::memory::show(app, ui);
+        } else {
+            host_memory(app, ui);
         }
         return;
     }
@@ -112,8 +114,39 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
     if app.caps().vm_memory {
         super::memory::show(app, ui);
+    } else {
+        host_memory(app, ui);
     }
     containers_perf(app, ui);
+}
+
+/// Paměť hostitele bez VM (Linux): /proc/meminfo a součet kontejnerů, bez VmmemWSL.
+fn host_memory(app: &App, ui: &mut egui::Ui) {
+    let (glance, now) = app.shared.memory.lock().map(|m| (m.glance, m.now.clone())).unwrap_or_default();
+    section(ui, t!("Paměť", "Memory"));
+    card(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let Some(g) = glance else {
+            ui.label(muted(t!("načítám…", "loading…")));
+            return;
+        };
+        let pct = |v: u64| v as f64 * 100.0 / g.total.max(1) as f64;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(tf!("Použito {} z {}", "Used {} of {}", fmt_bytes(g.used), fmt_bytes(g.total))).strong());
+            ui.label(muted(format!("({:.0} %)", pct(g.used))));
+            ui.label(muted("·"));
+            ui.label(muted(tf!("cache {}", "cache {}", fmt_bytes(g.cache))));
+            if let Some(n) = &now {
+                ui.label(muted("·"));
+                ui.label(muted(tf!("kontejnery {}", "containers {}", fmt_bytes(n.b.containers))));
+                ui.label(muted("·"));
+                ui.label(muted(tf!("engine {}", "engine {}", fmt_bytes(n.b.engine))));
+            }
+        });
+        let bar = egui::ProgressBar::new((pct(g.used) / 100.0).clamp(0.0, 1.0) as f32).desired_height(8.0);
+        ui.add(bar);
+        ui.label(muted(t!("Paměť tohoto počítače (/proc/meminfo).", "Memory of this computer (/proc/meminfo).")).small());
+    });
 }
 
 /// Tlačítko s nabídkou „Uklidit“ (přehled disku a pruh upozornění); vrací vybranou položku.

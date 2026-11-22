@@ -103,11 +103,17 @@ impl Worker {
                 v.extend_from_slice(&kubectl);
                 host.open_terminal(&format!("logs {pod}"), &ExecReq::new(&v).privilege(Privilege::Engine))?
             }
+            // Linux: shell uživatele v místním terminálu (domovská / zadaná složka)
+            Term::Distro(n) if host.wsl().is_none() => {
+                let home = std::env::var("HOME").ok().filter(|h| !h.is_empty());
+                host.open_terminal(&n, &ExecReq::new(&["sh", "-c", shell]).cwd(home.as_deref()))?
+            }
+            Term::Dir(dir) if host.wsl().is_none() => host.open_terminal(&dir, &ExecReq::new(&["sh", "-c", shell]).cwd(Some(&dir)))?,
             // shell distribuce (bez příkazu) – jen WSL
             Term::Distro(n) => wsl::open_terminal(&n, &["-d".into(), n.clone(), "--cd".into(), "~".into()])
                 .map(|_| ())?,
             Term::Dir(dir) => {
-                let distro = host.wsl().expect("WSL").distro().to_string();
+                let distro = self.wsl_host()?.distro().to_string();
                 wsl::open_terminal(&dir, &["-d".into(), distro, "--cd".into(), dir.clone()]).map(|_| ())?
             }
         }
