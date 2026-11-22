@@ -430,6 +430,15 @@ impl Worker {
         });
         // řídicí roura pro `wslcd status | distro | engine | memory | metrics`
         control::start(self.clone());
+        // kopie klientského TLS klíče, které po sobě nechávají nástroje (Testcontainers / .NET)
+        if self.host().wsl().is_some() {
+            let w = self.clone();
+            thread::spawn(move || loop {
+                thread::sleep(Duration::from_secs(60));
+                w.cleanup_client_keys(crate::clientkeys::MIN_AGE);
+                thread::sleep(crate::clientkeys::MIN_AGE.saturating_sub(Duration::from_secs(60)));
+            });
+        }
         self.refresh();
         self.spawn_events();
         let pool = self.spawn_pool(POOL_THREADS);

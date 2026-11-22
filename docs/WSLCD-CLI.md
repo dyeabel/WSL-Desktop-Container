@@ -58,6 +58,7 @@ wslcd distro start <name>
 wslcd distro stop <name>            (alias: distro terminate)
 wslcd engine start|stop|restart
 wslcd memory free
+wslcd keys clean [--min-age <hodiny>]
 wslcd metrics [--interval <ms>] [--count <n>] [--no-containers] [--json]
 wslcd help-wslcd                    (nebo -h / --help u kteréhokoli z příkazů výše)
 ```
@@ -148,6 +149,21 @@ i udržovací proces aplikace – engine pak neodpovídá, dokud se distribuce z
 
 Zahodí cache Linuxu a zhutní paměť VM, aby ji VmmemWSL vrátil Windows. `message`:
 „Paměť WSL uvolněna: VmmemWSL 720 MB → 644 MB (cache Linuxu 287 MB → 181 MB)“.
+
+### `wslcd keys clean` – kopie klientského klíče ve Windows
+
+Nástroje, které čtou `DOCKER_CERT_PATH` (Testcontainers / Docker.DotNet na Windows), při každém spuštění naimportují
+`key.pem` do úložiště klíčů Windows (`%APPDATA%\Microsoft\Crypto\Keys`) a po sobě ho nesmažou. Aplikace si u každé
+distribuce pamatuje veřejný klíč jejího klientského certifikátu (`data\tls\client-keys.json`, zapisuje se při stažení
+certifikátů) a maže jen kopie **těchto** klíčů – cizích klíčů se nedotkne:
+
+- distribuce existuje → zůstane nejnovější kopie, starší se smažou;
+- distribuce už neexistuje → smažou se všechny kopie;
+- kopie mladší než `--min-age` hodin (výchozí 6) zůstanou vždy – může je mít otevřené běžící test.
+  `--min-age 0` smaže všechny kopie kromě nejnovější (jen když zrovna neběží žádné testy).
+
+Totéž dělá aplikace sama: minutu po startu, pak každých 6 hodin a po každém stažení certifikátů (přepnutí distribuce,
+nastavení API). `data`: `{"deleted": 12, "kept": 1, "errors": []}`; `ok` je `false`, když některý klíč nešel smazat.
 
 ### `wslcd metrics` – čítače paměti a CPU
 

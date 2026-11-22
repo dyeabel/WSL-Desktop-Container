@@ -118,7 +118,7 @@ impl Worker {
     }
 
     /// Zkopíruje klientský certifikát, klíč a CA z distribuce do %APPDATA%\WSL_Container_Desktop\tls.
-    fn fetch_client_certs(&self, host: &dyn Host) -> Result<(), String> {
+    fn fetch_client_certs(&self, host: &dyn Host, distro: &str) -> Result<(), String> {
         let dir = crate::docker::tls_dir().ok_or("APPDATA")?;
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         for f in ["ca.pem", "cert.pem", "key.pem"] {
@@ -131,10 +131,48 @@ impl Worker {
                 // klíč jen šifrovaně (DPAPI) – /mnt/c čte každý uživatel každé distribuce
                 crate::docker::store_client_key(pem.as_bytes())?;
             } else {
+                if f == "cert.pem" {
+                    crate::clientkeys::remember(distro, pem.as_bytes());
+                }
                 std::fs::write(dir.join(f), pem).map_err(|e| e.to_string())?;
             }
         }
+        // nový certifikát → kopie klíčů ke starým certifikátům už nikdo nepotřebuje
+        let w = self.clone();
+        thread::spawn(move || {
+            w.cleanup_client_keys(crate::clientkeys::MIN_AGE);
+        });
         Ok(())
+    }
+
+    /// Smaže kopie klientského klíče v úložišti klíčů Windows (viz `clientkeys`): u existujících
+    /// distribucí nechá nejnovější, u zaniklých smaže všechny; klíče mladší než `min_age` nechá.
+    pub(super) fn cleanup_client_keys(&self, min_age: Duration) -> crate::clientkeys::Report {
+        // bez seznamu distribucí by se všechny tvářily jako zaniklé
+        let list = match wsl::list() {
+            Ok(l) => l,
+            Err(e) => return crate::clientkeys::Report { errors: vec![format!("wsl -l: {e}")], ..Default::default() },
+        };
+        let names: Vec<String> = list.into_iter().map(|d| d.name).collect();
+        let cfg = self.cfg();
+        let cert = crate::docker::tls_dir().and_then(|d| std::fs::read(d.join("cert.pem")).ok());
+        let seed = cert.as_deref().filter(|_| cfg.tls && !cfg.distro.is_empty()).map(|c| (cfg.distro.as_str(), c));
+        let r = crate::clientkeys::cleanup(&names, seed, min_age);
+        if r.deleted > 0 || !r.errors.is_empty() {
+            let detail = if r.errors.is_empty() { String::new() } else { r.errors.join("; ") };
+            let mut g = crate::activity::start(
+                crate::activity::Kind::Action,
+                tf!(
+                    "Úklid kopií klientského klíče: smazáno {}, ponecháno {}",
+                    "Client key copies cleanup: {} deleted, {} kept",
+                    r.deleted,
+                    r.kept
+                ),
+                detail,
+            );
+            g.set_ok(r.errors.is_empty());
+        }
+        r
     }
 
     /// Zapne / vypne zabezpečení API (TLS s klientským certifikátem, port 2376 / bez ověření, 2375).
@@ -348,7 +386,7 @@ impl Worker {
         self.check_engine();
         let mut out = out?;
         if cfg.tls {
-            self.fetch_client_certs(host.as_ref())?;
+            self.fetch_client_certs(host.as_ref(), &cfg.distro)?;
             out.push_str(&tf!(
                 "\nKlientský certifikát uložen do {}",
                 "\nClient certificate saved to {}",

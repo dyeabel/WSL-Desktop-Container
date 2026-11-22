@@ -26,6 +26,10 @@ Usage:
   wslcd distro stop <name>                   terminate a distribution (wsl --terminate <name>)
   wslcd engine start|stop|restart            the engine (Docker / Podman) in the primary distribution
   wslcd memory free                          free WSL memory (drop Linux caches, compact)
+  wslcd keys clean [--min-age <hours>]       delete copies of the TLS client key that tools (Testcontainers
+                                             / .NET) leave in the Windows key store: keeps the newest one
+                                             per existing distribution and keys younger than --min-age
+                                             (default 6, 0 = all copies except the newest)
   wslcd metrics [options]                    memory and CPU counters
       --interval <ms>                        CPU sampling window (default 1000, 100–60000)
       --count <n>                            repeat n times (0 = until Ctrl+C), one result per interval
@@ -63,7 +67,7 @@ pub enum Kind {
 /// Je to příkaz navíc? None = obyčejný docker příkaz. Err = chybné použití (kód 2).
 pub fn parse(args: &[String]) -> Option<Result<Action, String>> {
     let first = args.first()?.as_str();
-    if !matches!(first, "status" | "distro" | "engine" | "memory" | "metrics" | "help-wslcd") {
+    if !matches!(first, "status" | "distro" | "engine" | "memory" | "keys" | "metrics" | "help-wslcd") {
         return None;
     }
     Some(parse_inner(args))
@@ -78,6 +82,7 @@ fn parse_inner(args: &[String]) -> Result<Action, String> {
     let mut interval: u64 = 1000;
     let mut count: u64 = 1;
     let mut containers = true;
+    let mut min_age: Option<u64> = None;
     let mut pos: Vec<&str> = Vec::new();
     let mut it = args.iter();
     let num = |v: Option<&String>, f: &str| -> Result<u64, String> {
@@ -94,6 +99,8 @@ fn parse_inner(args: &[String]) -> Result<Action, String> {
             "--interval" => interval = num(it.next(), "--interval")?,
             "--count" => count = num(it.next(), "--count")?,
             "--no-containers" => containers = false,
+            "--min-age" => min_age = Some(num(it.next(), "--min-age")?),
+            s if s.starts_with("--min-age=") => min_age = Some(num(Some(&s["--min-age=".len()..].to_string()), "--min-age")?),
             s if s.starts_with("--engine=") => engine = Some(s["--engine=".len()..].to_string()),
             s if s.starts_with("--interval=") => interval = num(Some(&s["--interval=".len()..].to_string()), "--interval")?,
             s if s.starts_with("--count=") => count = num(Some(&s["--count=".len()..].to_string()), "--count")?,
@@ -141,6 +148,14 @@ fn parse_inner(args: &[String]) -> Result<Action, String> {
         ("memory", Some("free")) => {
             extra(2)?;
             act(json!({"cmd": "memory-free"}), Kind::Message)
+        }
+        ("keys", Some("clean")) => {
+            extra(2)?;
+            let mut r = json!({"cmd": "keys-clean"});
+            if let Some(h) = min_age {
+                r["min_age_h"] = json!(h);
+            }
+            act(r, Kind::Message)
         }
         ("metrics", None) => {
             if !(100..=60_000).contains(&interval) {
@@ -446,6 +461,8 @@ mod tests {
         assert_eq!(req("distro terminate Debian"), json!({"cmd": "distro-stop", "distro": "Debian"}));
         assert_eq!(req("engine restart"), json!({"cmd": "engine", "action": "restart"}));
         assert_eq!(req("memory free"), json!({"cmd": "memory-free"}));
+        assert_eq!(req("keys clean"), json!({"cmd": "keys-clean"}));
+        assert_eq!(req("keys clean --min-age 0"), json!({"cmd": "keys-clean", "min_age_h": 0}));
         assert_eq!(req("metrics"), json!({"cmd": "metrics", "interval_ms": 1000, "containers": true}));
         assert_eq!(req("metrics --interval 500 --no-containers"), json!({"cmd": "metrics", "interval_ms": 500, "containers": false}));
         let a = parse(&v("metrics --count 0 --json")).unwrap().unwrap();

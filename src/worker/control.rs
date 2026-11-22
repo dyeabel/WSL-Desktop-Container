@@ -42,6 +42,12 @@ pub enum Request {
         action: String,
     },
     MemoryFree,
+    /// úklid kopií klientského klíče v úložišti klíčů Windows (`wslcd keys clean`)
+    KeysClean {
+        /// mladší klíče zůstanou (hodiny); None = 6 h jako automatický úklid
+        #[serde(default)]
+        min_age_h: Option<u64>,
+    },
     Metrics {
         #[serde(default = "default_interval")]
         interval_ms: u64,
@@ -129,6 +135,21 @@ impl Worker {
                 Response::from(self.exec_report(cmd))
             }
             Request::MemoryFree => Response::from(self.exec_report(Cmd::FreeMemory)),
+            Request::KeysClean { min_age_h } => {
+                let age = min_age_h.map_or(crate::clientkeys::MIN_AGE, |h| Duration::from_secs(h * 3600));
+                let r = self.cleanup_client_keys(age);
+                Response {
+                    ok: r.errors.is_empty(),
+                    message: tf!(
+                        "Kopie klientského klíče: smazáno {}, ponecháno {}",
+                        "Client key copies: {} deleted, {} kept",
+                        r.deleted,
+                        r.kept
+                    ),
+                    data: json!(r),
+                    ..Default::default()
+                }
+            }
             Request::Metrics { interval_ms, containers } => self.ctl_metrics(interval_ms.clamp(100, 60_000), containers),
         }
     }
