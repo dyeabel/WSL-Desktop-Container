@@ -163,9 +163,14 @@ pub(crate) fn stream_command(
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if !killed && cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::SeqCst)) {
                     killed = true;
-                    if let Err(e) = child.kill() {
-                        // proces pod `pkexec` (setuid root) nejde zabít (EPERM): nečekat na něj,
-                        // doběhne sám, úklid převezme vlákno na pozadí
+                    let res = child.kill();
+                    // proces pod `pkexec` (setuid root) nejde zabít (EPERM): nečekat na něj,
+                    // doběhne sám, úklid převezme vlákno na pozadí (jen Unix – na Windows se
+                    // chyba zabití ignoruje jako dřív)
+                    #[cfg(not(unix))]
+                    let _ = res;
+                    #[cfg(unix)]
+                    if let Err(e) = res {
                         if e.kind() == std::io::ErrorKind::PermissionDenied {
                             std::thread::spawn(move || {
                                 for r in readers {

@@ -20,11 +20,14 @@ enum Parsed {
     Remote(String),
 }
 
-/// `unix://<cesta>`, `tcp://127.0.0.1:<p>` a `tcp://localhost:<p>` jsou lokální, vše ostatní vzdálené.
+/// `unix://<absolutní cesta>`, `tcp://127.0.0.1:<p>` a `tcp://localhost:<p>` jsou lokální, vše
+/// ostatní (i `unix://` s relativní cestou) se hlásí jako nepodporovaná adresa.
 fn parse_host(host: &str) -> Parsed {
     let h = host.trim();
     if let Some(path) = h.strip_prefix("unix://") {
-        if !path.is_empty() {
+        // relativní cesta by závisela na pracovní složce aplikace; `starts_with('/')` místo
+        // `Path::is_absolute`, ať se rozbor chová stejně i v testech na Windows
+        if path.starts_with('/') {
             return Parsed::Local(Endpoint::Unix(PathBuf::from(path)));
         }
     }
@@ -188,6 +191,20 @@ mod tests {
         let (f, m) = discover(&envf(&[("DOCKER_HOST", "unix:///run/user/1000/docker.sock")]), &no_home(), &|_| false);
         assert_eq!(f, Found::Endpoint(Endpoint::Unix("/run/user/1000/docker.sock".into())));
         assert!(m.is_none());
+    }
+
+    /// `unix://` s relativní (nebo prázdnou) cestou není použitelný lokální socket.
+    #[test]
+    fn docker_host_unix_relative_invalid() {
+        for h in ["unix://docker.sock", "unix://./run/docker.sock", "unix://"] {
+            let (f, m) = discover(&envf(&[("DOCKER_HOST", h)]), &no_home(), &|_| false);
+            assert_eq!(f, Found::Remote(h.into()), "{h}");
+            assert!(m.is_some(), "{h}");
+            // s lokálním socketem se použije ten (s hláškou o nepodporované adrese)
+            let (f, m) = discover(&envf(&[("DOCKER_HOST", h)]), &no_home(), &only(&["/var/run/docker.sock"]));
+            assert_eq!(f, Found::Endpoint(Endpoint::Unix("/var/run/docker.sock".into())), "{h}");
+            assert!(m.unwrap().contains(h), "{h}");
+        }
     }
 
     #[test]

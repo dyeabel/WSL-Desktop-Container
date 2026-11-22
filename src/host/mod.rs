@@ -150,10 +150,8 @@ pub trait Host: Send + Sync {
     fn kind(&self) -> HostKind;
 
     // UI bere schopnosti z `current_caps()` (konstanta bez vytváření hostitele)
-    #[allow(dead_code)]
     fn caps(&self) -> Caps;
 
-    #[allow(dead_code)] // použije se u dalších hostitelů (Linux, Windows)
     fn label(&self) -> String;
 
     /// `Err` jen když se proces nespustil; nenulový kód je `Ok`.

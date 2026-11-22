@@ -158,7 +158,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     } else {
         t!("Řízení WSL distribucí a kontejnerového enginu (Docker / Podman)", "Manage WSL distributions and the container engine (Docker / Podman)")
     };
-    header(ui, if local { "Engine" } else { "WSL engine" }, subtitle);
+    header(ui, crate::app::Page::Engine.title_for(app.kind()), subtitle);
 
     // --- kontejnerový engine ---
     let dstate = app.current_distro().map(|d| d.state.clone()).unwrap_or_else(|| t!("nenalezena", "not found").into());
@@ -168,7 +168,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let npipe_on = app.cfg.read().map(|c| c.npipe).unwrap_or(false);
     let caps = app.caps();
     // Linux: kudy se aplikace k enginu připojuje a případná hláška z hledání enginu
-    let (endpoint, note) = if local { (endpoint_text(&app.engine_endpoint()), crate::host::engine_note()) } else { (String::new(), None) };
+    let (endpoint, note) = if local { (endpoint_text(&app.engine_endpoint()), app.engine_note()) } else { (String::new(), None) };
     security_hint(app, ui, tls);
     card(ui, |ui| {
         ui.set_width(ui.available_width());

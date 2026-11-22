@@ -313,7 +313,7 @@ const DF_EVERY: Duration = Duration::from_secs(30);
 
 /// Je čas znovu zavolat `/system/df`? (nikdy nevolané = ano)
 fn df_due(last: Option<Instant>, now: Instant, every: Duration) -> bool {
-    last.map_or(true, |t| now.saturating_duration_since(t) >= every)
+    last.is_none_or(|t| now.saturating_duration_since(t) >= every)
 }
 
 /// Uloží novou hodnotu, jen když se liší; vrací, zda se změnila.
@@ -329,6 +329,8 @@ fn replace_if_changed<T: PartialEq>(slot: &mut T, new: T) -> bool {
 fn changes_df(cmd: &Cmd) -> bool {
     match cmd {
         Cmd::Container(_, action) => *action == "remove",
+        // nový stack mění úložiště, jen když se rovnou spouští (`up -d`)
+        Cmd::Stack(StackOp::Create(spec)) => spec.start,
         Cmd::PruneContainers
         | Cmd::PruneImages { .. }
         | Cmd::PruneVolumes
@@ -341,6 +343,8 @@ fn changes_df(cmd: &Cmd) -> bool {
         | Cmd::RestoreVolume { .. }
         | Cmd::CloneVolume { .. }
         | Cmd::Compose { .. }
+        | Cmd::ComposeUpPath(_)
+        | Cmd::Recreate { .. }
         | Cmd::SetPrimary { .. } => true,
         _ => false,
     }
@@ -975,6 +979,13 @@ mod tests {
         assert!(changes_df(&Cmd::Container("i".into(), "remove")));
         assert!(!changes_df(&Cmd::Container("i".into(), "stop")));
         assert!(!changes_df(&Cmd::Refresh));
+        assert!(changes_df(&Cmd::ComposeUpPath("/s/compose.yaml".into())));
+        assert!(changes_df(&Cmd::Recreate { id: "i".into(), spec: RunSpec::default(), net: Default::default() }));
+        let spec = |start| NewStackSpec { start, ..Default::default() };
+        assert!(changes_df(&Cmd::Stack(StackOp::Create(spec(true)))));
+        assert!(!changes_df(&Cmd::Stack(StackOp::Create(spec(false)))));
+        assert!(!changes_df(&Cmd::Stack(StackOp::Save { path: "p".into(), text: String::new() })));
+        assert!(!changes_df(&Cmd::Stack(StackOp::Read { path: "p".into(), missing_ok: true })));
     }
 
     #[test]

@@ -51,22 +51,11 @@ impl Page {
             _ => self.label(),
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::host::HostKind;
-
-    #[test]
-    fn engine_label_wsl_unchanged() {
-        assert_eq!(Page::Engine.label_for(HostKind::Wsl), Page::Engine.label());
-        assert_eq!(Page::Dashboard.label_for(HostKind::Local), Page::Dashboard.label());
-    }
-
-    #[test]
-    fn engine_label_local() {
-        assert_eq!(Page::Engine.label_for(HostKind::Local), "\u{EB02}  Engine");
+    /// Název stránky bez ikony (např. „WSL engine“, na Linuxu „Engine“) pro nadpisy a tlačítka.
+    pub fn title_for(self, kind: crate::host::HostKind) -> &'static str {
+        let l = self.label_for(kind);
+        l.split_once("  ").map_or(l, |(_, t)| t)
     }
 }
 
@@ -87,6 +76,9 @@ pub use crate::ui::logs::LogView;
 /// Výška tlačítka navigace a mezera mezi nimi v postranním panelu (hustší seznam jako v Kiri).
 const NAV_H: f32 = 34.0;
 const NAV_GAP: f32 = 2.0;
+
+/// Jak dlouho platí uložený endpoint a hláška enginu v UI (Linux), když nepřijde snímek.
+const ENGINE_VIEW_TTL: std::time::Duration = std::time::Duration::from_secs(3);
 
 pub struct App {
     /// historie celkového CPU kontejnerů (čas s, % všech CPU WSL) – dlaždice CPU
@@ -135,6 +127,10 @@ pub struct App {
     pub k8s: ui::k8s::K8sUi,
     /// výška spodní části postranního panelu s metrikami na kartě enginu (z posledního snímku)
     nav_bottom_full: f32,
+    /// Linux: endpoint enginu a hláška z hledání enginu pro UI (čas, endpoint, hláška) – obnovuje
+    /// se s každým snímkem nebo po [`ENGINE_VIEW_TTL`], ať UI nehledá engine v každém snímku.
+    /// Na Windows zůstává `None`.
+    engine_view: Option<(std::time::Instant, crate::http::Endpoint, Option<String>)>,
     pub daemon_json: String,
     pub daemon_loaded: bool,
     pub cfg_draft: Config,
@@ -300,6 +296,7 @@ impl App {
             compose: ui::compose::ComposeState::default(),
             k8s: ui::k8s::K8sUi::default(),
             nav_bottom_full: 0.0,
+            engine_view: None,
             daemon_json: String::new(),
             daemon_loaded: false,
             cfg_draft,
@@ -479,8 +476,31 @@ impl App {
     }
 
     /// Endpoint API enginu podle aktuální konfigurace (bez zámku výchozí port 2375 jako dřív).
+    /// Linux: z [`App::refresh_engine_view`], dokud je čerstvý.
     pub fn engine_endpoint(&self) -> crate::http::Endpoint {
+        if let Some((_, ep, _)) = &self.engine_view {
+            return ep.clone();
+        }
         self.cfg.read().map(|c| crate::host::endpoint(&c)).unwrap_or(crate::http::Endpoint::Tcp { port: 2375 })
+    }
+
+    /// Hláška z hledání enginu (Linux) z uloženého pohledu; na Windows nic.
+    pub fn engine_note(&self) -> Option<String> {
+        self.engine_view.as_ref().and_then(|(_, _, n)| n.clone())
+    }
+
+    /// Linux: obnoví uložený endpoint a hlášku enginu, když chybí nebo je starší než
+    /// [`ENGINE_VIEW_TTL`]. Na Windows nic nedělá (endpoint je tam levný a nemění se).
+    fn refresh_engine_view(&mut self) {
+        if self.kind() != crate::host::HostKind::Local {
+            return;
+        }
+        if self.engine_view.as_ref().is_some_and(|(at, _, _)| at.elapsed() < ENGINE_VIEW_TTL) {
+            return;
+        }
+        self.engine_view = None;
+        let ep = self.engine_endpoint();
+        self.engine_view = Some((std::time::Instant::now(), ep, crate::host::engine_note()));
     }
 
     /// Spustí streamování posledních `tail` řádků logu (a dalších) do nového `LogView`.
@@ -505,7 +525,11 @@ impl App {
         }
         while let Ok(m) = self.rx.try_recv() {
             match m {
-                Msg::Snapshot(s) => self.snap = std::sync::Arc::new(*s),
+                Msg::Snapshot(s) => {
+                    self.snap = std::sync::Arc::new(*s);
+                    // Linux: worker právě hledal engine – pohled UI obnovit z čerstvého výsledku
+                    self.engine_view = None;
+                }
                 Msg::Distros(d) => self.distros = d,
                 Msg::Stats(rows, df) => {
                     let ncpu = self.snap.info.as_ref().map(|i| i.ncpu.max(1)).unwrap_or(1) as f64;
@@ -952,6 +976,7 @@ impl eframe::App for App {
             self.was_hidden = true;
             return;
         }
+        self.refresh_engine_view();
         // okno se právě zobrazilo – na pozadí se sbíralo řidčeji, obnovit hned
         if std::mem::take(&mut self.was_hidden) {
             self.send(Cmd::Refresh);
@@ -987,5 +1012,28 @@ impl eframe::App for App {
         if self.logs.is_some() || self.detail.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(300));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::HostKind;
+
+    #[test]
+    fn engine_label_wsl_unchanged() {
+        assert_eq!(Page::Engine.label_for(HostKind::Wsl), Page::Engine.label());
+        assert_eq!(Page::Dashboard.label_for(HostKind::Local), Page::Dashboard.label());
+    }
+
+    #[test]
+    fn engine_label_local() {
+        assert_eq!(Page::Engine.label_for(HostKind::Local), "\u{EB02}  Engine");
+    }
+
+    #[test]
+    fn engine_title_without_icon() {
+        assert_eq!(Page::Engine.title_for(HostKind::Wsl), "WSL engine");
+        assert_eq!(Page::Engine.title_for(HostKind::Local), "Engine");
     }
 }

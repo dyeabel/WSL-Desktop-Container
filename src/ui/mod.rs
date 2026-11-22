@@ -786,7 +786,7 @@ pub fn need_engine(app: &mut crate::app::App, ui: &mut egui::Ui) -> bool {
                 app.send(crate::worker::Cmd::EngineStart);
             }
             // název stránky podle hostitele (Linux: „Engine“)
-            let page = if app.kind() == crate::host::HostKind::Local { "\u{EB02} Engine" } else { "\u{EB02} WSL engine" };
+            let page = format!("\u{EB02} {}", crate::app::Page::Engine.title_for(app.kind()));
             if ui.button(page).clicked() {
                 app.page = crate::app::Page::Engine;
             }

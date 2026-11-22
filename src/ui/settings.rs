@@ -281,6 +281,7 @@ pub enum Tab {
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     header(ui, t!("Nastavení", "Settings"), "");
     let caps = app.caps();
+    let local = app.kind() == crate::host::HostKind::Local;
     // karty, které by byly bez WSL prázdné, se nezobrazí
     let tools_visible = caps.shim || caps.npipe || caps.ipv6_relay;
     if (app.settings_tab == Tab::Tools && !tools_visible) || (app.settings_tab == Tab::Wsl && !caps.wslconfig) {
@@ -388,9 +389,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
                 ui.end_row();
                 }
-                ui.label(t!("Port API enginu", "Engine API port"));
-                ui.add(egui::DragValue::new(&mut d.port).range(1024..=65535));
-                ui.end_row();
+                // Linux: aplikace mluví s enginem přímo přes jeho socket, port se nepoužívá
+                if !local {
+                    ui.label(t!("Port API enginu", "Engine API port"));
+                    ui.add(egui::DragValue::new(&mut d.port).range(1024..=65535));
+                    ui.end_row();
+                }
                 ui.label(t!("Obnovovat každých", "Refresh every"));
                 ui.add(egui::DragValue::new(&mut d.refresh_secs).range(1..=120).suffix(" s"))
                     .on_hover_text(t!("Když je okno vidět: stav, statistiky kontejnerů a grafy na Přehledu.", "While the window is shown: status, container statistics and Overview charts."));
@@ -535,10 +539,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         });
 
         section(ui, t!("O aplikaci", "About"));
+        // Linux: skutečný endpoint enginu (socket); Windows beze změny
+        let api = if local { super::engine::endpoint_text(&app.engine_endpoint()) } else { "tcp://127.0.0.1".to_string() };
         ui.label(muted(tf!(
-            "WSL Container Desktop {} · Rust + egui · Docker API přes tcp://127.0.0.1 · konfigurace v {}",
-            "WSL Container Desktop {} · Rust + egui · Docker API via tcp://127.0.0.1 · configuration in {}",
+            "WSL Container Desktop {} · Rust + egui · Docker API přes {} · konfigurace v {}",
+            "WSL Container Desktop {} · Rust + egui · Docker API via {} · configuration in {}",
             env!("CARGO_PKG_VERSION"),
+            api,
             crate::config::location_label()
         )));
     }

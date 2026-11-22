@@ -122,8 +122,7 @@ mod tests {
     #[cfg(not(unix))]
     fn current_follows_config() {
         use crate::host::current;
-        let mut cfg = Config::default();
-        cfg.distro = "A".into();
+        let mut cfg = Config { distro: "A".into(), ..Config::default() };
         assert_eq!(current(&cfg).label(), "A");
         cfg.distro = "B".into();
         assert_eq!(current(&cfg).label(), "B");

@@ -4,12 +4,14 @@
 
 .DESCRIPTION
   check = cargo check --locked --bins --tests
+  clippy = cargo clippy --locked --all-targets -- -D warnings
   test  = cargo test --locked
   live  = cargo test --locked <filtr> -- --ignored proti dočasné službě podman system service
   package <verze> = scripts/package-linux.sh v kontejneru; archiv skončí v dist\ (repo je jen pro čtení)
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\linux-test.ps1 check
+  powershell -ExecutionPolicy Bypass -File scripts\linux-test.ps1 clippy
   powershell -ExecutionPolicy Bypass -File scripts\linux-test.ps1 package 0.9.0-dev
   scripts\linux-test.ps1 test -- host::local
   scripts\linux-test.ps1 live -- host::local
@@ -18,7 +20,7 @@
 #>
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('check', 'test', 'live', 'package')]
+    [ValidateSet('check', 'clippy', 'test', 'live', 'package')]
     [string]$Mode,
     [string]$Distro = 'WSLCD-Lite',
     [Parameter(ValueFromRemainingArguments = $true)]

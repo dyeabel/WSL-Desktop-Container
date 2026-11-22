@@ -226,9 +226,17 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
             }
             if let Ok(mut g) = buf.lock() {
                 // výsledek kontroly distribucí zapisuje vlastní vlákno přímo sem
-                let old = Arc::make_mut(&mut g);
-                next.distros = std::mem::take(&mut old.distros);
-                next.history = std::mem::take(&mut old.history);
+                // sdílený snímek (drží ho UI) se nekopíruje celý – jen tyhle dvě položky
+                match Arc::get_mut(&mut g) {
+                    Some(old) => {
+                        next.distros = std::mem::take(&mut old.distros);
+                        next.history = std::mem::take(&mut old.history);
+                    }
+                    None => {
+                        next.distros = g.distros.clone();
+                        next.history = g.history.clone();
+                    }
+                }
                 if let Some((rx, tx)) = next.vm_rate {
                     next.history.push_back(NetSample { t, rx, tx });
                 }
@@ -640,6 +648,11 @@ mod win {
     }
 }
 
+/// Otevře `http://127.0.0.1:<port>` ve výchozím prohlížeči.
+pub fn open_browser(port: u16) -> Result<(), String> {
+    std::process::Command::new("explorer.exe").arg(format!("http://127.0.0.1:{port}/")).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 #[path = "net_overview_live.rs"]
 mod live;
@@ -673,9 +686,4 @@ mod tests {
         assert_eq!(wsl.root_calls().len(), 2);
         assert_eq!(overview_privilege(Caps::WSL), Privilege::Root);
     }
-}
-
-/// Otevře `http://127.0.0.1:<port>` ve výchozím prohlížeči.
-pub fn open_browser(port: u16) -> Result<(), String> {
-    std::process::Command::new("explorer.exe").arg(format!("http://127.0.0.1:{port}/")).spawn().map(|_| ()).map_err(|e| e.to_string())
 }

@@ -1,11 +1,11 @@
 #!/bin/sh
 # Spouští se UVNITR WSLCD-Lite (jako root) ze scripts/linux-test.ps1.
-# Použití: linux-test.sh <check|test|live|package> <cesta k repu> [argumenty cargo... | verze]
+# Použití: linux-test.sh <check|clippy|test|live|package> <cesta k repu> [argumenty cargo... | verze]
 set -eu
 
 mode="${1:-}"
 repo="${2:-}"
-[ -n "$mode" ] && [ -n "$repo" ] || { echo "použití: $0 <check|test|live|package> <repo> [cargo args | verze]" >&2; exit 2; }
+[ -n "$mode" ] && [ -n "$repo" ] || { echo "použití: $0 <check|clippy|test|live|package> <repo> [cargo args | verze]" >&2; exit 2; }
 shift 2
 
 # live míří na skutečný engine WSLCD-Lite – bez filtru testů se odmítne.
@@ -21,6 +21,9 @@ target_vol="wslcd-rust-target-$(basename "$repo" | tr A-Z a-z | sed "s/[^a-z0-9-
 
 # Obraz se sestaví jen jednou (WSLCD_REBUILD=1 vynutí nové sestavení).
 if [ "${WSLCD_REBUILD:-0}" = 1 ] || ! podman image exists "$image"; then
+    podman build -t "$image" -f "$here/linux-dev.Containerfile" "$here"
+# starší obraz bez clippy se pro režim clippy sestaví znovu
+elif [ "$mode" = clippy ] && ! podman run --rm "$image" cargo clippy --version >/dev/null 2>&1; then
     podman build -t "$image" -f "$here/linux-dev.Containerfile" "$here"
 fi
 
@@ -44,6 +47,10 @@ package)
     ;;
 check)
     run "$image" cargo check --locked --bins --tests "$@"
+    ;;
+clippy)
+    # stejně jako CI (release.yml na Windows, linux.yml na Linuxu)
+    run "$image" cargo clippy --locked --all-targets "$@" -- -D warnings
     ;;
 test)
     run "$image" cargo test --locked "$@"
