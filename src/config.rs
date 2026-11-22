@@ -231,7 +231,7 @@ pub fn data_dir() -> Option<PathBuf> {
     // Linux: $XDG_DATA_HOME/wsl-container-desktop (výchozí ~/.local/share/...)
     #[cfg(all(not(test), not(windows)))]
     {
-        xdg_dirs(|k| std::env::var_os(k)).map(|(data, _)| data)
+        xdg_data_dir(|k| std::env::var_os(k))
     }
 }
 
@@ -253,6 +253,12 @@ pub fn xdg_config_home(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Opti
 #[cfg_attr(windows, allow(dead_code))]
 fn xdg_data_home(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
     abs_env(&env, "XDG_DATA_HOME").or_else(|| abs_env(&env, "HOME").map(|h| h.join(".local").join("share")))
+}
+
+/// Datová složka aplikace: jen `$XDG_DATA_HOME`/`$HOME` (konfigurace se k jejímu určení nepoužije).
+#[cfg_attr(windows, allow(dead_code))]
+pub fn xdg_data_dir(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    Some(xdg_data_home(&env)?.join(XDG_DIR))
 }
 
 /// Složky aplikace podle XDG: `(data, config)`. Čistá funkce, prostředí se předává zvenku.
@@ -350,6 +356,26 @@ fn path() -> Option<PathBuf> {
         return xdg_dirs(|k| std::env::var_os(k)).map(|(_, config)| config.join("config.json"));
     }
     data_dir().map(|d| d.join("config.json"))
+}
+
+/// Kde aplikace drží konfiguraci a data, jako text pro „O aplikaci“. Windows beze změny
+/// (`%APPDATA%\WSL_Container_Desktop`); Linux: skutečné cesty podle XDG (konfigurace a data
+/// zvlášť), s `WSLCD_DATA_DIR` nebo v portable režimu jedna složka.
+pub fn location_label() -> String {
+    #[cfg(windows)]
+    {
+        format!(r"%APPDATA%\{DATA_DIR}")
+    }
+    #[cfg(not(windows))]
+    {
+        let data = data_dir();
+        let cfg = path().and_then(|p| p.parent().map(PathBuf::from));
+        match (cfg, data) {
+            (Some(c), Some(d)) if c != d => format!("{} + {}", c.display(), d.display()),
+            (Some(p), _) | (None, Some(p)) => p.display().to_string(),
+            (None, None) => "?".to_string(),
+        }
+    }
 }
 
 impl Config {
@@ -471,6 +497,15 @@ mod xdg_tests {
         assert!(super::xdg_dirs(env(&[])).is_none());
         // jen XDG bez HOME stačí
         assert!(super::xdg_dirs(env(&[("XDG_DATA_HOME", "/x/data"), ("XDG_CONFIG_HOME", "/x/cfg")])).is_some());
+    }
+
+    #[test]
+    fn xdg_data_dir_needs_only_data_home() {
+        // XDG_DATA_HOME bez XDG_CONFIG_HOME a bez HOME stačí
+        assert_eq!(super::xdg_data_dir(env(&[("XDG_DATA_HOME", "/x/data")])), Some(PathBuf::from("/x/data").join(super::XDG_DIR)));
+        // jinak výchozí podle HOME; bez obojího nic
+        assert_eq!(super::xdg_data_dir(env(&[("HOME", "/h")])), Some(PathBuf::from("/h/.local/share").join(super::XDG_DIR)));
+        assert!(super::xdg_data_dir(env(&[("XDG_CONFIG_HOME", "/x/cfg")])).is_none());
     }
 
     #[test]

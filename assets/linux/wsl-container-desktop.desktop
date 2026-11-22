@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=WSL Container Desktop
+GenericName=Container manager
+Comment=Docker and Podman containers, images, volumes and compose stacks
+Exec=wsl-container-desktop
+Icon=wsl-container-desktop
+Terminal=false
+Categories=Development;System;
+Keywords=docker;podman;container;compose;
+StartupWMClass=wsl-container-desktop

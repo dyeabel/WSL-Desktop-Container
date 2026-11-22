@@ -1,11 +1,11 @@
 #!/bin/sh
 # Spouští se UVNITR WSLCD-Lite (jako root) ze scripts/linux-test.ps1.
-# Použití: linux-test.sh <check|test|live> <cesta k repu> [argumenty cargo...]
+# Použití: linux-test.sh <check|test|live|package> <cesta k repu> [argumenty cargo... | verze]
 set -eu
 
 mode="${1:-}"
 repo="${2:-}"
-[ -n "$mode" ] && [ -n "$repo" ] || { echo "použití: $0 <check|test|live> <repo> [cargo args]" >&2; exit 2; }
+[ -n "$mode" ] && [ -n "$repo" ] || { echo "použití: $0 <check|test|live|package> <repo> [cargo args | verze]" >&2; exit 2; }
 shift 2
 
 # live míří na skutečný engine WSLCD-Lite – bez filtru testů se odmítne.
@@ -36,6 +36,12 @@ run() {
 }
 
 case "$mode" in
+package)
+    # Repo zůstává jen pro čtení; do repa se zapisuje jen složka dist/ (ignorovaná gitem).
+    [ -n "${1:-}" ] || { echo "package vyžaduje verzi, např.: linux-test.ps1 package 0.9.0-dev" >&2; exit 2; }
+    mkdir -p "$repo/dist"
+    run -v "$repo/dist:/dist" -e WSLCD_DIST=/dist "$image" sh scripts/package-linux.sh "$1"
+    ;;
 check)
     run "$image" cargo check --locked --bins --tests "$@"
     ;;

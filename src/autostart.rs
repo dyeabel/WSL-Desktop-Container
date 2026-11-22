@@ -26,18 +26,24 @@ fn command() -> Option<String> {
 const DESKTOP_FILE: &str = "wsl-container-desktop.desktop";
 
 /// Hodnota `Exec`: cesta (podle Desktop Entry Specification v uvozovkách, když obsahuje
-/// mezeru nebo speciální znak) a `--autostart`. `%` se zdvojuje (jinak je to zástupný kód).
+/// mezeru nebo speciální znak) a `--autostart`. Nejdřív platí pravidlo pro `Exec` (uvnitř
+/// uvozovek se `"`, `` ` ``, `$` a `\` uvozují zpětným lomítkem), potom obecné escapování
+/// řetězce (každé `\` se zdvojí): literální `$` tak skončí v souboru jako `\\$`, `\` jako
+/// `\\\\`. `%` se zdvojuje (jinak je to zástupný kód). Zalomení řádku v cestě by rozbilo
+/// soubor, proto se nahradí mezerou.
 #[cfg_attr(windows, allow(dead_code))]
 fn exec_line(exe: &std::path::Path) -> String {
-    let p = exe.display().to_string().replace('%', "%%");
-    let special = p.chars().any(|c| " \t\n\"'\\><~|&;$*?#()`".contains(c));
+    let p = exe.display().to_string().replace('%', "%%").replace(['\n', '\r'], " ");
+    let special = p.chars().any(|c| " \t\"'\\><~|&;$*?#()`".contains(c));
     if !special {
         return format!("{p} {ARG}");
     }
     let mut q = String::from("\"");
     for c in p.chars() {
-        if matches!(c, '"' | '`' | '$' | '\\') {
-            q.push('\\');
+        match c {
+            '"' | '`' | '$' => q.push_str("\\\\"),
+            '\\' => q.push_str("\\\\\\"),
+            _ => {}
         }
         q.push(c);
     }
@@ -226,28 +232,33 @@ mod tests {
     #[test]
     fn autostart_desktop_file_content() {
         let c = super::desktop_file_content(Path::new("/opt/wslcd/wsl-container-desktop"));
-        assert!(c.starts_with("[Desktop Entry]
-"));
-        assert!(c.contains("
-Type=Application
-"));
-        assert!(c.contains("
-Name=WSL Container Desktop
-"));
-        assert!(c.contains("
-Exec=/opt/wslcd/wsl-container-desktop --autostart
-"));
-        assert!(c.contains("
-Terminal=false
-"));
+        assert!(c.starts_with("[Desktop Entry]\n"));
+        assert!(c.contains("\nType=Application\n"));
+        assert!(c.contains("\nName=WSL Container Desktop\n"));
+        assert!(c.contains("\nExec=/opt/wslcd/wsl-container-desktop --autostart\n"));
+        assert!(c.contains("\nTerminal=false\n"));
     }
 
     #[test]
     fn desktop_exec_is_quoted() {
         // mezera a speciální znaky → uvozovky a escapování podle Desktop Entry Specification
         assert_eq!(super::exec_line(Path::new("/home/u/my apps/app")), "\"/home/u/my apps/app\" --autostart");
-        assert_eq!(super::exec_line(Path::new("/a/$b")), "\"/a/\\$b\" --autostart");
+        // `$`: pravidlo pro Exec dá `\$`, obecné escapování řetězce zdvojí `\` → `\\$`
+        assert_eq!(super::exec_line(Path::new("/a/$b")), "\"/a/\\\\$b\" --autostart");
+        assert_eq!(super::exec_line(Path::new("/a/\"b\"")), "\"/a/\\\\\"b\\\\\"\" --autostart");
+        assert_eq!(super::exec_line(Path::new("/a/`b")), "\"/a/\\\\`b\" --autostart");
+        // `\` → `\\` → `\\\\`
+        assert_eq!(super::exec_line(Path::new("/a/b\\c")), "\"/a/b\\\\\\\\c\" --autostart");
         assert_eq!(super::exec_line(Path::new("/a/100%")), "/a/100%% --autostart");
+    }
+
+    #[test]
+    fn desktop_exec_has_no_line_break() {
+        // zalomení v cestě by rozdělilo hodnotu na dva řádky souboru
+        let l = super::exec_line(Path::new("/a/b\nExec=/evil\r/c"));
+        assert!(!l.contains('\n') && !l.contains('\r'));
+        let c = super::desktop_file_content(Path::new("/a/b\nExec=/evil"));
+        assert_eq!(c.lines().filter(|l| l.starts_with("Exec=")).count(), 1);
     }
 
     #[test]
@@ -255,16 +266,12 @@ Terminal=false
         let c = super::desktop_file_content(Path::new("/old/app"));
         assert_eq!(super::exec_of(&c).as_deref(), Some("/old/app --autostart"));
         let n = super::with_exec(&c, "/new/app --autostart").unwrap();
-        assert!(n.contains("
-Exec=/new/app --autostart
-") && !n.contains("/old/app"));
+        assert!(n.contains("\nExec=/new/app --autostart\n") && !n.contains("/old/app"));
         assert_eq!(n.lines().count(), c.lines().count());
         // stejná hodnota → nic k přepsání
         assert!(super::with_exec(&c, "/old/app --autostart").is_none());
         // soubor bez Exec se nepřepisuje
-        assert!(super::with_exec("[Desktop Entry]
-Name=x
-", "/a").is_none());
+        assert!(super::with_exec("[Desktop Entry]\nName=x\n", "/a").is_none());
     }
 
     #[test]

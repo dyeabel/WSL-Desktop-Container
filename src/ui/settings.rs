@@ -534,9 +534,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
         section(ui, t!("O aplikaci", "About"));
         ui.label(muted(tf!(
-            "WSL Container Desktop {} · Rust + egui · Docker API přes tcp://127.0.0.1 · konfigurace v %APPDATA%\\WSL_Container_Desktop",
-            "WSL Container Desktop {} · Rust + egui · Docker API via tcp://127.0.0.1 · configuration in %APPDATA%\\WSL_Container_Desktop",
-            env!("CARGO_PKG_VERSION")
+            "WSL Container Desktop {} · Rust + egui · Docker API přes tcp://127.0.0.1 · konfigurace v {}",
+            "WSL Container Desktop {} · Rust + egui · Docker API via tcp://127.0.0.1 · configuration in {}",
+            env!("CARGO_PKG_VERSION"),
+            crate::config::location_label()
         )));
     }
 
