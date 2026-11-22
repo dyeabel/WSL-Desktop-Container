@@ -598,8 +598,8 @@ no engine setup, no changes to `docker.service`, groups or system files.
 
 **Works:** containers, images, volumes, networks, compose stacks, Kubernetes lab, logs, stats, files
 inside containers, builds, volume backups, the Events page and notifications (`notify-send`),
-start at login (XDG autostart file `~/.config/autostart/wsl-container-desktop.desktop`), the tray
-icon (needs a desktop with AppIndicator / StatusNotifier support; GNOME needs an extension).
+start at login (XDG autostart file `~/.config/autostart/wsl-container-desktop.desktop`).
+There is **no tray icon on Linux yet**: closing the window quits the app.
 
 **Not available** (hidden in the UI): everything that belongs to WSL – distributions and the
 *WSL engine* page, Add distribution wizard, WSL memory and VHDX disk tools, `.wslconfig`, the
@@ -615,7 +615,7 @@ data in `$XDG_DATA_HOME/wsl-container-desktop` (default `~/.local/share/...`).
 
 **Package.** Releases carry `WSL-Container-Desktop-<version>-linux-x64.tar.gz` (+ `.sha256`) with
 the binary, a `.desktop` file, the icon and `README-linux.txt`. Runtime libraries (Debian / Ubuntu):
-`libgtk-3-0`, `libxdo3`, `libayatana-appindicator3-1`; optionally `libnotify-bin`. To build it
+`libgtk-3-0`, `libxdo3`, `libayatana-appindicator3-1` (the binary links them, no tray is shown); optionally `libnotify-bin`. To build it
 yourself:
 
 ```bash

@@ -82,14 +82,15 @@ fn main() -> eframe::Result<()> {
         autostart::fix_path();
         wake::record_app_path();
     });
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("WSL Container Desktop")
-            .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([900.0, 560.0])
-            .with_icon(theme::app_icon()),
-        ..Default::default()
-    };
+    let viewport = eframe::egui::ViewportBuilder::default()
+        .with_title("WSL Container Desktop")
+        .with_inner_size([1280.0, 800.0])
+        .with_min_inner_size([900.0, 560.0])
+        .with_icon(theme::app_icon());
+    // Linux: app id musí odpovídat StartupWMClass v .desktop souboru (seskupení oken, ikona)
+    #[cfg(not(windows))]
+    let viewport = viewport.with_app_id("wsl-container-desktop");
+    let options = eframe::NativeOptions { viewport, ..Default::default() };
     let r = eframe::run_native(
         "WSL Container Desktop",
         options,

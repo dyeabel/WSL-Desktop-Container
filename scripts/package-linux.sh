@@ -38,8 +38,9 @@ Ovládací panel pro Docker a Podman: kontejnery, obrazy, svazky, sítě a compo
 Na Linuxu aplikace nic neinstaluje ani nenastavuje; jen se připojí k existujícímu enginu.
 
 Požadavky
-  - GTK 3 a knihovny pro oznamovací oblast (Debian/Ubuntu: libgtk-3-0, libxdo3,
-    libayatana-appindicator3-1); volitelně notify-send (libnotify-bin) pro oznámení.
+  - GTK 3 a sdílené knihovny, se kterými je binárka sestavená (Debian/Ubuntu: libgtk-3-0,
+    libxdo3, libayatana-appindicator3-1); volitelně notify-send (libnotify-bin) pro oznámení.
+    Ikona v oznamovací oblasti na Linuxu zatím není, zavření okna aplikaci ukončí.
   - Přístup k socketu enginu:
       Docker          /var/run/docker.sock – uživatel musí být ve skupině "docker"
                       (sudo usermod -aG docker \$USER, pak se znovu přihlásit)
@@ -49,7 +50,8 @@ Požadavky
 Spuštění
   ./wsl-container-desktop
 
-Volitelně do nabídky aplikací (jen pro aktuálního uživatele):
+Volitelně do nabídky aplikací (jen pro aktuálního uživatele; ~/.local/bin musí být v PATH,
+jinak v .desktop souboru nahraďte Exec úplnou cestou k binárce):
   install -Dm755 wsl-container-desktop ~/.local/bin/wsl-container-desktop
   install -Dm644 wsl-container-desktop.png ~/.local/share/icons/hicolor/512x512/apps/wsl-container-desktop.png
   install -Dm644 wsl-container-desktop.desktop ~/.local/share/applications/wsl-container-desktop.desktop
