@@ -16,6 +16,9 @@
 //!
 //! Když aplikace nebo engine neběží, první příkaz je nahodí a počká na API (`autowake.rs`).
 //!
+//! Jen `wslcd.exe` má navíc příkazy `status`, `distro`, `engine`, `memory` a `metrics` (`wslcmd.rs`),
+//! které ovládají běžící aplikaci přes její řídicí rouru.
+//!
 //! WSLCD_SHIM_DEBUG=1 vypíše na stderr, co se spouští (včetně vybraného kontextu).
 
 #[path = "../config.rs"]
@@ -48,6 +51,7 @@ mod envfwd;
 mod events;
 mod fast;
 mod podmanfix;
+mod wslcmd;
 
 use std::io::Write;
 use std::process::{Command, ExitCode};
@@ -96,6 +100,19 @@ fn main() -> ExitCode {
     };
     if exe_name == Invoked::Compose && args.first().map(|a| a != "compose").unwrap_or(true) {
         args.insert(0, "compose".into());
+    }
+
+    // jen wslcd.exe: příkazy navíc pro ovládání aplikace (status, distro, engine, memory, metrics)
+    if exe_name == Invoked::Wslcd {
+        if let Some(parsed) = wslcmd::parse(&args) {
+            return match parsed {
+                Ok(a) => ExitCode::from(wslcmd::run(a, std::env::var("WSLCD_SHIM_DEBUG").is_ok())),
+                Err(e) => {
+                    eprintln!("wslcd: {e}");
+                    ExitCode::from(2)
+                }
+            };
+        }
     }
 
     let mut cfg = config::Config::load();

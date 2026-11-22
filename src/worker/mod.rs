@@ -6,6 +6,7 @@ pub(crate) mod build;
 pub(crate) mod compose;
 mod container_fs;
 mod containers;
+mod control;
 mod detail;
 mod distro;
 mod distro_manage;
@@ -427,6 +428,8 @@ impl Worker {
         crate::wake::listen(move || {
             let _ = tx.send(Cmd::EngineStart);
         });
+        // řídicí roura pro `wslcd status | distro | engine | memory | metrics`
+        control::start(self.clone());
         self.refresh();
         self.spawn_events();
         let pool = self.spawn_pool(POOL_THREADS);
@@ -677,6 +680,11 @@ impl Worker {
     }
 
     fn exec(&self, cmd: Cmd) {
+        let _ = self.exec_report(cmd);
+    }
+
+    /// Jako `exec`, ale vrátí i výsledek (řídicí roura `wslcd`).
+    fn exec_report(&self, cmd: Cmd) -> Result<String, String> {
         self.shared.busy.fetch_add(1, Ordering::SeqCst);
         self.ctx.request_repaint();
         let is_fs = matches!(cmd, Cmd::Fs { .. } | Cmd::ContainerFs { .. } | Cmd::HubSearch(_) | Cmd::HubTags(_) | Cmd::ListOnline | Cmd::Inspect(_) | Cmd::VolumeSizes)
@@ -695,7 +703,7 @@ impl Worker {
         }
         drop(act);
         self.shared.busy.fetch_sub(1, Ordering::SeqCst);
-        match res {
+        match &res {
             Ok(s) if !s.trim().is_empty() => self.send(Msg::Toast(true, s.trim().to_string())),
             Ok(_) => {}
             Err(e) => self.send(Msg::Toast(false, e.trim().to_string())),
@@ -703,6 +711,7 @@ impl Worker {
         if !is_fs {
             let _ = self.cmd.send(Cmd::Refresh);
         }
+        res
     }
 
     fn exec_inner(&self, cmd: Cmd) -> Result<String, String> {

@@ -482,6 +482,12 @@ path translation and `wslcd compose …` – but it always targets the WSL Conta
 or another engine. `wslcd --context <app context>` still works. It is installed next to `docker.exe`
 (*Add to PATH*, portable package: already in the app folder) and removed together with it.
 
+`wslcd` (not `docker`) also has commands that control the app from the command line – for scripts
+and automated tests: `wslcd status`, `wslcd distro ls|use|start|stop`, `wslcd engine start|stop|restart`,
+`wslcd memory free` and `wslcd metrics` (memory and CPU counters of the app, Windows, the WSL VM and
+containers), all with `--json`. They talk to the running app over a per-user named pipe and start it
+when needed. See [docs/WSLCD-CLI.md](docs/WSLCD-CLI.md) (`wslcd help-wslcd`).
+
 Install it from *WSL engine → Install & setup* (or *Settings*): it is copied to
 `%LOCALAPPDATA%\WSL_Container_Desktop\bin` and that folder is added to the user PATH (no admin rights).
 The check reads PATH from the registry (machine, then user – what a new terminal sees) and warns

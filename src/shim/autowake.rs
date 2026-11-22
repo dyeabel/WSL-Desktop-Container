@@ -42,7 +42,7 @@ fn stop_std_inheritance() {
     }
 }
 
-fn launch_app() -> Result<(), String> {
+pub fn launch_app() -> Result<(), String> {
     let exe = wake::app_exe().ok_or("WSL Container Desktop not found")?;
     #[cfg(windows)]
     stop_std_inheritance();

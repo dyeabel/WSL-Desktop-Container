@@ -17,6 +17,17 @@ pub const EVENT: &str = "Local\\WSL-Container-Desktop-start-engine";
 pub const SHIM_ARG: &str = "--from-shim";
 pub const APP_PATH_FILE: &str = "app-path.txt";
 
+/// Řídicí roura běžící aplikace pro `wslcd status | distro | engine | memory | metrics`
+/// (název obsahuje jméno uživatele; přístup má jen on, viz DACL v `npipe.rs`).
+pub fn control_pipe_name() -> String {
+    let user: String = std::env::var("USERNAME")
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    format!(r"\\.\pipe\wsl-container-desktop-control-{user}")
+}
+
 /// Spustil aplikaci docker shim?
 pub fn launched_from_shim() -> bool {
     std::env::args().any(|a| a == SHIM_ARG)

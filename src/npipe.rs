@@ -35,6 +35,10 @@ pub enum Target {
     Tls(u16, Arc<rustls::ClientConfig>),
 }
 
+/// Obsluha jednoho spojení na rouře (server).
+#[cfg(windows)]
+pub type ConnFn = Arc<dyn Fn(Arc<win::Pipe>) + Send + Sync>;
+
 /// Zjistí cíl pro nové spojení (čte se při každém spojení – změna režimu se projeví hned).
 pub type TargetFn = Arc<dyn Fn() -> Result<Target, String> + Send + Sync>;
 
@@ -390,6 +394,13 @@ impl Relay {
     /// vrátila hned) a spustí přijímací vlákno.
     #[cfg(windows)]
     pub fn start(name: &str, target: TargetFn) -> Result<Relay, String> {
+        Relay::serve_with(name, Arc::new(move |pipe| serve(pipe, target.clone())))
+    }
+
+    /// Obecný server roury: každé spojení obslouží `on_conn` ve vlastním vlákně
+    /// (stejná DACL i ochrana proti squattingu jako relay Dockeru). Používá i řídicí roura `wslcd`.
+    #[cfg(windows)]
+    pub fn serve_with(name: &str, on_conn: ConnFn) -> Result<Relay, String> {
         let sd = win::security_descriptor(&sddl_for_sid(&win::current_user_sid()?)?)?;
         let wname = win::wide(name);
         let stop = Arc::new(AtomicBool::new(false));
@@ -397,7 +408,7 @@ impl Relay {
         let st = stop.clone();
         let thread = thread::Builder::new()
             .name("npipe-accept".into())
-            .spawn(move || accept_loop(wname, sd, first, st, target))
+            .spawn(move || accept_loop(wname, sd, first, st, on_conn))
             .map_err(|e| e.to_string())?;
         Ok(Relay { stop, thread: Some(thread) })
     }
@@ -409,7 +420,7 @@ impl Relay {
 }
 
 #[cfg(windows)]
-fn accept_loop(wname: Vec<u16>, sd: win::SecDesc, first: Pipe, stop: Arc<AtomicBool>, target: TargetFn) {
+fn accept_loop(wname: Vec<u16>, sd: win::SecDesc, first: Pipe, stop: Arc<AtomicBool>, on_conn: ConnFn) {
     let mut next = Some(first);
     while !stop.load(Ordering::SeqCst) {
         let pipe = match next.take() {
@@ -431,8 +442,8 @@ fn accept_loop(wname: Vec<u16>, sd: win::SecDesc, first: Pipe, stop: Arc<AtomicB
         }
         // další instanci připravit hned, ať klienti nečekají
         next = Pipe::create(&wname, false, &sd, stop.clone()).ok();
-        let t = target.clone();
-        let _ = thread::Builder::new().name("npipe-conn".into()).spawn(move || serve(Arc::new(pipe), t));
+        let f = on_conn.clone();
+        let _ = thread::Builder::new().name("npipe-conn".into()).spawn(move || f(Arc::new(pipe)));
     }
 }
 
