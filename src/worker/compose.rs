@@ -137,7 +137,7 @@ impl Worker {
     pub(super) fn compose(&self, dir: String, project: Option<String>, args: Vec<String>) -> Result<String, String> {
         let cfg = self.cfg();
         let host = self.host();
-        let mut a: Vec<String> = cfg.engine.cli(cfg.port, cfg.tls);
+        let mut a: Vec<String> = cfg.engine.cli_for(&host.engine_endpoint(&cfg), cfg.tls);
         a.push("compose".into());
         if let Some(p) = &project {
             a.extend(["-p".into(), p.clone()]);
@@ -210,7 +210,7 @@ echo nofile"#;
         let cfg = self.cfg();
         let host = self.host();
         let host = host.as_ref();
-        let cli = cfg.engine.cli(cfg.port, cfg.tls);
+        let cli = cfg.engine.cli_for(&host.engine_endpoint(&cfg), cfg.tls);
         match op {
             StackOp::Create(spec) => {
                 let project = spec.project.clone();

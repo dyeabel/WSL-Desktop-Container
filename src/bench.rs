@@ -29,6 +29,7 @@
 use crate::config::Config;
 use crate::docker::Docker;
 use crate::engine::Engine;
+use crate::http::Endpoint;
 use crate::wsl;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -248,7 +249,7 @@ impl Target {
     }
     /// CLI enginu uvnitř distribuce (Podman v TLS režimu přes unix socket aplikace).
     fn cli(&self) -> Vec<String> {
-        self.engine.cli(self.port, true)
+        self.engine.cli_for(&Endpoint::Tcp { port: self.port }, true)
     }
     fn shim(&self, exe: &Path) -> Command {
         let mut c = wsl::hidden(&exe.to_string_lossy());
@@ -393,7 +394,7 @@ fn checks(t: &Target, shim: Option<&Path>) -> Vec<Check> {
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         std::fs::write(dir.join("Dockerfile"), format!("FROM {IMAGE}\nRUN echo built > /built\nLABEL wslcd-bench=1\n")).map_err(|e| e.to_string())?;
         let spec = crate::worker::BuildSpec { context: dir.to_string_lossy().into(), tags: format!("{PREFIX}-build:1"), ..Default::default() };
-        crate::worker::build::run_build(&crate::host::wsl::WslHost::new(&t.distro), t.engine, t.port, true, &spec, |_| {})?;
+        crate::worker::build::run_build(&crate::host::wsl::WslHost::new(&t.distro), t.engine, &Endpoint::Tcp { port: t.port }, true, &spec, |_| {})?;
         let _ = d.delete(&format!("/images/{PREFIX}-build:1?force=1"));
         Ok(String::new())
     });

@@ -18,8 +18,8 @@ impl<F: Fn(&[&str]) -> Result<String, String>> Drop for Cleanup<F> {
 
 /// CLI enginu v distribuci jako funkce (pro `Cleanup`).
 fn engine_cli(cfg: &Config) -> impl Fn(&[&str]) -> Result<String, String> + use<> {
-    let cli = cfg.engine.cli(cfg.port, cfg.tls);
     let host = crate::host::current(cfg);
+    let cli = cfg.engine.cli_for(&host.engine_endpoint(cfg), cfg.tls);
     move |args: &[&str]| {
         let mut v = cli.clone();
         v.extend(args.iter().map(|s| s.to_string()));

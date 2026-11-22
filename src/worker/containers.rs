@@ -15,7 +15,7 @@ impl Worker {
         let host = self.host();
         let d = self.docker();
         let image = crate::engine::short_image(spec.image.trim());
-        let args = spec.args_for(cfg.engine, cfg.port, cfg.tls);
+        let args = spec.args_for(cfg.engine, &host.engine_endpoint(&cfg), cfg.tls);
         if spec.interactive {
             // interaktivně ve Windows Terminalu – kontejner se po ukončení smaže (--rm)
             let w: Vec<&str> = args.iter().map(|a| a.as_str()).collect();
@@ -31,7 +31,7 @@ impl Worker {
             let file = host.run_stdin(Privilege::User, &["sh", "-c", ENV_FILE_SCRIPT], &format!("{}\n", env.join("\n")))?;
             let file = file.trim().to_string();
             let spec2 = RunSpec { env: String::new(), ..spec.clone() };
-            let mut a = spec2.args_for(cfg.engine, cfg.port, cfg.tls);
+            let mut a = spec2.args_for(cfg.engine, &host.engine_endpoint(&cfg), cfg.tls);
             let at = a.iter().position(|x| x == "-d").map(|i| i + 1).unwrap_or(a.len());
             a.splice(at..at, ["--env-file".to_string(), file.clone()]);
             (a, Some(file))
@@ -84,7 +84,7 @@ impl Worker {
         let cfg = self.cfg();
         let host = self.host();
         let shell = "command -v bash >/dev/null && exec bash || exec sh";
-        let cli = cfg.engine.cli(cfg.port, cfg.tls);
+        let cli = cfg.engine.cli_for(&host.engine_endpoint(&cfg), cfg.tls);
         // příkaz enginu v distribuci hostitele, v novém terminálu
         let open_cli = |title: &str, rest: &[&str]| {
             let mut v: Vec<&str> = cli.iter().map(|a| a.as_str()).collect();

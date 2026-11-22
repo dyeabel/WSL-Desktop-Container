@@ -3,7 +3,10 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+#[cfg(any(unix, test))]
 pub mod discover;
+#[cfg(unix)]
+pub mod local;
 pub mod wsl;
 
 use crate::activity;
@@ -111,7 +114,7 @@ pub struct Caps {
 
 impl Caps {
     pub const WSL: Caps = Caps::all(true);
-    #[allow(dead_code)] // použije místní (Linux) hostitel
+    #[cfg_attr(windows, allow(dead_code))] // jen místní (Linux) hostitel
     pub const LOCAL: Caps = Caps::all(false);
 
     const fn all(v: bool) -> Caps {
@@ -137,6 +140,8 @@ impl Caps {
 pub trait Host: Send + Sync {
     fn kind(&self) -> HostKind;
 
+    // UI bere schopnosti z `current_caps()` (konstanta bez vytváření hostitele)
+    #[allow(dead_code)]
     fn caps(&self) -> Caps;
 
     #[allow(dead_code)] // použije se u dalších hostitelů (Linux, Windows)
@@ -165,9 +170,37 @@ pub trait Host: Send + Sync {
     }
 }
 
-/// Aktuální hostitel podle konfigurace (nic se necachuje).
+/// Aktuální hostitel podle konfigurace (nic se necachuje): na Windows distribuce WSL,
+/// na Linuxu místní procesy.
+#[cfg(not(unix))]
 pub fn current(cfg: &Config) -> Arc<dyn Host> {
     Arc::new(wsl::WslHost::new(&cfg.distro))
+}
+
+/// Aktuální hostitel (nic se necachuje): na Linuxu místní procesy.
+#[cfg(unix)]
+pub fn current(_cfg: &Config) -> Arc<dyn Host> {
+    Arc::new(local::LocalHost::new())
+}
+
+/// Druh aktuálního hostitele (konstanta podle platformy, bez vytváření hostitele).
+pub fn current_kind() -> HostKind {
+    if cfg!(unix) { HostKind::Local } else { HostKind::Wsl }
+}
+
+/// Schopnosti aktuálního hostitele (konstanta podle platformy; volá se z UI v každém snímku).
+pub fn current_caps() -> Caps {
+    #[cfg(unix)]
+    return Caps::LOCAL;
+    #[cfg(not(unix))]
+    Caps::WSL
+}
+
+/// Zahodí uložený výsledek hledání enginu (Linux), ať se při příštím použití hledá znovu.
+/// Na Windows nic nedělá.
+pub fn refresh_discovery() {
+    #[cfg(unix)]
+    local::refresh_discovery();
 }
 
 /// Kudy se z aplikace dostaneme k API enginu aktuálního hostitele.
@@ -231,6 +264,36 @@ pub fn finish(out: ExecOut) -> Result<String, HostError> {
     }
 }
 
+/// Spustí připravený příkaz a počká na výstup. Vstup (je-li) píše samostatné vlákno, ať se
+/// nezablokuje: proces s velkým výstupem by jinak čekal na vyčtení stdout, zatímco my čekáme
+/// na zápis do stdin. Předčasně skončený proces (broken pipe) není chyba – zajímá nás jeho výstup.
+pub(crate) fn output_with_stdin(cmd: &mut std::process::Command, stdin: Option<&[u8]>) -> Result<ExecOut, HostError> {
+    use std::io::Write;
+    use std::process::Stdio;
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let out = match stdin {
+        None => cmd.stdin(Stdio::null()).output().map_err(|e| e.to_string())?,
+        Some(input) => {
+            let mut child = cmd.stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+            let si = child.stdin.take();
+            std::thread::scope(|s| {
+                let writer = s.spawn(move || match si {
+                    // `si` se po zápisu zahodí -> proces dostane EOF
+                    Some(mut si) => si.write_all(input),
+                    None => Ok(()),
+                });
+                let out = child.wait_with_output().map_err(|e| e.to_string());
+                match writer.join() {
+                    Ok(Err(e)) if e.kind() != std::io::ErrorKind::BrokenPipe => Err(HostError::from(e.to_string())),
+                    Ok(_) => Ok(out?),
+                    Err(_) => Err(HostError::from(crate::t!("zápis vstupu procesu selhal", "writing process input failed").to_string())),
+                }
+            })?
+        }
+    };
+    Ok(ExecOut { code: out.status.code().unwrap_or(-1), stdout: out.stdout, stderr: out.stderr })
+}
+
 /// Záznam pro požadavek: žádný, když je `quiet`.
 pub(crate) fn track_req(label: &str, req: &ExecReq) -> Option<activity::Guard> {
     req.track.then(|| track(label, req.privilege, req.args))
@@ -268,6 +331,13 @@ mod tests {
         assert_eq!(h.kind(), HostKind::Wsl);
         assert_eq!(h.caps(), Caps::WSL);
         assert!(flags(h.caps()).iter().all(|v| *v));
+    }
+
+    #[test]
+    fn current_constants_match_current_host() {
+        let h = current(&Config::default());
+        assert_eq!(current_caps(), h.caps());
+        assert_eq!(current_kind(), h.kind());
     }
 
     #[test]
