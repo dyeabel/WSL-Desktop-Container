@@ -369,6 +369,8 @@ impl Worker {
             }
             match rx.recv_timeout(Duration::from_secs(secs)) {
                 Ok(Cmd::Refresh) => {
+                    // výslovné obnovení: engine hledat znovu (Linux)
+                    crate::host::refresh_discovery();
                     // sloučit nahromaděné požadavky na obnovení
                     while let Ok(Cmd::Refresh) = rx.try_recv() {}
                     self.refresh()
@@ -477,13 +479,18 @@ impl Worker {
     fn detect_local_engine(&self) {
         let Ok(v) = self.docker().get::<serde_json::Value>("/version") else { return };
         let Some(engine) = crate::engine::Engine::from_version(&v) else { return };
-        if let Ok(mut g) = self.cfg.write() {
-            if g.engine != engine {
+        // zámek konfigurace jen na změnu, uložení až po jeho uvolnění
+        let changed = match self.cfg.write() {
+            Ok(mut g) if g.engine != engine => {
                 g.engine = engine;
-                let _ = g.save();
+                Some(g.clone())
             }
+            _ => None,
+        };
+        if let Some(c) = changed {
+            let _ = c.save();
+            self.ctx.request_repaint();
         }
-        self.ctx.request_repaint();
     }
 
     fn check_engine(&self) {
@@ -632,7 +639,10 @@ impl Worker {
                 }
                 WslCmd::SetDefault(n) => wsl::set_default(&n).map(|_| tf!("{n} je nyní výchozí distribuce", "{n} is now the default distribution")).map_err(String::from),
             },
-            Cmd::EngineStart => self.engine_start(),
+            Cmd::EngineStart => {
+                crate::host::refresh_discovery();
+                self.engine_start()
+            }
             Cmd::EngineStop => self.engine_stop(),
             Cmd::EngineRestart => self.engine_restart(),
             Cmd::SetupEngine => self.setup_api(&cfg).map(|(out, _)| out),

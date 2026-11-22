@@ -435,11 +435,11 @@ impl App {
 
     /// Schopnosti aktuálního hostitele; UI podle nich skrývá funkce jen pro WSL.
     pub fn caps(&self) -> crate::host::Caps {
-        self.cfg.read().map(|c| crate::host::current(&c).caps()).unwrap_or(crate::host::Caps::WSL)
+        crate::host::current_caps()
     }
 
     pub fn kind(&self) -> crate::host::HostKind {
-        self.cfg.read().map(|c| crate::host::current(&c).kind()).unwrap_or(crate::host::HostKind::Wsl)
+        crate::host::current_kind()
     }
 
     pub fn distro(&self) -> String {

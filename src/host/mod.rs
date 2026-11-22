@@ -140,6 +140,8 @@ impl Caps {
 pub trait Host: Send + Sync {
     fn kind(&self) -> HostKind;
 
+    // UI bere schopnosti z `current_caps()` (konstanta bez vytváření hostitele)
+    #[allow(dead_code)]
     fn caps(&self) -> Caps;
 
     #[allow(dead_code)] // použije se u dalších hostitelů (Linux, Windows)
@@ -179,6 +181,26 @@ pub fn current(cfg: &Config) -> Arc<dyn Host> {
 #[cfg(unix)]
 pub fn current(_cfg: &Config) -> Arc<dyn Host> {
     Arc::new(local::LocalHost::new())
+}
+
+/// Druh aktuálního hostitele (konstanta podle platformy, bez vytváření hostitele).
+pub fn current_kind() -> HostKind {
+    if cfg!(unix) { HostKind::Local } else { HostKind::Wsl }
+}
+
+/// Schopnosti aktuálního hostitele (konstanta podle platformy; volá se z UI v každém snímku).
+pub fn current_caps() -> Caps {
+    #[cfg(unix)]
+    return Caps::LOCAL;
+    #[cfg(not(unix))]
+    Caps::WSL
+}
+
+/// Zahodí uložený výsledek hledání enginu (Linux), ať se při příštím použití hledá znovu.
+/// Na Windows nic nedělá.
+pub fn refresh_discovery() {
+    #[cfg(unix)]
+    local::refresh_discovery();
 }
 
 /// Kudy se z aplikace dostaneme k API enginu aktuálního hostitele.
@@ -264,7 +286,7 @@ pub(crate) fn output_with_stdin(cmd: &mut std::process::Command, stdin: Option<&
                 match writer.join() {
                     Ok(Err(e)) if e.kind() != std::io::ErrorKind::BrokenPipe => Err(HostError::from(e.to_string())),
                     Ok(_) => Ok(out?),
-                    Err(_) => Err(HostError::from("zápis vstupu procesu selhal".to_string())),
+                    Err(_) => Err(HostError::from(crate::t!("zápis vstupu procesu selhal", "writing process input failed").to_string())),
                 }
             })?
         }
@@ -309,6 +331,13 @@ mod tests {
         assert_eq!(h.kind(), HostKind::Wsl);
         assert_eq!(h.caps(), Caps::WSL);
         assert!(flags(h.caps()).iter().all(|v| *v));
+    }
+
+    #[test]
+    fn current_constants_match_current_host() {
+        let h = current(&Config::default());
+        assert_eq!(current_caps(), h.caps());
+        assert_eq!(current_kind(), h.kind());
     }
 
     #[test]

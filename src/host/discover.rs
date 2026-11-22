@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::http::Endpoint;
 
 /// Co se našlo.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Found {
     Endpoint(Endpoint),
     /// Vzdálený engine (nepodporovaný), text je původní adresa.
@@ -68,7 +68,9 @@ fn context_host(env: &dyn Fn(&str) -> Option<String>, home: &Path) -> Option<Str
     // DOCKER_CONFIG přesouvá celou konfigurační složku (jako u CLI Dockeru)
     let docker = match env("DOCKER_CONFIG").filter(|s| !s.is_empty()) {
         Some(d) => PathBuf::from(d),
-        None => home.join(".docker"),
+        // bez (absolutního) HOME by se četla relativní `.docker` z pracovní složky
+        None if home.is_absolute() => home.join(".docker"),
+        None => return None,
     };
     let name = match env("DOCKER_CONTEXT").filter(|s| !s.is_empty()) {
         Some(n) => n,
@@ -292,6 +294,24 @@ mod tests {
         assert_eq!(f, Found::Endpoint(Endpoint::Unix("/right.sock".into())));
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&cfgdir);
+    }
+
+    /// Prázdný nebo relativní HOME: kontext z `.docker` v pracovní složce se nečte.
+    #[test]
+    #[cfg(unix)]
+    fn relative_home_skips_context() {
+        let home = tmp_home("relhome");
+        write_cfg(&home, "rel");
+        write_ctx(&home, "rel", "unix:///rel.sock");
+        assert_eq!(discover(&envf(&[]), &home, &|_| false).0, Found::Endpoint(Endpoint::Unix("/rel.sock".into())));
+        // stejná složka zadaná relativně k pracovní složce
+        let cwd = std::env::current_dir().unwrap();
+        let up = "../".repeat(cwd.components().count() - 1);
+        let rel = PathBuf::from(format!("{up}{}", home.strip_prefix("/").unwrap().display()));
+        assert!(rel.join(".docker/config.json").exists());
+        assert_eq!(discover(&envf(&[]), &rel, &|_| false).0, Found::None);
+        assert_eq!(discover(&envf(&[]), Path::new(""), &|_| false).0, Found::None);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

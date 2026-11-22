@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use super::discover::{discover, Found};
 use super::{output_with_stdin, track_req, Caps, ExecOut, ExecReq, Host, HostError, HostKind, Privilege};
@@ -15,16 +17,46 @@ const LABEL: &str = "localhost";
 /// Výchozí socket, když se engine nenašel (UI pak ukáže nedostupnost s hláškou z `note()`).
 const DEFAULT_SOCK: &str = "/var/run/docker.sock";
 
+/// Jak dlouho platí výsledek hledání enginu (UI hostitele vytváří v každém snímku).
+const DISCOVERY_TTL: Duration = Duration::from_secs(5);
+
+type Discovery = (Found, Option<String>);
+
+/// Poslední výsledek hledání enginu pro celý proces.
+static DISCOVERY: Mutex<Option<(Instant, Discovery)>> = Mutex::new(None);
+
+/// Výsledek z `slot`, je-li mladší než `ttl`; jinak zavolá `run` a uloží ho.
+fn cached(slot: &Mutex<Option<(Instant, Discovery)>>, now: Instant, ttl: Duration, run: impl FnOnce() -> Discovery) -> Discovery {
+    let mut g = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, d)) = g.as_ref() {
+        if now.saturating_duration_since(*at) < ttl {
+            return d.clone();
+        }
+    }
+    let d = run();
+    *g = Some((now, d.clone()));
+    d
+}
+
+/// Zahodí uložený výsledek hledání (obnovení, start enginu).
+pub(crate) fn refresh_discovery() {
+    *DISCOVERY.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 pub struct LocalHost {
     found: Found,
     note: Option<String>,
 }
 
 impl LocalHost {
-    /// Hledá engine ve skutečném prostředí procesu (`DOCKER_HOST`, kontext, sockety).
+    /// Hledá engine ve skutečném prostředí procesu (`DOCKER_HOST`, kontext, sockety);
+    /// výsledek se pro celý proces drží [`DISCOVERY_TTL`].
     pub fn new() -> Self {
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-        let (found, note) = discover(&|k| std::env::var(k).ok(), &home, &|p: &Path| p.exists());
+        let (found, note) = cached(&DISCOVERY, Instant::now(), DISCOVERY_TTL, || {
+            // bez HOME zůstane cesta prázdná a discover kontext přeskočí
+            let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+            discover(&|k| std::env::var(k).ok(), &home, &|p: &Path| p.exists())
+        });
         LocalHost { found, note }
     }
 
@@ -43,23 +75,26 @@ fn is_root() -> bool {
 
 /// Skutečný příkazový řádek: `Root` mimo roota přes `pkexec`. `pkexec` mění pracovní složku
 /// na domovskou složku roota, proto se při `cwd` do ní nejdřív přepne `sh`.
-pub(crate) fn command_line(req: &ExecReq, root: bool) -> Vec<String> {
+pub(crate) fn command_line(req: &ExecReq, root: bool) -> Result<Vec<String>, HostError> {
+    if req.args.is_empty() {
+        return Err(HostError::from(crate::t!("prázdný příkaz", "empty command").to_string()));
+    }
     let args = req.args.iter().map(|a| a.to_string());
     if req.privilege != Privilege::Root || root {
-        return args.collect();
+        return Ok(args.collect());
     }
     let mut v: Vec<String> = vec!["pkexec".into()];
     if let Some(d) = req.cwd {
         v.extend(["sh".into(), "-c".into(), r#"cd -- "$0" && exec "$@""#.into(), d.to_string()]);
     }
     v.extend(args);
-    v
+    Ok(v)
 }
 
 /// Příkaz připravený ke spuštění (program, argumenty, pracovní složka).
 fn command(req: &ExecReq) -> Result<Command, HostError> {
-    let line = command_line(req, is_root());
-    let (prog, rest) = line.split_first().ok_or_else(|| HostError::from("prázdný příkaz".to_string()))?;
+    let line = command_line(req, is_root())?;
+    let (prog, rest) = line.split_first().expect("command_line vrací neprázdný příkaz");
     let mut cmd = Command::new(prog);
     cmd.args(rest);
     if let Some(d) = req.cwd {
@@ -117,7 +152,7 @@ impl Host for LocalHost {
     }
 
     fn open_terminal(&self, _title: &str, req: &ExecReq) -> Result<(), HostError> {
-        let line = command_line(req, is_root());
+        let line = command_line(req, is_root())?;
         let terminal = std::env::var("TERMINAL").ok();
         let mut last = String::new();
         for (prog, pre) in terminal_candidates(terminal.as_deref()) {
@@ -207,16 +242,62 @@ mod tests {
     fn root_uses_pkexec_when_not_root() {
         let args = ["systemctl", "start", "docker"];
         let root = ExecReq::new(&args).privilege(Privilege::Root);
-        assert_eq!(command_line(&root, false), ["pkexec", "systemctl", "start", "docker"]);
-        assert_eq!(command_line(&root, true), ["systemctl", "start", "docker"]);
+        assert_eq!(command_line(&root, false).unwrap(), ["pkexec", "systemctl", "start", "docker"]);
+        assert_eq!(command_line(&root, true).unwrap(), ["systemctl", "start", "docker"]);
         let with_cwd = ExecReq::new(&args).privilege(Privilege::Root).cwd(Some("/srv/x"));
         assert_eq!(
-            command_line(&with_cwd, false),
+            command_line(&with_cwd, false).unwrap(),
             ["pkexec", "sh", "-c", r#"cd -- "$0" && exec "$@""#, "/srv/x", "systemctl", "start", "docker"]
         );
         for p in [Privilege::User, Privilege::Engine] {
-            assert_eq!(command_line(&ExecReq::new(&args).privilege(p), false), args);
+            assert_eq!(command_line(&ExecReq::new(&args).privilege(p), false).unwrap(), args);
         }
+        // prázdný příkaz se odmítne (žádné holé `pkexec`)
+        for root in [false, true] {
+            assert!(command_line(&ExecReq::new(&[]).privilege(Privilege::Root), root).is_err());
+        }
+        assert!(LocalHost::new().exec(&ExecReq::new(&[])).is_err());
+    }
+
+    /// Složka s mezerou, uvozovkou a `$` jde do `sh` jako samostatný argument `$0`,
+    /// skript ji jen cituje. Spuštění stejného skriptu bez pkexec ověří, že se nic nerozvine.
+    #[test]
+    fn pkexec_cwd_is_not_interpreted() {
+        let dir = std::env::temp_dir().join(format!("wslcd local 'q\" $HOME {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_str().unwrap();
+        let req = ExecReq::new(&["pwd"]).privilege(Privilege::Root).cwd(Some(d));
+        let line = command_line(&req, false).unwrap();
+        assert_eq!(line[..5], ["pkexec", "sh", "-c", r#"cd -- "$0" && exec "$@""#, d]);
+        // totéž bez `pkexec` a bez current_dir: `sh` se do složky přepne sám
+        let out = Command::new(&line[1]).args(&line[2..]).current_dir("/").output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end_matches('\n'), d);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn discovery_cached_within_ttl() {
+        let slot = Mutex::new(None);
+        let calls = std::cell::Cell::new(0);
+        let run = || {
+            calls.set(calls.get() + 1);
+            (Found::None, None)
+        };
+        let t0 = Instant::now();
+        let ttl = Duration::from_secs(5);
+        cached(&slot, t0, ttl, run);
+        cached(&slot, t0 + Duration::from_secs(4), ttl, run);
+        assert_eq!(calls.get(), 1);
+        cached(&slot, t0 + Duration::from_secs(6), ttl, run);
+        assert_eq!(calls.get(), 2);
+        *slot.lock().unwrap() = None;
+        cached(&slot, t0 + Duration::from_secs(7), ttl, run);
+        assert_eq!(calls.get(), 3);
+        // globální cache: LocalHost::new ji naplní (jiné testy ji mohou souběžně jen plnit)
+        refresh_discovery();
+        let _ = LocalHost::new();
+        assert!(DISCOVERY.lock().unwrap().is_some());
     }
 
     #[test]
