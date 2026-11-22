@@ -98,8 +98,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(8.0);
 
     let f = app.filter.to_lowercase();
-    let mut volumes = app.snap.volumes.clone();
-    let containers = app.snap.containers.clone();
+    let snap = app.snap.clone();
+    let mut volumes: Vec<&crate::docker::Volume> = snap.volumes.iter().collect();
+    let containers = &snap.containers;
     let sizes = app.vol.sizes.clone();
     sort_items(ui.ctx(), "volumes", &mut volumes, |v, col| match col {
         1 => SortKey::text(&v.driver),
@@ -343,7 +344,8 @@ fn restore_dialog(app: &mut App, ctx: &egui::Context) {
         return;
     }
     let names: Vec<String> = app.snap.volumes.iter().map(|v| v.name.clone()).collect();
-    let containers = app.snap.containers.clone();
+    let snap = app.snap.clone();
+    let containers = &snap.containers;
     let last_dir = app.vol.last_dir.clone();
     let mut picked_dir = None;
     let Some(r) = app.vol.restore.as_mut() else { return };

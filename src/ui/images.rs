@@ -351,8 +351,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(8.0);
 
     let f = app.filter.to_lowercase();
-    let mut images = app.snap.images.clone();
-    let containers = app.snap.containers.clone();
+    let snap = app.snap.clone();
+    let mut images: Vec<&crate::docker::Image> = snap.images.iter().collect();
+    let containers = &snap.containers;
     sort_items(ui.ctx(), "images", &mut images, |i, col| match col {
         1 => SortKey::text(&i.id),
         2 => SortKey::num(i.size as f64),

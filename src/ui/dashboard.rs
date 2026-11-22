@@ -213,7 +213,8 @@ fn containers_perf(app: &mut App, ui: &mut egui::Ui) {
         )));
         return;
     }
-    let mut rows = app.stats.clone();
+    let snap = app.snap.clone();
+    let mut rows: Vec<&crate::docker::StatRow> = app.stats.iter().collect();
     rows.sort_by(|a, b| b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal));
     sort_items(ui.ctx(), "stats", &mut rows, |r, col| match col {
         1 => SortKey::num(r.cpu),
@@ -236,8 +237,7 @@ fn containers_perf(app: &mut App, ui: &mut egui::Ui) {
             body.row(42.0, |mut row| {
                 row.col(|ui| {
                     // název + image, ze kterého kontejner běží (a compose stack, pokud patří do něj)
-                    let sub = app
-                        .snap
+                    let sub = snap
                         .containers
                         .iter()
                         .find(|c| c.id == r.id)

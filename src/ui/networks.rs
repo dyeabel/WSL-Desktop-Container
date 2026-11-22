@@ -42,8 +42,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(8.0);
 
     let f = app.filter.to_lowercase();
-    let mut nets: Vec<_> = app.snap.networks.iter().filter(|n| f.is_empty() || n.name.to_lowercase().contains(&f)).cloned().collect();
-    let containers = app.snap.containers.clone();
+    let snap = app.snap.clone();
+    let mut nets: Vec<_> = snap.networks.iter().filter(|n| f.is_empty() || n.name.to_lowercase().contains(&f)).collect();
+    let containers = &snap.containers;
     sort_items(ui.ctx(), "nets", &mut nets, |n, col| match col {
         1 => SortKey::text(&n.id),
         2 => SortKey::text(&n.driver),

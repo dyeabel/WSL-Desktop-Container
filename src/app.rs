@@ -97,7 +97,7 @@ pub struct App {
     tx: Sender<Cmd>,
     rx: Receiver<Msg>,
     pub shared: Arc<Shared>,
-    pub snap: Snapshot,
+    pub snap: std::sync::Arc<Snapshot>,
     pub distros: Vec<Distro>,
     pub stats: Vec<StatRow>,
     pub df: Option<DfSummary>,
@@ -267,7 +267,7 @@ impl App {
             tx,
             rx,
             shared,
-            snap: Snapshot::default(),
+            snap: std::sync::Arc::new(Snapshot::default()),
             distros: Vec::new(),
             stats: Vec::new(),
             df: None,
@@ -505,7 +505,7 @@ impl App {
         }
         while let Ok(m) = self.rx.try_recv() {
             match m {
-                Msg::Snapshot(s) => self.snap = *s,
+                Msg::Snapshot(s) => self.snap = std::sync::Arc::new(*s),
                 Msg::Distros(d) => self.distros = d,
                 Msg::Stats(rows, df) => {
                     let ncpu = self.snap.info.as_ref().map(|i| i.ncpu.max(1)).unwrap_or(1) as f64;
