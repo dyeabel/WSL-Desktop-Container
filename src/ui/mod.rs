@@ -285,10 +285,26 @@ pub fn sort_state(ctx: &egui::Context, key: &str) -> Option<(usize, bool)> {
 /// `key(položka, sloupec)` vrací hodnotu, podle které se řadí.
 pub fn sort_items<T>(ctx: &egui::Context, key: &str, items: &mut [T], k: impl Fn(&T, usize) -> SortKey) {
     if let Some((col, asc)) = sort_state(ctx, key) {
-        items.sort_by(|a, b| {
-            let o = k(a, col).cmp(&k(b, col));
-            if asc { o } else { o.reverse() }
-        });
+        sort_by_cached(items, |x| k(x, col), asc);
+    }
+}
+
+/// Stabilní řazení s klíčem spočítaným jen jednou pro každou položku (řazení podle
+/// `SortKey::cmp`, které není `Ord`, takže se řadí index a pak se položky přeskládají).
+fn sort_by_cached<T>(items: &mut [T], k: impl Fn(&T) -> SortKey, asc: bool) {
+    let keys: Vec<SortKey> = items.iter().map(k).collect();
+    let mut idx: Vec<usize> = (0..items.len()).collect();
+    idx.sort_by(|&a, &b| {
+        let o = keys[a].cmp(&keys[b]);
+        if asc { o } else { o.reverse() }
+    });
+    // items[i] = původní items[idx[i]]
+    for i in 0..idx.len() {
+        let mut j = idx[i];
+        while j < i {
+            j = idx[j];
+        }
+        items.swap(i, j);
     }
 }
 
@@ -781,6 +797,29 @@ pub fn need_engine(app: &mut crate::app::App, ui: &mut egui::Ui) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cached_sort_matches_plain_sort() {
+        use super::{sort_by_cached, SortKey};
+        let items: Vec<(String, f64)> = ["b2", "B10", "a", "b1", "A", "c", "b2", "a"]
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.to_string(), (i % 3) as f64))
+            .collect();
+        for asc in [true, false] {
+            for col in 0..2 {
+                let k = |x: &(String, f64)| if col == 0 { SortKey::text(&x.0) } else { SortKey::num(x.1) };
+                let mut want = items.clone();
+                want.sort_by(|a, b| {
+                    let o = k(a).cmp(&k(b));
+                    if asc { o } else { o.reverse() }
+                });
+                let mut got = items.clone();
+                sort_by_cached(&mut got, k, asc);
+                assert_eq!(got, want, "col {col} asc {asc}");
+            }
+        }
+    }
+
     #[test]
     fn bytes() {
         assert_eq!(super::fmt_bytes(512), "512 B");

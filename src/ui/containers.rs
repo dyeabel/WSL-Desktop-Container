@@ -59,8 +59,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(8.0);
 
     let f = app.filter.to_lowercase();
-    let mut groups: BTreeMap<String, Vec<Container>> = BTreeMap::new();
-    for c in &app.snap.containers {
+    let snap = app.snap.clone();
+    let mut groups: BTreeMap<String, Vec<&Container>> = BTreeMap::new();
+    for c in &snap.containers {
         if !app.show_all && !c.running() && !c.paused() {
             continue;
         }
@@ -68,7 +69,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             continue;
         }
         let key = c.project().map(|p| format!("\u{E466} {p}")).unwrap_or_else(|| t!("~Samostatné", "~Standalone").to_string());
-        groups.entry(key).or_default().push(c.clone());
+        groups.entry(key).or_default().push(c);
     }
     if groups.is_empty() {
         ui.label(muted(t!("Žádné kontejnery.", "No containers.")));
@@ -98,7 +99,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ];
         let ui_ctx = ui.ctx().clone();
         table_sort(ui, &format!("grid-{g}"), &cols, Sort { key: "containers", cols: &[1, 2, 3, 4, 5] }, |mut body| {
-            for c in &list {
+            for &c in &list {
                 // klik na řádek (mimo tlačítka akcí) otevře detail
                 if body.row_click(46.0, |mut r| row(app, &mut r, c)) {
                     let ctx = ui_ctx.clone();
