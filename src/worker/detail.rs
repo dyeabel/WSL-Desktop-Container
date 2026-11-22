@@ -15,6 +15,18 @@ pub const STATS_WINDOW: f64 = 300.0;
 /// Interval vzorkování statistik.
 const STATS_EVERY: Duration = Duration::from_secs(2);
 
+/// Jak často se při skrytém okně ověřuje, zda už je zase vidět.
+const HIDDEN_POLL: Duration = Duration::from_millis(500);
+
+/// Má se teď vzorkovat? Při skrytém okně ne a zároveň se zahodí předchozí vzorek, aby první
+/// vzorek po zobrazení nepočítal CPU z rozdílu přes celou dobu skrytí.
+fn sample_now<T>(visible: bool, prev: &mut Option<T>) -> bool {
+    if !visible {
+        *prev = None;
+    }
+    visible
+}
+
 /// Jeden vzorek statistik kontejneru.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StatSample {
@@ -50,6 +62,11 @@ pub fn start_stats(ctx: eframe::egui::Context, ep: crate::http::Endpoint, id: St
         let d = Docker::new(&ep);
         let mut prev: Option<(u64, Instant)> = None;
         while !st.load(Ordering::SeqCst) {
+            // skryté okno: bez dotazu a bez překreslení; `prev` pryč, aby po zobrazení nevznikl skok CPU
+            if !sample_now(crate::tray::window_visible(), &mut prev) {
+                thread::sleep(HIDDEN_POLL);
+                continue;
+            }
             let t0 = Instant::now();
             match d.stats(&id, "") {
                 Some(row) => {
@@ -250,5 +267,24 @@ impl Worker {
                 Err(restore(e))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_skips_and_resets_prev() {
+        let mut prev = Some((5u64, Instant::now()));
+        assert!(!sample_now(false, &mut prev));
+        assert!(prev.is_none());
+    }
+
+    #[test]
+    fn visible_samples_and_keeps_prev() {
+        let mut prev = Some(7u64);
+        assert!(sample_now(true, &mut prev));
+        assert_eq!(prev, Some(7));
     }
 }
