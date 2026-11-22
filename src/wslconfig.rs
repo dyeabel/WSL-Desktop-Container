@@ -6,8 +6,31 @@ pub fn path() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join(".wslconfig"))
 }
 
+/// Poslední načtený obsah a otisk souboru (cesta, mtime, délka), pro který platí.
+type Stamp = (PathBuf, std::time::SystemTime, u64);
+
+static CACHE: std::sync::Mutex<Option<(Stamp, String)>> = std::sync::Mutex::new(None);
+
+/// Vrátí text z cache, pokud se otisk nezměnil, jinak zavolá `load` a výsledek zapamatuje.
+/// `stamp == None` (soubor chybí / nejde zjistit) cache nepoužije ani nezmění.
+fn cached(cache: &mut Option<(Stamp, String)>, stamp: Option<Stamp>, load: impl FnOnce() -> String) -> String {
+    let Some(stamp) = stamp else { return load() };
+    if let Some((s, text)) = cache.as_ref() {
+        if *s == stamp {
+            return text.clone();
+        }
+    }
+    let text = load();
+    *cache = Some((stamp, text.clone()));
+    text
+}
+
+/// Obsah `.wslconfig`; čte se znovu jen když se změnil čas úpravy nebo velikost souboru.
 pub fn read() -> String {
-    path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default()
+    let Some(p) = path() else { return String::new() };
+    let stamp = std::fs::metadata(&p).ok().and_then(|m| Some((p.clone(), m.modified().ok()?, m.len())));
+    let Ok(mut c) = CACHE.lock() else { return std::fs::read_to_string(&p).unwrap_or_default() };
+    cached(&mut c, stamp, || std::fs::read_to_string(&p).unwrap_or_default())
 }
 
 pub fn get(text: &str, section: &str, key: &str) -> Option<String> {
@@ -127,6 +150,28 @@ impl Draft {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn cache_reloads_only_when_stamp_changes() {
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(10);
+        let st = |t: SystemTime, len: u64| Some((PathBuf::from("c"), t, len));
+        let mut cache = None;
+        let mut loads = 0;
+        let mut get = |cache: &mut _, stamp, text: &str| {
+            cached(cache, stamp, || {
+                loads += 1;
+                text.to_string()
+            })
+        };
+        assert_eq!(get(&mut cache, st(t0, 3), "a"), "a");
+        assert_eq!(get(&mut cache, st(t0, 3), "zmena"), "a", "stejný otisk = z cache");
+        assert_eq!(get(&mut cache, st(t0 + Duration::from_secs(1), 3), "b"), "b", "jiný mtime");
+        assert_eq!(get(&mut cache, st(t0 + Duration::from_secs(1), 4), "cc"), "cc", "jiná velikost");
+        assert_eq!(get(&mut cache, None, "x"), "x", "chybějící soubor se nečte z cache");
+        assert_eq!(get(&mut cache, st(t0 + Duration::from_secs(1), 4), "?"), "cc", "cache přežila");
+        assert_eq!(loads, 4);
+    }
 
     #[test]
     fn set_adds_section_and_key() {

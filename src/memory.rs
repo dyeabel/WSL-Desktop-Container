@@ -468,17 +468,31 @@ fn vmmem_toolhelp() -> Option<Option<u64>> {
 /// Get-Process), takže funguje i u chráněného vmmemWSL.
 #[cfg(windows)]
 fn vmmem_ntquery() -> Option<Option<u64>> {
+    // buffer (512 KB) se mezi vzorky znovu používá; po vrácení vlastnictví se zase uloží
+    thread_local! {
+        static NT_BUF: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut buf: Vec<u64> = NT_BUF.with(|b| std::mem::take(&mut *b.borrow_mut()));
+    if buf.is_empty() {
+        buf = vec![0; 64 * 1024];
+    }
+    let r = ntquery_in(&mut buf);
+    NT_BUF.with(|b| *b.borrow_mut() = buf);
+    r
+}
+
+#[cfg(windows)]
+fn ntquery_in(buf: &mut Vec<u64>) -> Option<Option<u64>> {
     use windows_sys::Wdk::System::SystemInformation::{NtQuerySystemInformation, SystemProcessInformation};
     use windows_sys::Win32::System::WindowsProgramming::SYSTEM_PROCESS_INFORMATION;
     const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004_u32 as i32;
-    let mut buf: Vec<u64> = vec![0; 64 * 1024];
     for _ in 0..4 {
         let bytes = (buf.len() * 8) as u32;
         let mut need = 0u32;
         // SAFETY: buffer je zarovnaný (u64) a velikost odpovídá; při nedostatku se zvětší.
         let st = unsafe { NtQuerySystemInformation(SystemProcessInformation, buf.as_mut_ptr().cast(), bytes, &mut need) };
         if st == STATUS_INFO_LENGTH_MISMATCH {
-            buf = vec![0; (need as usize + 64 * 1024) / 8 + 1];
+            *buf = vec![0; (need as usize + 64 * 1024) / 8 + 1];
             continue;
         }
         if st < 0 {
