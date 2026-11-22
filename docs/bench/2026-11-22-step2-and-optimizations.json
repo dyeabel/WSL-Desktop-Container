@@ -1,0 +1,379 @@
+{
+  "date": "2026-11-22",
+  "restored": true,
+  "app_commit": "592f0ea",
+  "host": {
+    "cpu": "AMD Ryzen AI 7 PRO 350 w/ Radeon 860M",
+    "cores": 16,
+    "ram_gb": 30.7,
+    "windows": "Microsoft Windows 11 Enterprise 26200",
+    "wsl": "3.0.5.0"
+  },
+  "footprint": {
+    "app_version": "0.8.3",
+    "app_running": true,
+    "exe_mb": 12.8,
+    "shim_mb": 2.8,
+    "working_set_mb": 109.0,
+    "private_mb": 91.4,
+    "threads": 39,
+    "handles": 538,
+    "cpu_pct": 0.14,
+    "sample_s": 5.0,
+    "vmmem_mb": 1897.2,
+    "window_visible": true
+  },
+  "engines": [
+    {
+      "engine": "Podman",
+      "distro": "WSLCD-Lite",
+      "version": "5.8.10",
+      "os": "Alpine Linux v3.24",
+      "daemon_rss_mb": 71.8,
+      "port": 2376,
+      "temp_proxy": false,
+      "switch_s": 0.0,
+      "exec_true": {
+        "n": 30,
+        "errors": 0,
+        "min": 359.5,
+        "p50": 405.1,
+        "p95": 500.6,
+        "max": 572.2,
+        "mean": 414.6
+      },
+      "checks": [
+        {
+          "name": "API ping (TLS, client certificate)",
+          "ok": true,
+          "ms": 50.7,
+          "note": ""
+        },
+        {
+          "name": "Plain HTTP without certificate is rejected",
+          "ok": true,
+          "ms": 4.5,
+          "note": ""
+        },
+        {
+          "name": "Engine info",
+          "ok": true,
+          "ms": 49.4,
+          "note": "8 CPU, 7943 MB"
+        },
+        {
+          "name": "Pull image",
+          "ok": true,
+          "ms": 1791.3,
+          "note": "docker.io/library/alpine:3.20"
+        },
+        {
+          "name": "Run container + read logs",
+          "ok": true,
+          "ms": 992.4,
+          "note": ""
+        },
+        {
+          "name": "Stop / start / restart",
+          "ok": true,
+          "ms": 2431.1,
+          "note": "stats: 608 KB RAM"
+        },
+        {
+          "name": "Volume create / remove",
+          "ok": true,
+          "ms": 55.0,
+          "note": ""
+        },
+        {
+          "name": "Network create / remove",
+          "ok": true,
+          "ms": 13.0,
+          "note": ""
+        },
+        {
+          "name": "Build from Dockerfile (app build path)",
+          "ok": true,
+          "ms": 3221.5,
+          "note": ""
+        },
+        {
+          "name": "docker.exe shim: ps (fast path)",
+          "ok": true,
+          "ms": 319.6,
+          "note": ""
+        },
+        {
+          "name": "docker.exe shim: run --rm (via wsl.exe)",
+          "ok": true,
+          "ms": 1043.7,
+          "note": ""
+        }
+      ],
+      "latency": [
+        {
+          "op": "version",
+          "path": "app API (TLS)",
+          "stat": {
+            "n": 5,
+            "errors": 0,
+            "min": 44.8,
+            "p50": 47.1,
+            "p95": 50.6,
+            "max": 50.6,
+            "mean": 47.3
+          }
+        },
+        {
+          "op": "version",
+          "path": "docker.exe shim",
+          "stat": {
+            "n": 5,
+            "errors": 0,
+            "min": 163.0,
+            "p50": 169.7,
+            "p95": 251.7,
+            "max": 251.7,
+            "mean": 186.3
+          }
+        },
+        {
+          "op": "version",
+          "path": "wsl.exe -e CLI",
+          "stat": {
+            "n": 5,
+            "errors": 0,
+            "min": 400.9,
+            "p50": 417.0,
+            "p95": 481.8,
+            "max": 481.8,
+            "mean": 424.2
+          }
+        },
+        {
+          "op": "version",
+          "path": "CLI inside WSL",
+          "stat": {
+            "n": 5,
+            "errors": 0,
+            "min": 73.1,
+            "p50": 79.3,
+            "p95": 136.0,
+            "max": 136.0,
+            "mean": 88.9
+          }
+        },
+        {
+          "op": "ps",
+          "path": "app API (TLS)",
+          "stat": {
+            "n": 5,
+            "errors": 0,
+            "min": 1.8,
+            "p50": 2.1,
+            "p95": 4.7,
+            "max": 4.7,
+            "mean": 2.6
+          }
+        },
+        {
+          "op": "ps",
+          "path": "docker.exe shim",
+          "stat": {
+            "n": 5,
+            "errors": 0,
+            "min": 214.1,
+            "p50": 219.6,
+            "p95": 227.2,
+            "max": 227.2,
+            "mean": 221.0
+          }
+        },
+        {
+          "op": "ps",
+          "path": "wsl.exe -e CLI",
+          "stat": {
+            "n": 5,
+            "errors": 0,
+            "min": 437.3,
+            "p50": 456.6,
+            "p95": 520.4,
+            "max": 520.4,
+            "mean": 466.9
+          }
+        },
+        {
+          "op": "ps",
+          "path": "CLI inside WSL",
+          "stat": {
+            "n": 5,
+            "errors": 0,
+            "min": 31.0,
+            "p50": 34.0,
+            "p95": 40.8,
+            "max": 40.8,
+            "mean": 35.2
+          }
+        },
+        {
+          "op": "images",
+          "path": "app API (TLS)",
+          "stat": {
+            "n": 5,
+            "errors": 0,
+            "min": 4.3,
+            "p50": 4.6,
+            "p95": 4.7,
+            "max": 4.7,
+            "mean": 4.5
+          }
+        },
+        {
+          "op": "images",
+          "path": "docker.exe shim",
+          "stat": {
+            "n": 5,
+            "errors": 0,
+            "min": 164.0,
+            "p50": 167.8,
+            "p95": 174.8,
+            "max": 174.8,
+            "mean": 168.5
+          }
+        },
+        {
+          "op": "images",
+          "path": "wsl.exe -e CLI",
+          "stat": {
+            "n": 5,
+            "errors": 0,
+            "min": 389.6,
+            "p50": 417.4,
+            "p95": 458.5,
+            "max": 458.5,
+            "mean": 419.2
+          }
+        },
+        {
+          "op": "images",
+          "path": "CLI inside WSL",
+          "stat": {
+            "n": 5,
+            "errors": 0,
+            "min": 38.3,
+            "p50": 41.5,
+            "p95": 43.2,
+            "max": 43.2,
+            "mean": 41.0
+          }
+        },
+        {
+          "op": "run --rm",
+          "path": "app API (TLS)",
+          "stat": {
+            "n": 3,
+            "errors": 0,
+            "min": 609.8,
+            "p50": 687.1,
+            "p95": 691.2,
+            "max": 691.2,
+            "mean": 662.7
+          }
+        },
+        {
+          "op": "run --rm",
+          "path": "docker.exe shim",
+          "stat": {
+            "n": 3,
+            "errors": 0,
+            "min": 1038.2,
+            "p50": 1040.1,
+            "p95": 1170.4,
+            "max": 1170.4,
+            "mean": 1082.9
+          }
+        },
+        {
+          "op": "run --rm",
+          "path": "wsl.exe -e CLI",
+          "stat": {
+            "n": 3,
+            "errors": 0,
+            "min": 1018.0,
+            "p50": 1020.5,
+            "p95": 1058.5,
+            "max": 1058.5,
+            "mean": 1032.3
+          }
+        },
+        {
+          "op": "run --rm",
+          "path": "CLI inside WSL",
+          "stat": {
+            "n": 3,
+            "errors": 0,
+            "min": 624.5,
+            "p50": 704.0,
+            "p95": 737.7,
+            "max": 737.7,
+            "mean": 688.7
+          }
+        }
+      ],
+      "load": [
+        {
+          "concurrency": 1,
+          "secs": 3.0,
+          "requests": 1148,
+          "errors": 0,
+          "rps": 377.6,
+          "lat": {
+            "n": 1148,
+            "errors": 0,
+            "min": 1.6,
+            "p50": 2.1,
+            "p95": 3.7,
+            "max": 52.3,
+            "mean": 2.6
+          }
+        },
+        {
+          "concurrency": 16,
+          "secs": 3.1,
+          "requests": 2016,
+          "errors": 0,
+          "rps": 658.5,
+          "lat": {
+            "n": 2016,
+            "errors": 0,
+            "min": 1.7,
+            "p50": 19.6,
+            "p95": 60.8,
+            "max": 177.9,
+            "mean": 24.0
+          }
+        }
+      ],
+      "burst": {
+        "containers": 10,
+        "parallel": 5,
+        "create_start_s": 1.17,
+        "running": 10,
+        "snapshot": {
+          "n": 10,
+          "errors": 0,
+          "min": 116.5,
+          "p50": 121.4,
+          "p95": 134.4,
+          "max": 134.4,
+          "mean": 123.0
+        },
+        "start_events": 10,
+        "remove_events": 10,
+        "mem_before_mb": 1100.0,
+        "mem_after_mb": 1149.0,
+        "remove_s": 1.49
+      }
+    }
+  ]
+}
