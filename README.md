@@ -40,6 +40,32 @@ plumbing between Windows and WSL. **WSL Container Desktop provides exactly that 
   data less often in the background, and helps WSL return unused memory to Windows.
 - **Keeps you informed.** Notifications about crashed or unhealthy containers with a full
   history and exit-code explanations, plus alerts for WSL memory and disk space.
+- **Also on Linux.** The same app runs on Linux against the Docker or Podman you already have
+  (see [Linux](#linux)).
+
+## What's new in 0.9.0
+
+- **Linux support.** On Linux the app connects to an existing local Docker or Podman through its
+  unix socket: `DOCKER_HOST`, the active Docker context, `/var/run/docker.sock` or rootless Podman.
+  It never installs or reconfigures the engine. WSL-only pages and actions are hidden. The
+  password prompt (`pkexec`) appears only when you click a button that needs root, never in the
+  background. A `tar.gz` package with a `.desktop` file is built in CI.
+- **`wslcd` command.** It does exactly what `docker` does, but always targets the app's engine,
+  ignoring `DOCKER_HOST` and `DOCKER_CONTEXT`. It is installed and packaged next to `docker.exe`
+  (see [The `wslcd` command](#the-wslcd-command)).
+- **Faster and lighter.**
+  - Commands inside WSL run through one host layer.
+  - The engine API uses a built-in HTTP/1.1 client with keep-alive instead of ureq.
+  - While the window is hidden, the app spawns `wsl.exe` less often and samples container
+    details less often.
+  - The tray menu, lists and the network overview are no longer rebuilt or copied on every frame.
+  - `/system/df` is called at most every 30 s, and immediately after storage changes.
+  - The notifier's internal maps no longer grow without bound.
+  - Measured against 0.8.3: idle CPU of the app −27 %, single-client API throughput +14 %, command
+    latency unchanged (`docs/bench/2026-11-22-ab-main-vs-step2.md`).
+- **Under the hood.** A `Host` abstraction (WSL now, local Linux, a macOS VM later; see
+  `docs/superpowers/specs/2026-11-21-host-abstraction-design.md`). Tests never touch `%APPDATA%`
+  and always run with portable data. Clippy is enforced in CI on Windows and Linux.
 
 ## Features
 
