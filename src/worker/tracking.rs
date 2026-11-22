@@ -86,6 +86,7 @@ impl Worker {
         }
         let first = !self.shared.was_connected.swap(true, Ordering::SeqCst);
         if first {
+            self.invalidate_df();
             // nové připojení: nejdřív obnovit, ukládat až při dalším obnovení
             self.shared.suppress_track.store(false, Ordering::SeqCst);
             if let Ok(mut g) = self.shared.last_tracked.lock() {

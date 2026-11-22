@@ -53,6 +53,8 @@ struct Handles {
     icon_on: Icon,
     icon_off: Icon,
     last: Option<EngineStatus>,
+    /// `Shared::tray_gen` při posledním zpracování (None = zpracovat)
+    last_gen: Option<u64>,
     shared: Arc<Shared>,
 }
 
@@ -291,6 +293,7 @@ pub fn init(
             icon_on,
             icon_off,
             last: None,
+            last_gen: None,
             shared,
         })
     });
@@ -434,11 +437,22 @@ fn refresh_containers(h: &mut Handles, connected: bool) {
     h.built = Some(model);
 }
 
+/// Změnila se data pro tray od posledního zpracování? (None = ještě nezpracováno)
+fn refresh_needed(last: Option<u64>, current: u64) -> bool {
+    last != Some(current)
+}
+
 /// Promítne aktuální stav enginu do ikony, tooltipu a nabídky (jen při změně).
 pub fn refresh() {
     TRAY.with(|t| {
         let mut b = t.borrow_mut();
         let Some(h) = b.as_mut() else { return };
+        // generace se čte před daty: zápis po ní jen vyvolá další průchod
+        let gen = h.shared.tray_gen.load(Ordering::Acquire);
+        if !refresh_needed(h.last_gen, gen) {
+            return;
+        }
+        h.last_gen = Some(gen);
         let st = h.shared.status.lock().map(|s| s.clone()).unwrap_or_default();
         refresh_containers(h, st.connected);
         if h.last.as_ref() == Some(&st) {
@@ -496,7 +510,19 @@ pub fn retranslate() {
             // stavové texty, tooltip a podnabídka kontejnerů se přepočítají
             h.last = None;
             h.built = None;
+            h.last_gen = None;
         }
     });
     refresh();
+}
+#[cfg(test)]
+mod refresh_tests {
+    use super::refresh_needed;
+
+    #[test]
+    fn refresh_skips_when_gen_unchanged() {
+        assert!(refresh_needed(None, 0));
+        assert!(!refresh_needed(Some(5), 5));
+        assert!(refresh_needed(Some(5), 6));
+    }
 }

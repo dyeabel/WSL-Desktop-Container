@@ -49,7 +49,7 @@ use crate::docker::{Docker, DfSummary, Snapshot, StatRow};
 use crate::host::{HostExt, Privilege};
 use crate::wsl::{self, Distro};
 use std::process::Child;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -271,6 +271,12 @@ pub struct Shared {
     pub status: Mutex<EngineStatus>,
     /// kontejnery pro podnabídku traye (zapisuje worker při obnovení)
     pub tray_containers: Mutex<Vec<crate::tray::menu_model::Item>>,
+    /// zvýší se po každém zápisu `status` a `tray_containers` (tray přestavuje nabídku jen při změně)
+    pub tray_gen: AtomicU64,
+    /// poslední `/system/df` (nejvýš jednou za [`DF_EVERY`])
+    last_df: Mutex<Option<Instant>>,
+    /// poslední seznam distribucí z `wsl.exe -l -v` (při skrytém okně se znovu nenačítá)
+    last_distros: Mutex<Option<Vec<Distro>>>,
     pub busy: AtomicUsize,
     pub want_stats: AtomicBool,
     pub tcp_checked: AtomicBool,
@@ -300,6 +306,59 @@ pub struct Shared {
     pub alerts: Mutex<alerts::Alerts>,
     /// limity běžících kontejnerů pro tabulku výkonu (čas načtení, limity)
     limits: Mutex<std::collections::HashMap<String, (Instant, crate::limits::Limits)>>,
+}
+
+/// Nejkratší odstup mezi voláními `/system/df` na přehledu.
+const DF_EVERY: Duration = Duration::from_secs(30);
+
+/// Je čas znovu zavolat `/system/df`? (nikdy nevolané = ano)
+fn df_due(last: Option<Instant>, now: Instant, every: Duration) -> bool {
+    last.map_or(true, |t| now.saturating_duration_since(t) >= every)
+}
+
+/// Uloží novou hodnotu, jen když se liší; vrací, zda se změnila.
+fn replace_if_changed<T: PartialEq>(slot: &mut T, new: T) -> bool {
+    if *slot == new {
+        return false;
+    }
+    *slot = new;
+    true
+}
+
+/// Mění příkaz velikosti v `/system/df` (images, kontejnery, volumes, build cache)?
+fn changes_df(cmd: &Cmd) -> bool {
+    match cmd {
+        Cmd::Container(_, action) => *action == "remove",
+        Cmd::PruneContainers
+        | Cmd::PruneImages { .. }
+        | Cmd::PruneVolumes
+        | Cmd::Pull(_)
+        | Cmd::Build(_)
+        | Cmd::Run(_)
+        | Cmd::RemoveImage(_)
+        | Cmd::CreateVolume(_)
+        | Cmd::RemoveVolume(_)
+        | Cmd::RestoreVolume { .. }
+        | Cmd::CloneVolume { .. }
+        | Cmd::Compose { .. }
+        | Cmd::SetPrimary { .. } => true,
+        _ => false,
+    }
+}
+
+/// Je potřeba spustit `wsl.exe -l -v`? Ne, když je okno skryté, API enginu odpovídá a existuje
+/// poslední seznam, který jde použít.
+fn need_wsl_list(visible: bool, connected: bool, have_cached: bool) -> bool {
+    visible || !connected || !have_cached
+}
+
+/// Výsledek [`Worker::distro_list`].
+struct DistroList {
+    items: Vec<Distro>,
+    /// čerstvě načteno z `wsl.exe` (jinak z mezipaměti)
+    fresh: bool,
+    /// liší se od naposledy odeslaného do UI
+    changed: bool,
 }
 
 #[derive(Clone)]
@@ -411,7 +470,10 @@ impl Worker {
         // relaye [::1] -> 127.0.0.1 pro publikované porty (odpojený engine = žádné)
         crate::portrelay::sync_app(&snap, self.cfg().ipv6_localhost_relay);
         if let Ok(mut t) = self.shared.tray_containers.lock() {
-            *t = snap.containers.iter().map(crate::tray::menu_model::Item::from_container).collect();
+            let items = snap.containers.iter().map(crate::tray::menu_model::Item::from_container).collect();
+            if replace_if_changed(&mut *t, items) {
+                self.shared.tray_gen.fetch_add(1, Ordering::Release);
+            }
         }
         self.send(Msg::Snapshot(Box::new(snap)));
         let mut distro_running = false;
@@ -419,7 +481,7 @@ impl Worker {
             // Linux: hostitel běží vždy, žádné distribuce ani keepalive
             distro_running = true;
             if let Ok(mut st) = self.shared.status.lock() {
-                *st = EngineStatus {
+                let new = EngineStatus {
                     connected,
                     distro_running: true,
                     distro: self.host().label(),
@@ -427,13 +489,17 @@ impl Worker {
                     running: n_run,
                     total: n_total,
                 };
+                if replace_if_changed(&mut *st, new) {
+                    self.shared.tray_gen.fetch_add(1, Ordering::Release);
+                }
             }
-        } else if let Ok(list) = wsl::list() {
+        } else if let Some(list) = self.distro_list(connected) {
             let distro = self.cfg().distro;
-            let running = list.iter().any(|d| d.name == distro && d.running());
+            // z mezipaměti (skryté okno, API odpovídá) distribuce běží
+            let running = !list.fresh || list.items.iter().any(|d| d.name == distro && d.running());
             distro_running = running;
             if let Ok(mut st) = self.shared.status.lock() {
-                *st = EngineStatus {
+                let new = EngineStatus {
                     connected,
                     distro_running: running,
                     distro: distro.clone(),
@@ -441,8 +507,13 @@ impl Worker {
                     running: n_run,
                     total: n_total,
                 };
+                if replace_if_changed(&mut *st, new) {
+                    self.shared.tray_gen.fetch_add(1, Ordering::Release);
+                }
             }
-            self.send(Msg::Distros(list));
+            if list.changed {
+                self.send(Msg::Distros(list.items));
+            }
             // běžící distribuci udržíme naživu, jinak ji WSL po nečinnosti zastaví i s Dockerem
             if running && self.cfg().keep_alive {
                 let _ = self.ensure_keepalive(&distro);
@@ -485,7 +556,7 @@ impl Worker {
                     prev.extend(rows.iter().map(|r| (r.id.clone(), (now, r.cpu_total))));
                 }
                 w.fill_limits(&d, &mut rows);
-                let df = d.df();
+                let df = w.df_if_due(&d);
                 w.history_stats(&rows, df.as_ref(), ncpu);
                 if distro_running {
                     w.memory_sample(Some(&rows));
@@ -494,6 +565,45 @@ impl Worker {
                 w.shared.stats_running.store(false, Ordering::SeqCst);
             });
         }
+    }
+
+    /// Další obnovení přehledu načte `/system/df` hned (po připojení, přepnutí a změně úložiště).
+    pub(super) fn invalidate_df(&self) {
+        if let Ok(mut g) = self.shared.last_df.lock() {
+            *g = None;
+        }
+    }
+
+    /// `/system/df` nejvýš jednou za [`DF_EVERY`]; jinak `None` (UI si ponechá poslední hodnotu).
+    fn df_if_due(&self, d: &Docker) -> Option<DfSummary> {
+        let last = self.shared.last_df.lock().ok().and_then(|g| *g);
+        if !df_due(last, Instant::now(), DF_EVERY) {
+            return None;
+        }
+        let df = d.df();
+        if df.is_some() {
+            if let Ok(mut g) = self.shared.last_df.lock() {
+                *g = Some(Instant::now());
+            }
+        }
+        df
+    }
+
+    /// Seznam distribucí: při skrytém okně a odpovídajícím API se `wsl.exe` nespouští a použije
+    /// se poslední seznam. `changed` = liší se od naposledy odeslaného do UI.
+    fn distro_list(&self, connected: bool) -> Option<DistroList> {
+        let cached = self.shared.last_distros.lock().ok().and_then(|g| g.clone());
+        if !need_wsl_list(crate::tray::window_visible(), connected, cached.is_some()) {
+            return cached.map(|items| DistroList { items, fresh: false, changed: false });
+        }
+        let items = wsl::list().ok()?;
+        let changed = cached.as_ref() != Some(&items);
+        if changed {
+            if let Ok(mut g) = self.shared.last_distros.lock() {
+                *g = Some(items.clone());
+            }
+        }
+        Some(DistroList { items, fresh: true, changed })
     }
 
     /// Zjistí z `/version`, zda na socketu běží Docker, nebo Podman, a uloží to do konfigurace.
@@ -571,7 +681,11 @@ impl Worker {
         // přehled „Na pozadí“: akce uživatele (bez obnovování a procházení)
         let is_fs = is_fs || matches!(cmd, Cmd::Terminal(Term::PodLogs { .. }));
         let mut act = (!is_fs && !matches!(cmd, Cmd::Refresh)).then(|| crate::activity::start(crate::activity::Kind::Action, activity_label(&cmd), String::new()));
+        let df_changes = changes_df(&cmd);
         let res = self.exec_inner(cmd);
+        if df_changes {
+            self.invalidate_df();
+        }
         if let Some(a) = act.as_mut() {
             a.set_ok(res.is_ok());
         }
@@ -832,6 +946,48 @@ fn activity_label(c: &Cmd) -> String {
 mod tests {
     use super::*;
     use crate::host::Caps;
+
+    #[test]
+    fn df_due_decisions() {
+        let t = Instant::now();
+        let every = Duration::from_secs(30);
+        assert!(df_due(None, t, every));
+        assert!(!df_due(Some(t), t + Duration::from_secs(3), every));
+        assert!(!df_due(Some(t), t + Duration::from_millis(29_999), every));
+        assert!(df_due(Some(t), t + every, every));
+        assert!(df_due(Some(t), t + Duration::from_secs(90), every));
+        // čas „před“ posledním voláním nesmí způsobit panic
+        assert!(!df_due(Some(t + every), t, every));
+    }
+
+    #[test]
+    fn replace_if_changed_only_on_difference() {
+        let mut v = vec![1, 2];
+        assert!(!replace_if_changed(&mut v, vec![1, 2]));
+        assert!(replace_if_changed(&mut v, vec![1, 3]));
+        assert_eq!(v, vec![1, 3]);
+    }
+
+    #[test]
+    fn changes_df_for_storage_commands() {
+        assert!(changes_df(&Cmd::Pull("x".into())));
+        assert!(changes_df(&Cmd::PruneVolumes));
+        assert!(changes_df(&Cmd::Container("i".into(), "remove")));
+        assert!(!changes_df(&Cmd::Container("i".into(), "stop")));
+        assert!(!changes_df(&Cmd::Refresh));
+    }
+
+    #[test]
+    fn need_wsl_list_decisions() {
+        // viditelné okno: vždy
+        assert!(need_wsl_list(true, true, true));
+        assert!(need_wsl_list(true, false, false));
+        // skryté okno a API odpovídá s mezipamětí: ne
+        assert!(!need_wsl_list(false, true, true));
+        // skryté okno, ale odpojeno nebo bez mezipaměti: ano
+        assert!(need_wsl_list(false, false, true));
+        assert!(need_wsl_list(false, true, false));
+    }
 
     /// Akce jen pro WSL (skripty z engine.rs, wsl.exe, Windows programy) mimo WSL neprojdou;
     /// na WSL projde vše.
