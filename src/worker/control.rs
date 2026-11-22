@@ -4,6 +4,8 @@
 //! ([`Request`]) a přečte jeden řádek JSON ([`Response`]). Akce jdou stejnou cestou jako tlačítka
 //! v UI (worker), takže je vidí i okno aplikace (oznámení, přehled „Na pozadí“, obnovení stavu).
 //! Roura je jen pro aktuálního uživatele (DACL jako `docker_engine`, viz `npipe.rs`).
+//! Roura existuje jen na Windows; na Linuxu modul slouží jen testům.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 use super::{Cmd, Msg, Worker, WslCmd};
 use crate::docker::Docker;

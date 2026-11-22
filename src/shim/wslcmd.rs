@@ -7,6 +7,7 @@
 //! s běžnými příkazy `docker`.
 
 use serde_json::{json, Value};
+#[cfg(windows)]
 use std::time::{Duration, Instant};
 
 pub const HELP: &str = "\
