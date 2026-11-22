@@ -15,16 +15,12 @@ pub const STATS_WINDOW: f64 = 300.0;
 /// Interval vzorkování statistik.
 const STATS_EVERY: Duration = Duration::from_secs(2);
 
-/// Jak často se při skrytém okně ověřuje, zda už je zase vidět.
-const HIDDEN_POLL: Duration = Duration::from_millis(500);
+/// Interval vzorkování při skrytém okně (bez překreslení, graf bez mezer).
+const HIDDEN_EVERY: Duration = Duration::from_secs(10);
 
-/// Má se teď vzorkovat? Při skrytém okně ne a zároveň se zahodí předchozí vzorek, aby první
-/// vzorek po zobrazení nepočítal CPU z rozdílu přes celou dobu skrytí.
-fn sample_now<T>(visible: bool, prev: &mut Option<T>) -> bool {
-    if !visible {
-        *prev = None;
-    }
-    visible
+/// Interval vzorkování podle viditelnosti okna.
+fn stats_interval(visible: bool) -> Duration {
+    if visible { STATS_EVERY } else { HIDDEN_EVERY }
 }
 
 /// Jeden vzorek statistik kontejneru.
@@ -62,11 +58,6 @@ pub fn start_stats(ctx: eframe::egui::Context, ep: crate::http::Endpoint, id: St
         let d = Docker::new(&ep);
         let mut prev: Option<(u64, Instant)> = None;
         while !st.load(Ordering::SeqCst) {
-            // skryté okno: bez dotazu a bez překreslení; `prev` pryč, aby po zobrazení nevznikl skok CPU
-            if !sample_now(crate::tray::window_visible(), &mut prev) {
-                thread::sleep(HIDDEN_POLL);
-                continue;
-            }
             let t0 = Instant::now();
             match d.stats(&id, "") {
                 Some(row) => {
@@ -84,12 +75,15 @@ pub fn start_stats(ctx: eframe::egui::Context, ep: crate::http::Endpoint, id: St
                             g.pop_front();
                         }
                     }
-                    ctx.request_repaint();
+                    // skryté okno nepřekreslovat
+                    if crate::tray::window_visible() {
+                        ctx.request_repaint();
+                    }
                 }
                 // kontejner neběží – zkusíme to znovu (mohl by se spustit)
                 None => prev = None,
             }
-            while t0.elapsed() < STATS_EVERY && !st.load(Ordering::SeqCst) {
+            while t0.elapsed() < stats_interval(crate::tray::window_visible()) && !st.load(Ordering::SeqCst) {
                 thread::sleep(Duration::from_millis(100));
             }
         }
@@ -275,16 +269,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hidden_skips_and_resets_prev() {
-        let mut prev = Some((5u64, Instant::now()));
-        assert!(!sample_now(false, &mut prev));
-        assert!(prev.is_none());
-    }
-
-    #[test]
-    fn visible_samples_and_keeps_prev() {
-        let mut prev = Some(7u64);
-        assert!(sample_now(true, &mut prev));
-        assert_eq!(prev, Some(7));
+    fn hidden_samples_slower_visible_fast() {
+        assert_eq!(stats_interval(true), Duration::from_secs(2));
+        assert_eq!(stats_interval(false), Duration::from_secs(10));
+        assert!(stats_interval(false) > stats_interval(true));
     }
 }

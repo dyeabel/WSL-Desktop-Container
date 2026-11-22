@@ -154,6 +154,7 @@ impl Notifier {
         if ev.kind != "container" || ev.actor.id.is_empty() {
             return vec![];
         }
+        self.prune(now, Duration::from_secs(p.cn.repeat_secs() as u64));
         let id = ev.actor.id.clone();
         let name = ev.name();
         if ev.attr(TC_LABEL).is_some() {
@@ -234,7 +235,8 @@ impl Notifier {
         if probe.gone {
             self.removed.insert(id.to_string(), now);
         }
-        if probe.oom_killed {
+        // bez čekajícího pádu by příznak nikdo nevyzvedl (únik)
+        if probe.oom_killed && self.pending.iter().any(|x| x.rec.id == id) {
             self.oom_killed.insert(id.to_string());
         }
     }
@@ -264,6 +266,32 @@ impl Notifier {
         });
     }
 
+    /// Rozhodne o jednom vyřízeném pádu (None = nic se nezapíše).
+    fn settle(&mut self, mut rec: Record, now: Instant, p: &Policy) -> Option<Out> {
+        let id = rec.id.clone();
+        if Self::since(&self.intended, &id, now) {
+            return None;
+        }
+        // engine hlásí nedostatek paměti -> záznam typu OOM (Podman nemusí poslat událost oom)
+        if self.oom_killed.remove(&id) {
+            rec.kind = Kind::Oom;
+            rec.quiet = None;
+        }
+        if Self::since(&self.removed, &id, now) {
+            if matches!(rec.code, Some(137 | 143)) {
+                return None;
+            }
+            if rec.quiet.is_none() && !p.cn.ephemeral {
+                rec.quiet = Some(Quiet::Ephemeral);
+            }
+        }
+        let repeat = Duration::from_secs(p.cn.repeat_secs() as u64);
+        if within(&self.seen, &id, Kind::Loop, now, repeat) {
+            rec.kind = Kind::Loop;
+        }
+        self.finish(rec, now, p)
+    }
+
     pub fn tick(&mut self, now: Instant, p: &Policy) -> Vec<Out> {
         self.prune(now, Duration::from_secs(p.cn.repeat_secs() as u64));
         // na načítaný detail se čeká nejvýš PREFETCH_WAIT
@@ -273,30 +301,11 @@ impl Notifier {
         self.pending = keep;
         // pády čekající na detail vyřídí tick po jeho načtení (worker, `prefetch_done`)
         let mut out = vec![];
-        for Pending { mut rec, .. } in due {
+        for Pending { rec, .. } in due {
             let id = rec.id.clone();
             self.prefetching.remove(&id);
-            if Self::since(&self.intended, &id, now) {
-                continue;
-            }
-            // engine hlásí nedostatek paměti -> záznam typu OOM (Podman nemusí poslat událost oom)
-            if self.oom_killed.remove(&id) {
-                rec.kind = Kind::Oom;
-                rec.quiet = None;
-            }
-            if Self::since(&self.removed, &id, now) {
-                if matches!(rec.code, Some(137 | 143)) {
-                    continue;
-                }
-                if rec.quiet.is_none() && !p.cn.ephemeral {
-                    rec.quiet = Some(Quiet::Ephemeral);
-                }
-            }
-            let repeat = Duration::from_secs(p.cn.repeat_secs() as u64);
-            if within(&self.seen, &id, Kind::Loop, now, repeat) {
-                rec.kind = Kind::Loop;
-            }
-            out.extend(self.finish(rec, now, p));
+            out.extend(self.settle(rec, now, p));
+            // kontejner je pryč a žádný další pád nečeká: příznaky už nikdo nepoužije
             if self.removed.contains_key(&id) && !self.pending.iter().any(|x| x.rec.id == id) {
                 self.forget_flags(&id);
             }
@@ -591,7 +600,44 @@ mod tests {
         n.sent.insert(("a".into(), Kind::Crash), t);
         n.seen.insert(("a".into(), Kind::Crash), t);
         n.tick(t + KEEP + Duration::from_secs(1), &p);
-        assert!(n.intended.is_empty() && n.removed.is_empty() && n.sent.is_empty() && n.seen.is_empty() && n.starts.is_empty());
+        assert!(n.intended.is_empty() && n.removed.is_empty() && n.sent.is_empty() && n.seen.is_empty());
+    }
+
+    #[test]
+    fn handle_prunes_without_any_crash() {
+        let mut n = Notifier::default();
+        let t = Instant::now();
+        let p = pol();
+        n.handle(&ev("start", "a", ""), t, &p);
+        n.mark_intended("a", t);
+        n.seen.insert(("a".into(), Kind::Crash), t);
+        n.prefetching.insert("a".into(), t);
+        n.handle(&ev("start", "b", ""), t + KEEP + Duration::from_secs(1), &p);
+        assert!(n.intended.is_empty() && n.seen.is_empty() && n.prefetching.is_empty());
+        assert!(!n.starts.contains_key("a") && n.starts.contains_key("b"));
+    }
+
+    #[test]
+    fn flags_cleared_on_skipped_crash_paths() {
+        let p = pol();
+        // 137 + smazání: pád se zahodí (continue), příznaky musí zmizet
+        let mut n = Notifier::default();
+        let t = Instant::now();
+        n.handle(&ev("die", "a", r#","exitCode":"137","org.testcontainers":"true""#), t, &p);
+        n.handle(&ev("destroy", "a", ""), t, &p);
+        n.prefetch_done("a", Probe { oom_killed: true, ..Default::default() }, t);
+        assert!(records(n.tick(t + PREFETCH_WAIT, &p)).is_empty());
+        assert!(!n.testcontainers.contains("a") && !n.oom_killed.contains("a"));
+        // záměrné zastavení (intended): pád se zahodí, příznaky musí zmizet
+        let mut n = Notifier::default();
+        n.handle(&ev("die", "b", r#","exitCode":"3","org.testcontainers":"true""#), t, &p);
+        n.mark_intended("b", t);
+        n.handle(&ev("destroy", "b", ""), t, &p);
+        assert!(records(n.tick(t + PREFETCH_WAIT, &p)).is_empty());
+        assert!(!n.testcontainers.contains("b"));
+        // oom po smazání bez čekajícího pádu se nevloží
+        n.prefetch_done("b", Probe { oom_killed: true, ..Default::default() }, t);
+        assert!(!n.oom_killed.contains("b"));
     }
 
     #[test]
