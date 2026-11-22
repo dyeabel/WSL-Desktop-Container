@@ -209,6 +209,10 @@ pub fn init(
     shared: Arc<Shared>,
     cfg: Arc<RwLock<Config>>,
 ) -> Result<(), String> {
+    // Linux: tray se zatím nezapíná (nejde ověřit bez GUI) – zavření okna aplikaci ukončí
+    if cfg!(not(windows)) {
+        return Ok(());
+    }
     let c = cfg.read().map(|c| c.clone()).unwrap_or_default();
     let status = MenuItem::with_id("status", t!("Zjišťuji stav…", "Checking status…"), false, None);
     let containers = Submenu::with_id("containers", t!("Kontejnery", "Containers"), true);

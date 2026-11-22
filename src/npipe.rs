@@ -10,10 +10,12 @@
 //! Každé spojení má vlastní vlákno a druhé vlákno pro opačný směr; žádné async.
 
 use std::io::{self, Read, Write};
+#[cfg(windows)]
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
+#[cfg(windows)]
 use std::time::Duration;
 
 /// Standardní roura Dockeru ve Windows (jako Docker Desktop) – DOCKER_HOST pak není potřeba.
@@ -25,6 +27,7 @@ const CHUNK: usize = 64 * 1024;
 
 /// Kam přeposílat jedno spojení.
 #[derive(Clone)]
+#[cfg_attr(not(windows), allow(dead_code))] // jen Windows (roura); čistá logika se testuje i na Linuxu
 pub enum Target {
     /// obyčejné TCP na 127.0.0.1:<port>
     Plain(u16),
@@ -44,6 +47,7 @@ pub fn pipe_from_docker_host(url: &str) -> Option<String> {
 
 /// SDDL bezpečnostního popisovače roury: chráněná DACL (bez dědění), plný přístup jen pro
 /// daného uživatele (SID) a SYSTEM. Ostatní uživatelé (i Administrators) nemají přístup.
+#[cfg_attr(not(windows), allow(dead_code))] // jen Windows (roura); čistá logika se testuje i na Linuxu
 pub fn sddl_for_sid(sid: &str) -> Result<String, String> {
     let ok = sid.len() > 4
         && sid.starts_with("S-1-")
@@ -56,6 +60,7 @@ pub fn sddl_for_sid(sid: &str) -> Result<String, String> {
 
 /// Odpověď 502 pro klienta, když se nepodaří spojit s API enginu (aby `docker` ukázal důvod
 /// místo uzavřeného spojení).
+#[cfg_attr(not(windows), allow(dead_code))] // jen Windows (roura); čistá logika se testuje i na Linuxu
 pub fn error_response(msg: &str) -> Vec<u8> {
     let body = format!("{{\"message\":{}}}\n", serde_json::Value::String(format!("WSL Container Desktop: {msg}")));
     format!(

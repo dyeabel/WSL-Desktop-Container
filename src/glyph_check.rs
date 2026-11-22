@@ -2,6 +2,7 @@
 //! jinak se v okně a v toastech kreslí čtvereček (např. „→“ chybí ve výchozím Ubuntu-Light).
 
 /// Znaky mimo ASCII z řetězcových literálů (bez komentářů) ve všech `src/**/*.rs`.
+#[cfg(windows)] // používá jen test glyfů, který běží na Windows
 fn literal_chars() -> std::collections::BTreeMap<char, String> {
     let mut found = std::collections::BTreeMap::new();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

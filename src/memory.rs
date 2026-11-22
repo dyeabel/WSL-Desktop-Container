@@ -386,6 +386,7 @@ fn vmmem_powershell() -> Option<u64> {
     String::from_utf8_lossy(&out.stdout).trim().parse::<u64>().ok().filter(|b| *b > 0)
 }
 
+#[cfg_attr(not(windows), allow(dead_code))] // jen Windows (roura); čistá logika se testuje i na Linuxu
 fn is_vmmem(name: &str) -> bool {
     let n = name.strip_suffix(".exe").unwrap_or(name);
     n.eq_ignore_ascii_case("vmmemWSL") || n.eq_ignore_ascii_case("vmmem")
