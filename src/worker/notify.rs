@@ -30,6 +30,10 @@ const LOOP_STARTS: usize = 3;
 const COALESCE: Duration = Duration::from_millis(2000);
 /// Štítek kontejnerů Testcontainers.
 const TC_LABEL: &str = "org.testcontainers";
+/// Záznamy map s časem starší než toto (a než interval opakování) se zahodí.
+const KEEP: Duration = Duration::from_secs(3600);
+/// Jak často se mapy procházejí.
+const PRUNE_EVERY: Duration = Duration::from_secs(600);
 
 /// Nastavení pro rozhodování (kopie z konfigurace).
 #[derive(Debug, Clone, Default)]
@@ -67,6 +71,7 @@ struct Pending {
 #[derive(Default)]
 pub struct Notifier {
     quiet_until: Option<Instant>,
+    last_prune: Option<Instant>,
     intended: HashMap<String, Instant>,
     removed: HashMap<String, Instant>,
     starts: HashMap<String, Vec<Instant>>,
@@ -162,6 +167,10 @@ impl Notifier {
                 self.removed.insert(id.clone(), now);
                 self.starts.remove(&id);
                 self.health.remove(&id);
+                // podržený pád ještě potřebuje příznaky (Testcontainers, OOM) – uklidí je `tick`
+                if !self.pending.iter().any(|x| x.rec.id == id) {
+                    self.forget_flags(&id);
+                }
             }
             "oom" => out.extend(self.finish(rec(Kind::Oom, None, None), now, p)),
             "start" => {
@@ -230,7 +239,33 @@ impl Notifier {
         }
     }
 
+    /// Kontejner je pryč: příznaky bez času už nebudou potřeba.
+    fn forget_flags(&mut self, id: &str) {
+        self.testcontainers.remove(id);
+        self.oom_killed.remove(id);
+    }
+
+    /// Zahodí záznamy starší než `KEEP` (a než interval opakování, ať se nezkrátí potlačení).
+    fn prune(&mut self, now: Instant, repeat: Duration) {
+        if self.last_prune.is_some_and(|t| now.saturating_duration_since(t) < PRUNE_EVERY) {
+            return;
+        }
+        self.last_prune = Some(now);
+        let keep = KEEP.max(repeat);
+        let fresh = |t: &Instant| now.saturating_duration_since(*t) < keep;
+        self.intended.retain(|_, t| fresh(t));
+        self.removed.retain(|_, t| fresh(t));
+        self.sent.retain(|_, t| fresh(t));
+        self.seen.retain(|_, t| fresh(t));
+        self.prefetching.retain(|_, t| fresh(t));
+        self.starts.retain(|_, v| {
+            v.retain(|t| fresh(t));
+            !v.is_empty()
+        });
+    }
+
     pub fn tick(&mut self, now: Instant, p: &Policy) -> Vec<Out> {
+        self.prune(now, Duration::from_secs(p.cn.repeat_secs() as u64));
         // na načítaný detail se čeká nejvýš PREFETCH_WAIT
         let waiting = |pf: &HashMap<String, Instant>, id: &str| pf.get(id).is_some_and(|t| now.saturating_duration_since(*t) < PREFETCH_WAIT);
         let (due, keep): (Vec<_>, Vec<_>) =
@@ -262,6 +297,9 @@ impl Notifier {
                 rec.kind = Kind::Loop;
             }
             out.extend(self.finish(rec, now, p));
+            if self.removed.contains_key(&id) && !self.pending.iter().any(|x| x.rec.id == id) {
+                self.forget_flags(&id);
+            }
         }
         out
     }
@@ -538,6 +576,52 @@ mod tests {
         let p = pol();
         n.handle(&ev("die", id, &format!(r#","exitCode":"{code}""#)), t, &p);
         records(n.tick(t + PREFETCH_WAIT, &p))
+    }
+
+    #[test]
+    fn destroy_forgets_flags_and_old_entries_are_pruned() {
+        let mut n = Notifier::default();
+        let t = Instant::now();
+        let p = pol();
+        n.handle(&ev("start", "a", r#","org.testcontainers":"true""#), t, &p);
+        n.oom_killed.insert("a".into());
+        n.handle(&ev("destroy", "a", ""), t, &p);
+        assert!(!n.testcontainers.contains("a") && !n.oom_killed.contains("a"));
+        n.mark_intended("a", t);
+        n.sent.insert(("a".into(), Kind::Crash), t);
+        n.seen.insert(("a".into(), Kind::Crash), t);
+        n.tick(t + KEEP + Duration::from_secs(1), &p);
+        assert!(n.intended.is_empty() && n.removed.is_empty() && n.sent.is_empty() && n.seen.is_empty() && n.starts.is_empty());
+    }
+
+    #[test]
+    fn prune_keeps_fresh_entries_and_respects_repeat() {
+        let mut n = Notifier::default();
+        let t = Instant::now();
+        n.sent.insert(("a".into(), Kind::Crash), t);
+        n.prune(t + Duration::from_secs(1800), Duration::from_secs(60));
+        assert_eq!(n.sent.len(), 1);
+        // interval opakování delší než hodina: záznam se nesmí zahodit dřív
+        n.last_prune = None;
+        n.prune(t + KEEP + Duration::from_secs(60), Duration::from_secs(7200));
+        assert_eq!(n.sent.len(), 1);
+        n.last_prune = None;
+        n.prune(t + Duration::from_secs(7300), Duration::from_secs(7200));
+        assert!(n.sent.is_empty());
+    }
+
+    #[test]
+    fn destroy_after_die_keeps_flags_until_held_crash_is_handled() {
+        let mut n = Notifier::default();
+        let t = Instant::now();
+        let p = pol();
+        n.handle(&ev("die", "a", r#","exitCode":"3","org.testcontainers":"true""#), t, &p);
+        n.handle(&ev("destroy", "a", ""), t, &p);
+        assert!(n.testcontainers.contains("a"));
+        // smazání v okně = dočasný kontejner (Ephemeral má přednost), příznak se uklidí až po vyřízení
+        let r = records(n.tick(t + PREFETCH_WAIT, &p));
+        assert_eq!(r.len(), 1);
+        assert!(!n.testcontainers.contains("a"));
     }
 
     #[test]
