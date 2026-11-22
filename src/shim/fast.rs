@@ -452,7 +452,7 @@ pub fn go_time_string(ts: i64, tz: TzFn) -> String {
 }
 
 /// Zkratky zón jako Go na Windows (podle anglického názvu zóny); jinak velká písmena názvu.
-#[cfg_attr(not(windows), allow(dead_code))] // jen Windows (roura); čistá logika se testuje i na Linuxu
+#[cfg_attr(not(windows), allow(dead_code))] // volá jen čtení časové zóny z registru Windows; testuje se i na Linuxu
 fn zone_abbr(key: &str, dst: bool) -> String {
     const T: &[(&str, &str, &str)] = &[
         ("Central Europe Standard Time", "CET", "CEST"),

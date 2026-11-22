@@ -589,6 +589,45 @@ in `/etc/wsl-container-desktop/tls`; any API setup, primary switch or uninstall 
 `wls-*` services, files and group first (new certificates are generated). The `WSLCD_*`
 environment variables used for debugging and tests are unchanged.
 
+## Linux
+
+The same app also runs on Linux (x86_64, GTK 3) as a plain control panel for a container engine
+that is already there: **Docker** (`/var/run/docker.sock`) or **rootless Podman**
+(`$XDG_RUNTIME_DIR/podman/podman.sock`). On Linux the app never installs or configures anything:
+no engine setup, no changes to `docker.service`, groups or system files.
+
+**Works:** containers, images, volumes, networks, compose stacks, Kubernetes lab, logs, stats, files
+inside containers, builds, volume backups, the Events page and notifications (`notify-send`),
+start at login (XDG autostart file `~/.config/autostart/wsl-container-desktop.desktop`), the tray
+icon (needs a desktop with AppIndicator / StatusNotifier support; GNOME needs an extension).
+
+**Not available** (hidden in the UI): everything that belongs to WSL – distributions and the
+*WSL engine* page, Add distribution wizard, WSL memory and VHDX disk tools, `.wslconfig`, the
+`docker` shim, the named pipe and the `localhost` relay. Remote engines (`ssh://`, `tcp://` other
+than localhost) are not supported either; the app shows a message and uses the local socket.
+
+**Socket access.** Docker: add yourself to the `docker` group and log in again
+(`sudo usermod -aG docker $USER`). Podman: `systemctl --user enable --now podman.socket`.
+The app never changes these settings itself and never calls `pkexec` on its own.
+
+**Files:** configuration in `$XDG_CONFIG_HOME/wsl-container-desktop` (default `~/.config/...`),
+data in `$XDG_DATA_HOME/wsl-container-desktop` (default `~/.local/share/...`).
+
+**Package.** Releases carry `WSL-Container-Desktop-<version>-linux-x64.tar.gz` (+ `.sha256`) with
+the binary, a `.desktop` file, the icon and `README-linux.txt`. Runtime libraries (Debian / Ubuntu):
+`libgtk-3-0`, `libxdo3`, `libayatana-appindicator3-1`; optionally `libnotify-bin`. To build it
+yourself:
+
+```bash
+scripts/package-linux.sh 0.9.0-dev        # on Linux with the build dependencies, output in dist/
+```
+
+From Windows, the same script runs in the dev container inside the WSLCD-Lite distribution
+(repository mounted read-only, only `dist/` is written):
+`powershell -ExecutionPolicy Bypass -File scripts\linux-test.ps1 package 0.9.0-dev`
+(`check` and `test` modes build and test the Linux target the same way). The GitHub workflow
+`linux` builds, tests and attaches the archive to the release on `v*` tags.
+
 ## Building
 
 Requirements: Rust (MSVC toolchain) and Visual Studio Build Tools with C++ (including the

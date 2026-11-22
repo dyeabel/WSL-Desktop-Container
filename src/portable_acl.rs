@@ -8,7 +8,7 @@
 //! oprávnění zdědí. Složka v profilu uživatele už takové ACL má – nic se nemění.
 
 /// Požadovaný DACL ve formátu SDDL.
-#[cfg_attr(not(windows), allow(dead_code))] // jen Windows (roura); čistá logika se testuje i na Linuxu
+#[cfg_attr(not(windows), allow(dead_code))] // volá jen kód pro Windows (nastavení ACL); testuje se i na Linuxu
 pub fn wanted_sddl(user_sid: &str) -> String {
     format!("D:PAI(A;OICI;FA;;;{user_sid})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")
 }
@@ -19,7 +19,7 @@ pub fn wanted_sddl(user_sid: &str) -> String {
 /// `sid_of` převede správce z SDDL na textový SID: Windows píše dobře známé účty zkratkou
 /// (`SY`, `BA`, a také `LA` = vestavěný Administrator s RID 500 – pod ním běží např.
 /// runner GitHub Actions), takže uživatel nemusí být v SDDL zapsaný svým SID.
-#[cfg_attr(not(windows), allow(dead_code))] // jen Windows (roura); čistá logika se testuje i na Linuxu
+#[cfg_attr(not(windows), allow(dead_code))] // volá jen kód pro Windows (nastavení ACL); testuje se i na Linuxu
 pub fn dacl_is_private(sddl: &str, user_sid: &str, sid_of: impl Fn(&str) -> String) -> bool {
     let Some(d) = sddl.find("D:").map(|i| &sddl[i + 2..]) else { return false };
     let flags = &d[..d.find('(').unwrap_or(d.len())];
@@ -34,9 +34,9 @@ pub fn dacl_is_private(sddl: &str, user_sid: &str, sid_of: impl Fn(&str) -> Stri
     })
 }
 
-#[cfg_attr(not(windows), allow(dead_code))] // jen Windows (roura); čistá logika se testuje i na Linuxu
+#[cfg_attr(not(windows), allow(dead_code))] // volá jen kód pro Windows (nastavení ACL); testuje se i na Linuxu
 const SID_SYSTEM: &str = "S-1-5-18";
-#[cfg_attr(not(windows), allow(dead_code))] // jen Windows (roura); čistá logika se testuje i na Linuxu
+#[cfg_attr(not(windows), allow(dead_code))] // volá jen kód pro Windows (nastavení ACL); testuje se i na Linuxu
 const SID_ADMINS: &str = "S-1-5-32-544";
 
 /// Zkratka nebo SID ze SDDL → textový SID (`SY` → `S-1-5-18`, `LA` → `S-1-5-21-…-500`).

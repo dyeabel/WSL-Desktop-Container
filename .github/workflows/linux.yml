@@ -1,15 +1,18 @@
 # Sestavení a testy na Linuxu (Ubuntu) – hostované runnery GitHubu, bez WSL.
 # Živé testy (--ignored) běží proti Dockeru samotného runneru (/var/run/docker.sock).
+# Balíček tar.gz (scripts/package-linux.sh) se nahraje jako artefakt a na tag v* se přiloží
+# k releasu (stejně jako ZIPy z workflow build).
 name: linux
 
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   linux:
@@ -29,3 +32,21 @@ jobs:
         run: cargo test --locked
       - name: Živé testy proti Dockeru runneru
         run: cargo test --locked host::local -- --ignored
+      - name: Balíček (tar.gz)
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          scripts/package-linux.sh "$version"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wsl-container-desktop-linux
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          generate_release_notes: true

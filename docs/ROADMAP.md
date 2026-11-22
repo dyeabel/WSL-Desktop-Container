@@ -6,6 +6,9 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
 
 - Host abstraction, step 1: all `wsl.exe` calls behind the `Host` trait, own HTTP/1.1 client instead of `ureq`
   in the Docker API client; measured (docs/bench/2026-11-21-host-abstraction-after.md) within the performance limits.
+- Linux host (step 2): the app runs on Linux against a Docker or rootless Podman socket (WSL
+  features hidden), XDG paths, `notify-send`, XDG autostart, tar.gz package and a `linux` CI job
+  with the release attachment; see README *Linux*.
 - Live updates via the engine event stream (`/events`), polling only as a fallback.
 - Windows notifications: crash, out of memory, unhealthy, restart loop; Events page with the
   history and details, routine exits (SIGTERM, `--rm`, Testcontainers) only recorded, merged

@@ -6,9 +6,11 @@
   check = cargo check --locked --bins --tests
   test  = cargo test --locked
   live  = cargo test --locked <filtr> -- --ignored proti dočasné službě podman system service
+  package <verze> = scripts/package-linux.sh v kontejneru; archiv skončí v dist\ (repo je jen pro čtení)
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\linux-test.ps1 check
+  powershell -ExecutionPolicy Bypass -File scripts\linux-test.ps1 package 0.9.0-dev
   scripts\linux-test.ps1 test -- host::local
   scripts\linux-test.ps1 live -- host::local
   Přes "powershell -File" parametr "--" nefunguje (PowerShell ho odmítne), filtr tam zadejte bez něj:
@@ -16,7 +18,7 @@
 #>
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('check', 'test', 'live')]
+    [ValidateSet('check', 'test', 'live', 'package')]
     [string]$Mode,
     [string]$Distro = 'WSLCD-Lite',
     [Parameter(ValueFromRemainingArguments = $true)]

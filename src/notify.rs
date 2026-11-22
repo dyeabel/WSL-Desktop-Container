@@ -1,5 +1,6 @@
-//! Oznámení ve Windows (toast). Aplikace se registruje jako odesílatel přes
-//! AppUserModelId v HKCU (bez instalace a zástupce), aby oznámení nesla její název a ikonu.
+//! Oznámení. Windows: toast; aplikace se registruje jako odesílatel přes AppUserModelId v HKCU
+//! (bez instalace a zástupce), aby oznámení nesla její název a ikonu.
+//! Linux: `notify-send` (bez něj se oznámení nezobrazí, záznam v historii zůstává).
 
 #[cfg(windows)]
 pub const AUMID: &str = "WSL.Container.Desktop";
@@ -59,10 +60,18 @@ pub fn show_with(title: &str, body: &str, on_click: impl Fn() + Send + 'static) 
     }
 }
 
+/// Text těla pro servery oznámení, které ho čtou jako Pango markup (GNOME aj.): `&`, `<`, `>`
+/// se nahradí entitami, jinak by např. název kontejneru `a<b` nebo `&amp;` zmizel či se zkomolil.
+/// Titulek je podle specifikace prostý text, ten se neescapuje.
+#[cfg_attr(windows, allow(dead_code))] // volá jen Linux; čistá logika se testuje i na Windows
+fn escape_markup(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
 /// Argumenty `notify-send`. `--` brání tomu, aby titulek začínající pomlčkou byl přepínač.
-#[cfg_attr(windows, allow(dead_code))] // jen Linux; čistá logika se testuje i na Windows
+#[cfg_attr(windows, allow(dead_code))] // volá jen Linux; čistá logika se testuje i na Windows
 pub fn notify_send_args(title: &str, body: &str) -> Vec<String> {
-    vec!["--app-name=WSL Container Desktop".into(), "--".into(), title.into(), body.into()]
+    vec!["--app-name=WSL Container Desktop".into(), "--".into(), title.into(), escape_markup(body)]
 }
 
 /// Linux: `notify-send`. Když chybí (nebo selže), nic se nestane – záznam v historii zůstává.
@@ -88,13 +97,20 @@ pub fn show_with(title: &str, body: &str, _on_click: impl Fn() + Send + 'static)
 mod tests {
     #[test]
     fn notify_send_args() {
-        let a = super::notify_send_args("Kontejner spadl", "web
-kód 1");
-        assert_eq!(a, ["--app-name=WSL Container Desktop", "--", "Kontejner spadl", "web
-kód 1"]);
+        let a = super::notify_send_args("Kontejner spadl", "web\nkód 1");
+        assert_eq!(a, ["--app-name=WSL Container Desktop", "--", "Kontejner spadl", "web\nkód 1"]);
         // titulek začínající pomlčkou se nesmí vyložit jako přepínač
         let a = super::notify_send_args("-h", "x");
         assert_eq!(a[1], "--");
         assert_eq!(a[2], "-h");
+    }
+
+    #[test]
+    fn body_markup_is_escaped() {
+        let a = super::notify_send_args("a & <b>", "<b>x</b> & &amp; y");
+        // titulek je prostý text
+        assert_eq!(a[2], "a & <b>");
+        // `&` se escapuje první, aby se entity nezdvojily
+        assert_eq!(a[3], "&lt;b&gt;x&lt;/b&gt; &amp; &amp;amp; y");
     }
 }
