@@ -141,7 +141,7 @@ fn security_hint(app: &mut App, ui: &mut egui::Ui, tls: bool) {
 }
 
 /// Adresa API enginu pro zobrazení (`unix:///…`, `tcp://127.0.0.1:…`).
-fn endpoint_text(ep: &crate::http::Endpoint) -> String {
+pub fn endpoint_text(ep: &crate::http::Endpoint) -> String {
     match ep {
         crate::http::Endpoint::Tcp { port } => format!("tcp://127.0.0.1:{port}"),
         crate::http::Endpoint::Unix(p) => format!("unix://{}", p.display()),

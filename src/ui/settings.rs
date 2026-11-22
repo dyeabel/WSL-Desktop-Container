@@ -406,9 +406,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     "Data collection continues with the window hidden (history, alerts), just less often – saves CPU. Showing the window refreshes the data right away."
                 ));
                 ui.end_row();
-                ui.label("");
-                ui.checkbox(&mut d.keep_alive, t!("Udržovat distribuci naživu (doporučeno)", "Keep distribution alive (recommended)"));
-                ui.end_row();
+                if caps.distros {
+                    ui.label("");
+                    ui.checkbox(&mut d.keep_alive, t!("Udržovat distribuci naživu (doporučeno)", "Keep distribution alive (recommended)"));
+                    ui.end_row();
+                }
                 ui.label("");
                 ui.checkbox(&mut d.autostart_engine, t!("Při spuštění aplikace nastartovat engine", "Start the engine when the app starts"));
                 ui.end_row();

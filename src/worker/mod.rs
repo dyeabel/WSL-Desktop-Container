@@ -352,7 +352,12 @@ impl Worker {
         // spuštěno ze shimu = někdo právě potřebuje engine
         if self.cfg().autostart_engine || crate::wake::launched_from_shim() {
             let w = self.clone();
-            thread::spawn(move || w.exec(Cmd::EngineStart));
+            // Linux: bez kliknutí nikdy pkexec (běžící engine nechat, systémovou službu přeskočit)
+            if self.host().wsl().is_none() {
+                thread::spawn(move || w.autostart_local());
+            } else {
+                thread::spawn(move || w.exec(Cmd::EngineStart));
+            }
         }
         // docker shim žádá o start enginu (aplikace už běží, engine ne)
         let tx = self.cmd.clone();
@@ -585,10 +590,6 @@ impl Worker {
     fn exec_inner(&self, cmd: Cmd) -> Result<String, String> {
         let cfg = self.cfg();
         let caps = crate::host::current_caps();
-        // udržování distribuce naživu: bez WSL není co udržovat (změna nastavení, žádná chyba)
-        if matches!(cmd, Cmd::SetKeepAlive(_)) && !caps.distros {
-            return Ok(String::new());
-        }
         // pojistka: akce jen pro WSL (instalační a nastavovací skripty, wsl.exe, Windows
         // programy) se na jiném hostiteli nikdy nespustí, i kdyby je UI poslalo
         if !supported(caps, &cmd) {

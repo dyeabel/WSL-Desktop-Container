@@ -517,14 +517,44 @@ impl Worker {
     /// uživatelská služba, jinak systémová přes `pkexec` (jen na kliknutí, `interactive`).
     /// Nic se neinstaluje ani nekonfiguruje.
     fn local_engine(&self, op: SvcOp) -> Result<String, String> {
+        self.local_engine_with(op, true)
+    }
+
+    /// Příkaz pro službu místního enginu (argumenty, root) podle nalezeného socketu.
+    fn local_command(&self, op: SvcOp) -> (Vec<String>, bool) {
+        let rt = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
+        local_engine_command(op, crate::host::found_endpoint().as_ref(), self.cfg().engine, rt.as_deref())
+    }
+
+    fn local_ping(&self) -> bool {
+        crate::docker::Docker::new(&crate::host::endpoint(&self.cfg())).ping()
+    }
+
+    /// `interactive` = kliknutí uživatele: jen tehdy smí systémová služba žádat o heslo (pkexec).
+    fn local_engine_with(&self, op: SvcOp, interactive: bool) -> Result<String, String> {
         let cfg = self.cfg();
         let name = cfg.engine.name();
-        let rt = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
-        let (args, root) = local_engine_command(op, crate::host::found_endpoint().as_ref(), cfg.engine, rt.as_deref());
+        // už běží: nic nespouštět (žádný dotaz na heslo)
+        if op == SvcOp::Start && self.local_ping() {
+            return Ok(tf!("{name} běží", "{name} is running"));
+        }
+        let (args, root) = self.local_command(op);
         let a: Vec<&str> = args.iter().map(String::as_str).collect();
         let p = if root { Privilege::Root } else { Privilege::User };
-        let host = self.host();
-        host.exec(&crate::host::ExecReq::new(&a).privilege(p).interactive()).and_then(crate::host::finish)?;
+        let mut req = crate::host::ExecReq::new(&a).privilege(p);
+        if interactive {
+            req = req.interactive();
+        }
+        // předpoklad: socket pod $XDG_RUNTIME_DIR = rootless (uživatelská služba), jinak systémová
+        let scope = if root {
+            t!("systémová služba (rootful)", "system service (rootful)")
+        } else {
+            t!("uživatelská služba (rootless)", "user service (rootless)")
+        };
+        let cmdline = args.join(" ");
+        self.host().exec(&req).and_then(crate::host::finish).map_err(|e| {
+            tf!("{name}: {cmdline} – {scope} selhalo: {e}", "{name}: {cmdline} – {scope} failed: {e}")
+        })?;
         if op == SvcOp::Stop {
             return Ok(tf!("{name} zastaven", "{name} stopped"));
         }
@@ -542,7 +572,36 @@ impl Worker {
             thread::sleep(Duration::from_millis(500));
         }
         let note = crate::host::engine_note().map(|n| format!(" {n}")).unwrap_or_default();
-        Err(tf!("{name} po spuštění neodpovídá.{note}", "{name} is not responding after the start.{note}"))
+        Err(tf!(
+            "{name} po spuštění neodpovídá ({cmdline}, {scope}).{note}",
+            "{name} is not responding after the start ({cmdline}, {scope}).{note}"
+        ))
+    }
+
+    /// Automatický start při spuštění aplikace na Linuxu: nikdy nežádá o heslo. Běžící engine
+    /// se nechá, systémová služba (root) se přeskočí s jedním upozorněním.
+    pub(super) fn autostart_local(&self) {
+        let (_, root) = self.local_command(SvcOp::Start);
+        match autostart_decision(self.local_ping(), root) {
+            AutoStart::Running => {}
+            AutoStart::NeedsRoot => self.send(Msg::Toast(
+                false,
+                tf!(
+                    "{} se automaticky nespouští – systémová služba vyžaduje oprávnění roota. Spusťte ho tlačítkem na stránce Engine.",
+                    "{} is not started automatically – the system service requires root. Start it with the button on the Engine page.",
+                    self.cfg().engine.name()
+                ),
+            )),
+            AutoStart::Start => {
+                let r = self.local_engine_with(SvcOp::Start, false);
+                crate::host::refresh_discovery();
+                match r {
+                    Ok(s) => self.send(Msg::Toast(true, s)),
+                    Err(e) => self.send(Msg::Toast(false, e)),
+                }
+                let _ = self.cmd.send(super::Cmd::Refresh);
+            }
+        }
     }
 
     pub(super) fn uninstall_engine(&self, engine: Engine, purge: bool) -> Result<String, String> {
@@ -636,6 +695,25 @@ echo 3 > /proc/sys/vm/drop_caches
 echo 1 > /proc/sys/vm/compact_memory 2>/dev/null || true
 echo "after: $(awk '/^Cached:/{print $2}' /proc/meminfo)""#;
 
+/// Co udělat s enginem při automatickém startu na Linuxu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AutoStart {
+    /// už odpovídá – nic
+    Running,
+    /// spustit uživatelskou službu (bez hesla)
+    Start,
+    /// systémová služba by žádala o heslo – bez kliknutí nespouštět
+    NeedsRoot,
+}
+
+pub(crate) fn autostart_decision(running: bool, needs_root: bool) -> AutoStart {
+    match (running, needs_root) {
+        (true, _) => AutoStart::Running,
+        (false, true) => AutoStart::NeedsRoot,
+        (false, false) => AutoStart::Start,
+    }
+}
+
 /// Operace se službou místního enginu (Linux).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SvcOp {
@@ -712,6 +790,15 @@ fn docker_host_is_tcp() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn autostart_never_prompts() {
+        use super::{autostart_decision as d, AutoStart};
+        assert_eq!(d(true, true), AutoStart::Running);
+        assert_eq!(d(true, false), AutoStart::Running);
+        assert_eq!(d(false, true), AutoStart::NeedsRoot);
+        assert_eq!(d(false, false), AutoStart::Start);
+    }
+
     #[test]
     fn engine_start_stop_commands() {
         use super::{local_engine_command as cmd, SvcOp::*};

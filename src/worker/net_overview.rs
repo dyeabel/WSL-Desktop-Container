@@ -211,9 +211,12 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
             let t = started.elapsed().as_secs_f64();
             overview_round(&*host, &mut vm, t, &mut next);
             next.wsl_mode = crate::wslconfig::get(&crate::wslconfig::read(), "wsl2", "networkingMode").unwrap_or_default();
-            match windows_listeners(&mut names) {
-                Ok(w) => next.win_listen = w,
-                Err(e) => next.win_error = Some(e),
+            // porty Windows jen na Windows (WSL); jinde nic a bez chyby
+            if cfg!(windows) && crate::host::current_caps().distros {
+                match windows_listeners(&mut names) {
+                    Ok(w) => next.win_listen = w,
+                    Err(e) => next.win_error = Some(e),
+                }
             }
             if tr.load(Ordering::Relaxed) {
                 next.containers = container_traffic(&Docker::new(&ep), &mut ctr, t);
