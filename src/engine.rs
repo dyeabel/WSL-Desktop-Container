@@ -423,6 +423,11 @@ const TLS_FUNCS: &str = r#"tls_proxy() {
     echo "Certifikaty vytvoreny v $T"
   fi
   S=$(command -v socat)
+  # bez session ticketů: socat nenastavuje session id context, takže obnovení relace
+  # (klient s klientským certifikátem, např. SChannel / .NET) skončí alertem InternalError
+  # („session id context uninitialized“); bez ticketu proběhne vždy plný handshake.
+  # OPENSSL_CONF přes env v ExecStart – systemctl ve WSLCD Lite nezná Environment=
+  printf 'openssl_conf = wslcd_init\n[wslcd_init]\nssl_conf = wslcd_ssl\n[wslcd_ssl]\nsystem_default = wslcd_tls\n[wslcd_tls]\nOptions = -SessionTicket\n' > $T/openssl.cnf
   cat > /etc/systemd/system/$PU.service <<EOF
 [Unit]
 Description=TLS proxy pro API enginu (WSL Container Desktop, tcp://127.0.0.1:$PORT)
@@ -430,7 +435,7 @@ BindsTo=$2
 After=$2
 
 [Service]
-ExecStart=$S OPENSSL-LISTEN:$PORT,bind=127.0.0.1,reuseaddr,fork,backlog=128,max-children=256,cert=$T/server.pem,key=$T/server-key.pem,cafile=$T/ca.pem,verify=1 UNIX-CONNECT:$1
+ExecStart=/usr/bin/env OPENSSL_CONF=$T/openssl.cnf $S OPENSSL-LISTEN:$PORT,bind=127.0.0.1,reuseaddr,fork,backlog=128,max-children=256,cert=$T/server.pem,key=$T/server-key.pem,cafile=$T/ca.pem,verify=1 UNIX-CONNECT:$1
 Restart=always
 RestartSec=1
 
@@ -601,6 +606,17 @@ mod tests {
         assert!(s.contains("-I DOCKER-USER $$d podman+ -j ACCEPT"), "systemd escapuje $ jako $$");
         assert!(s.contains("<<'EOF'\n[Service]\nExecStartPost=-/bin/sh"), "heredoc bez expanze, chyba se ignoruje");
         assert!(Engine::Docker.uninstall_script().contains("20-wsl-container-desktop-shared-net.conf"));
+    }
+
+    #[test]
+    fn tls_proxy_disables_session_tickets() {
+        // socat nenastavuje session id context – obnovení relace s klientským certifikátem
+        // by skončilo alertem InternalError (Testcontainers / .NET na Windows)
+        for e in [Engine::Docker, Engine::Podman] {
+            let s = e.setup_script();
+            assert!(s.contains("Options = -SessionTicket\\n' > $T/openssl.cnf"), "{e:?}");
+            assert!(s.contains("[Service]\nExecStart=/usr/bin/env OPENSSL_CONF=$T/openssl.cnf $S OPENSSL-LISTEN:"), "{e:?}");
+        }
     }
 
     #[test]
