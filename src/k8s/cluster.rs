@@ -280,6 +280,10 @@ fi"#;
 
 /// Zkusí TCP spojení z podu (v jeho síťovém namespace, takže platí jeho politiky).
 pub fn probe(host: &dyn Host, node_pid: u32, netns: &str, ip: &str, port: u16) -> Result<bool, String> {
+    // nsenter jako root jen tam, kde hostitel smí root bez hesla (WSL)
+    if !host.caps().root_sampling {
+        return Err(crate::host::unavailable());
+    }
     let (pid, port) = (node_pid.to_string(), port.to_string());
     let out = host.run(Privilege::Root, None, &["sh", "-c", PROBE_SCRIPT, "_", &pid, netns, ip, &port]).map_err(|e| e.to_string())?;
     Ok(out.trim_end().ends_with("OPEN"))
@@ -294,6 +298,17 @@ pub fn probe_localhost(port: u16) -> bool {
 mod tests {
     use super::*;
     use crate::config::DEFAULT_K3S_IMAGE as DEFAULT_IMAGE;
+
+    #[test]
+    fn probe_needs_root_sampling() {
+        use crate::host::{fake::RecordingHost, Caps};
+        let local = RecordingHost::new(Caps::LOCAL);
+        assert_eq!(probe(&local, 1, "/var/run/netns/x", "10.0.0.1", 80), Err(crate::host::unavailable()));
+        assert!(local.calls.lock().unwrap().is_empty());
+        let wsl = RecordingHost::new(Caps::WSL);
+        let _ = probe(&wsl, 1, "/var/run/netns/x", "10.0.0.1", 80);
+        assert_eq!(wsl.root_calls().len(), 1);
+    }
 
     #[test]
     fn create_body_shape() {

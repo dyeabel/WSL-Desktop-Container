@@ -28,6 +28,10 @@ impl Worker {
     /// Ukončí udržovací proces – náš i případný z jiné instance aplikace.
     pub(super) fn kill_keepalive_all(&self, host: &dyn Host) {
         self.kill_keepalive();
+        // udržovací proces existuje jen ve WSL
+        if host.wsl().is_none() {
+            return;
+        }
         let _ = host.run(Privilege::Root, None, &["sh", "-c", "pkill -f 'flock -n /tmp/\\.w[a-z-]*-desktop-keepalive\\.lock' || true"]);
     }
 
@@ -82,7 +86,8 @@ impl Worker {
 
     /// Automatické uvolnění (nastavení): nejvýš jednou za 10 minut, jen když je cache nad 1 GB.
     pub(super) fn auto_free_memory(&self) {
-        if !self.cfg().auto_free_memory {
+        // periodické: uvolnění paměti VM (root) jen tam, kde hostitel umí vm_memory
+        if !self.cfg().auto_free_memory || !crate::host::current_caps().vm_memory {
             return;
         }
         let due = self
@@ -202,8 +207,8 @@ impl Worker {
         }
 
         step(log, &tf!("Enginy v distribuci {distro}", "Engines in {distro}"));
-        let cur = self.host();
-        let target = cur.wsl().expect("WSL").for_distro(distro);
+        let wh = self.wsl_host()?;
+        let target = wh.for_distro(distro);
         let out = target
             .run(Privilege::Root, None, &["sh", "-c", crate::engine::DETECT_ENGINES])
             .map_err(|e| tf!("Distribuci {distro} nelze spustit: {e}", "Cannot start {distro}: {e}"))?;
@@ -224,7 +229,7 @@ impl Worker {
         }
         for o in &others {
             let script = format!("{}\n{}", crate::engine::LEGACY_CLEANUP, crate::engine::API_RELEASE);
-            match cur.wsl().expect("WSL").for_distro(o).run(Privilege::Root, None, &["sh", "-c", &script]) {
+            match wh.for_distro(o).run(Privilege::Root, None, &["sh", "-c", &script]) {
                 Ok(r) if r.trim().is_empty() => log.push_str(&tf!("{o}: API tu nebylo\n", "{o}: no API here\n")),
                 Ok(r) => log.push_str(&format!("{o}: {}\n", r.trim().replace('\n', ", "))),
                 Err(e) => log.push_str(&format!("{o}: {e}\n")),
@@ -236,7 +241,7 @@ impl Worker {
         if sleep_old && old.distro != distro {
             step(log, &tf!("Uspání {}", "Putting {} to sleep", old.distro));
             // i udržovací proces jiné instance aplikace, jinak by distribuci hned znovu probudil
-            self.kill_keepalive_all(&cur.wsl().expect("WSL").for_distro(&old.distro));
+            self.kill_keepalive_all(&wh.for_distro(&old.distro));
             match wsl::terminate(&old.distro) {
                 Ok(_) => {
                     slept = true;
@@ -452,6 +457,9 @@ impl Worker {
     }
 
     pub(super) fn engine_start(&self) -> Result<String, String> {
+        if self.host().wsl().is_none() {
+            return self.local_engine(SvcOp::Start);
+        }
         let cfg = self.cfg();
         let distro = cfg.distro.clone();
         if cfg.keep_alive {
@@ -478,6 +486,9 @@ impl Worker {
     pub(super) fn engine_stop(&self) -> Result<String, String> {
         let cfg = self.cfg();
         self.suppress_tracking();
+        if self.host().wsl().is_none() {
+            return self.local_engine(SvcOp::Stop);
+        }
         let mut a = vec!["systemctl", "stop"];
         a.extend(cfg.engine.stop_units());
         self.host().run(Privilege::Root, None, &a)?;
@@ -487,6 +498,9 @@ impl Worker {
     pub(super) fn engine_restart(&self) -> Result<String, String> {
         let cfg = self.cfg();
         self.suppress_tracking();
+        if self.host().wsl().is_none() {
+            return self.local_engine(SvcOp::Restart);
+        }
         let mut a = vec!["systemctl", "restart"];
         a.extend(cfg.engine.services());
         self.host().run(Privilege::Root, None, &a)?;
@@ -497,6 +511,38 @@ impl Worker {
         } else {
             Err(tf!("{} po restartu neodpovídá", "{} is not responding after restart", cfg.engine.name()))
         }
+    }
+
+    /// Linux: start / stop / restart služby enginu přes `systemctl` – rootless Podman jako
+    /// uživatelská služba, jinak systémová přes `pkexec` (jen na kliknutí, `interactive`).
+    /// Nic se neinstaluje ani nekonfiguruje.
+    fn local_engine(&self, op: SvcOp) -> Result<String, String> {
+        let cfg = self.cfg();
+        let name = cfg.engine.name();
+        let rt = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
+        let (args, root) = local_engine_command(op, crate::host::found_endpoint().as_ref(), cfg.engine, rt.as_deref());
+        let a: Vec<&str> = args.iter().map(String::as_str).collect();
+        let p = if root { Privilege::Root } else { Privilege::User };
+        let host = self.host();
+        host.exec(&crate::host::ExecReq::new(&a).privilege(p).interactive()).and_then(crate::host::finish)?;
+        if op == SvcOp::Stop {
+            return Ok(tf!("{name} zastaven", "{name} stopped"));
+        }
+        // socket mohl vzniknout až teď – endpoint hledat při každém pokusu znovu
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_secs(20) {
+            crate::host::refresh_discovery();
+            if crate::docker::Docker::new(&crate::host::endpoint(&cfg)).ping() {
+                self.shared.was_connected.store(false, Ordering::SeqCst);
+                return Ok(match op {
+                    SvcOp::Restart => tf!("{name} restartován", "{name} restarted"),
+                    _ => tf!("{name} běží", "{name} is running"),
+                });
+            }
+            thread::sleep(Duration::from_millis(500));
+        }
+        let note = crate::host::engine_note().map(|n| format!(" {n}")).unwrap_or_default();
+        Err(tf!("{name} po spuštění neodpovídá.{note}", "{name} is not responding after the start.{note}"))
     }
 
     pub(super) fn uninstall_engine(&self, engine: Engine, purge: bool) -> Result<String, String> {
@@ -590,6 +636,49 @@ echo 3 > /proc/sys/vm/drop_caches
 echo 1 > /proc/sys/vm/compact_memory 2>/dev/null || true
 echo "after: $(awk '/^Cached:/{print $2}' /proc/meminfo)""#;
 
+/// Operace se službou místního enginu (Linux).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SvcOp {
+    Start,
+    Stop,
+    Restart,
+}
+
+/// Příkaz `systemctl` pro službu místního enginu; druhá složka = spustit jako root.
+/// - socket pod `runtime_dir` (`$XDG_RUNTIME_DIR`) = rootless: `systemctl --user`, bez roota;
+/// - socket s „podman“ v cestě = služba `podman.socket` / `podman.service`, jinak `docker`;
+/// - bez nalezeného socketu (nebo TCP) rozhoduje typ enginu z konfigurace: Podman se bere
+///   jako rootless (bez hesla), Docker jako systémová služba.
+pub(crate) fn local_engine_command(op: SvcOp, ep: Option<&crate::http::Endpoint>, engine: Engine, runtime_dir: Option<&std::path::Path>) -> (Vec<String>, bool) {
+    let (podman, rootless) = match ep {
+        Some(crate::http::Endpoint::Unix(p)) => (
+            p.to_string_lossy().contains("podman"),
+            runtime_dir.is_some_and(|d| d.has_root() && p.starts_with(d)),
+        ),
+        _ => (engine == Engine::Podman, engine == Engine::Podman),
+    };
+    let units: &[&str] = match (podman, op) {
+        (true, SvcOp::Start) => &["podman.socket"],
+        (true, SvcOp::Stop) => &["podman.socket", "podman.service"],
+        (true, SvcOp::Restart) => &["podman.service"],
+        // systémový Docker se socket aktivací: bez docker.socket by ho další dotaz hned probudil
+        (false, SvcOp::Stop) if !rootless => &["docker.socket", "docker"],
+        (false, _) => &["docker"],
+    };
+    let verb = match op {
+        SvcOp::Start => "start",
+        SvcOp::Stop => "stop",
+        SvcOp::Restart => "restart",
+    };
+    let mut v: Vec<String> = vec!["systemctl".into()];
+    if rootless {
+        v.push("--user".into());
+    }
+    v.push(verb.into());
+    v.extend(units.iter().map(|u| u.to_string()));
+    (v, !rootless)
+}
+
 /// Port API pro režim: výchozí 2375 bez ověření, 2376 s TLS; vlastní port zůstává.
 /// Engine pro novou primární distribuci: vyžádaný (musí být nainstalovaný), jinak naposledy
 /// použitý, jinak jediný (první) nainstalovaný. Ok(None) = žádný engine v distribuci není.
@@ -623,6 +712,39 @@ fn docker_host_is_tcp() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn engine_start_stop_commands() {
+        use super::{local_engine_command as cmd, SvcOp::*};
+        use crate::engine::Engine::{Docker, Podman};
+        use crate::http::Endpoint;
+        use std::path::{Path, PathBuf};
+        let rt = Some(Path::new("/run/user/1000"));
+        let s = |(v, root): (Vec<String>, bool)| (v.join(" "), root);
+        // rootless Podman: uživatelská služba, bez roota (i když je v konfiguraci Docker)
+        let rootless = Endpoint::Unix(PathBuf::from("/run/user/1000/podman/podman.sock"));
+        assert_eq!(s(cmd(Start, Some(&rootless), Docker, rt)), ("systemctl --user start podman.socket".into(), false));
+        assert_eq!(s(cmd(Stop, Some(&rootless), Docker, rt)), ("systemctl --user stop podman.socket podman.service".into(), false));
+        assert_eq!(s(cmd(Restart, Some(&rootless), Podman, rt)), ("systemctl --user restart podman.service".into(), false));
+        // systémový Docker: přes pkexec
+        let docker = Endpoint::Unix(PathBuf::from("/var/run/docker.sock"));
+        assert_eq!(s(cmd(Start, Some(&docker), Podman, rt)), ("systemctl start docker".into(), true));
+        assert_eq!(s(cmd(Stop, Some(&docker), Docker, rt)), ("systemctl stop docker.socket docker".into(), true));
+        assert_eq!(s(cmd(Restart, Some(&docker), Docker, None)), ("systemctl restart docker".into(), true));
+        // systémový Podman
+        let rootful = Endpoint::Unix(PathBuf::from("/run/podman/podman.sock"));
+        assert_eq!(s(cmd(Start, Some(&rootful), Podman, rt)), ("systemctl start podman.socket".into(), true));
+        // rootless Docker
+        let rl_docker = Endpoint::Unix(PathBuf::from("/run/user/1000/docker.sock"));
+        assert_eq!(s(cmd(Stop, Some(&rl_docker), Docker, rt)), ("systemctl --user stop docker".into(), false));
+        // nic nenalezeno / TCP: podle typu enginu
+        assert_eq!(s(cmd(Start, None, Podman, rt)), ("systemctl --user start podman.socket".into(), false));
+        assert_eq!(s(cmd(Start, None, Docker, rt)), ("systemctl start docker".into(), true));
+        assert_eq!(s(cmd(Start, Some(&Endpoint::Tcp { port: 2375 }), Docker, None)), ("systemctl start docker".into(), true));
+        // bez XDG_RUNTIME_DIR (nebo relativní) není nic rootless
+        assert_eq!(s(cmd(Start, Some(&rootless), Docker, None)), ("systemctl start podman.socket".into(), true));
+        assert_eq!(s(cmd(Start, Some(&rootless), Docker, Some(Path::new("")))), ("systemctl start podman.socket".into(), true));
+    }
+
     #[test]
     fn pick_engine_order() {
         use crate::engine::Engine::{Docker, Podman};

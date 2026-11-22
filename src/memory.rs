@@ -408,9 +408,10 @@ pub fn vmmem_direct() -> Option<Option<u64>> {
     vmmem_ntquery()
 }
 
+/// Mimo Windows žádný VM (VmmemWSL) není: „proces neběží“, bez záložního PowerShellu.
 #[cfg(not(windows))]
 pub fn vmmem_direct() -> Option<Option<u64>> {
-    None
+    Some(None)
 }
 
 /// ToolHelp + OpenProcess + K32GetProcessMemoryInfo (u minimálního procesu vmmem bývá odepřeno).
@@ -536,6 +537,15 @@ pub fn win_ram() -> (u64, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Linux: žádný VM – VmmemWSL je `None` hned, bez pokusu o powershell.exe.
+    #[test]
+    #[cfg(not(windows))]
+    fn no_vm_off_windows() {
+        assert_eq!(vmmem_direct(), Some(None));
+        assert_eq!(VmmemProbe::default().get(), None);
+        assert_eq!(vmmem_now(), None);
+    }
 
     const MEMINFO: &str = "MemTotal:        8134304 kB\nMemFree:         7410380 kB\nMemAvailable:    7508088 kB\nBuffers:            9516 kB\nCached:           225196 kB\nSwapCached:            0 kB\nSReclaimable:      15776 kB\nHugePages_Total:       0\n";
     const K: u64 = 1024;

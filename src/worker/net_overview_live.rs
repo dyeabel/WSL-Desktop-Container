@@ -227,7 +227,8 @@ fn live_net_ports_in_out() {
     assert!(w.conns.iter().any(|s| s.local_port == 9999), "příchozí spojení na webu");
 
     // 4) provoz VM, naslouchající sockety v distribuci a ve Windows
-    let out = crate::host::HostExt::run(&*crate::host::current(&cfg), crate::host::Privilege::Root, None, &["sh", "-c", OVERVIEW_SCRIPT]).expect("overview script");
+    let host = crate::host::current(&cfg);
+    let out = crate::host::HostExt::run(&*host, overview_privilege(host.caps()), None, &["sh", "-c", OVERVIEW_SCRIPT]).expect("overview script");
     let mut parts = out.split(netinfo::MARK);
     let eth = netinfo::parse_proc_net_dev(parts.next().unwrap()).into_iter().find(|i| i.name == "eth0").expect("eth0");
     let wsl_ip = netinfo::parse_ip_addr(parts.next().unwrap());

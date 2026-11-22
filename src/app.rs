@@ -179,7 +179,7 @@ impl App {
         let mut cfg = Config::load();
         if !Config::exists() {
             // první spuštění (i nový portable balíček): výchozí distribuce WSL místo „Ubuntu“
-            if let Some(d) = crate::wsl::list().ok().and_then(|l| l.into_iter().find(|d| d.default)) {
+            if let Some(d) = crate::host::current_caps().distros.then(crate::wsl::list).and_then(|r| r.ok()).and_then(|l| l.into_iter().find(|d| d.default)) {
                 cfg.distro = d.name;
             }
             let _ = cfg.save();

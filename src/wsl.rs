@@ -163,7 +163,23 @@ pub(crate) fn stream_command(
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if !killed && cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::SeqCst)) {
                     killed = true;
-                    let _ = child.kill();
+                    if let Err(e) = child.kill() {
+                        // proces pod `pkexec` (setuid root) nejde zabít (EPERM): nečekat na něj,
+                        // doběhne sám, úklid převezme vlákno na pozadí
+                        if e.kind() == std::io::ErrorKind::PermissionDenied {
+                            std::thread::spawn(move || {
+                                for r in readers {
+                                    let _ = r.join();
+                                }
+                                let _ = child.wait();
+                            });
+                            return Err(crate::t!(
+                                "Zrušeno – proces s oprávněním roota nejde ukončit a doběhne na pozadí",
+                                "Cancelled – the root process cannot be stopped and finishes in the background"
+                            )
+                            .to_string());
+                        }
+                    }
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,

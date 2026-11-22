@@ -219,6 +219,8 @@ pub fn collect_disk(cfg: &Config, docker: Option<&crate::docker::Docker>) -> Dis
     let (inside, engine_free) = crate::host::HostExt::run(&*crate::host::current(cfg), crate::host::Privilege::User, None, &["sh", "-c", &df_script(&engine_path)])
         .map(|o| parse_df_pair(&o))
         .unwrap_or((None, None));
+    // bez distribucí (Linux) není „disk distribuce“ – místo hlídá jen pravidlo dat enginu
+    let inside = inside.filter(|_| crate::host::current_caps().distros);
     let engine_used = if cfg.alerts.engine_size {
         docker.and_then(|d| d.df()).map(|s| [s.images, s.containers, s.volumes, s.build_cache].iter().map(|v| (*v).max(0) as u64).sum())
     } else {

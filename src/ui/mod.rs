@@ -769,7 +769,9 @@ pub fn need_engine(app: &mut crate::app::App, ui: &mut egui::Ui) -> bool {
             if accent_button(ui, t!("\u{E3D0} Spustit engine", "\u{E3D0} Start engine")).clicked() {
                 app.send(crate::worker::Cmd::EngineStart);
             }
-            if ui.button("\u{EB02} WSL engine").clicked() {
+            // název stránky podle hostitele (Linux: „Engine“)
+            let page = if app.kind() == crate::host::HostKind::Local { "\u{EB02} Engine" } else { "\u{EB02} WSL engine" };
+            if ui.button(page).clicked() {
                 app.page = crate::app::Page::Engine;
             }
         });

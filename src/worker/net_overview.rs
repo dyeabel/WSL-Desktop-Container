@@ -175,7 +175,9 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
         let mut last_scan: Option<Instant> = None;
         while !st.load(Ordering::SeqCst) {
             // ostatní distribuce: vlastní vlákno, ať pomalé wsl.exe nebrzdí přehled
-            if pb.active() && !scanning.load(Ordering::SeqCst) && last_scan.is_none_or(|t| t.elapsed() >= DISTRO_EVERY) {
+            // jen WSL: jiné distribuce, root
+            let can_scan = crate::host::current_caps().distros;
+            if can_scan && pb.active() && !scanning.load(Ordering::SeqCst) && last_scan.is_none_or(|t| t.elapsed() >= DISTRO_EVERY) {
                 last_scan = Some(Instant::now());
                 scanning.store(true, Ordering::SeqCst);
                 let c = cfg.read().map(|c| c.clone()).unwrap_or_default();
@@ -207,21 +209,7 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
             let ep = host.engine_endpoint(&c);
             let mut next = NetData::default();
             let t = started.elapsed().as_secs_f64();
-            match host.run(Privilege::Root, None, &["sh", "-c", OVERVIEW_SCRIPT]) {
-                Ok(out) => {
-                    let mut parts = out.split(netinfo::MARK);
-                    let dev = parts.next().unwrap_or("");
-                    let ip = parts.next().unwrap_or("");
-                    let ss = parts.next().unwrap_or("");
-                    if let Some(eth) = netinfo::parse_proc_net_dev(dev).into_iter().find(|i| i.name == "eth0") {
-                        next.vm_total = Some((eth.rx, eth.tx));
-                        next.vm_rate = vm.update("eth0", eth.rx, eth.tx, t);
-                    }
-                    next.wsl_ip = netinfo::parse_ip_addr(ip);
-                    next.distro_listen = netinfo::parse_ss(ss);
-                }
-                Err(e) => next.error = Some(String::from(e)),
-            }
+            overview_round(&*host, &mut vm, t, &mut next);
             next.wsl_mode = crate::wslconfig::get(&crate::wslconfig::read(), "wsl2", "networkingMode").unwrap_or_default();
             match windows_listeners(&mut names) {
                 Ok(w) => next.win_listen = w,
@@ -252,12 +240,42 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
     NetFeed { data, started, beat, ports, traffic, stop }
 }
 
+/// Oprávnění pro skript přehledu: jako root jen s `root_sampling` (periodický sběr nesmí
+/// na Linuxu žádat o heslo). Bez roota `ss` jen nevyplní procesy (UI pak sloupec skryje).
+pub(crate) fn overview_privilege(caps: crate::host::Caps) -> Privilege {
+    if caps.root_sampling { Privilege::Root } else { Privilege::User }
+}
+
+/// Jedno kolo přehledu u hostitele: čítače eth0, IP adresa, naslouchající sockety.
+fn overview_round(host: &dyn Host, vm: &mut RateTracker, t: f64, next: &mut NetData) {
+    match host.run(overview_privilege(host.caps()), None, &["sh", "-c", OVERVIEW_SCRIPT]) {
+        Ok(out) => {
+            let mut parts = out.split(netinfo::MARK);
+            let dev = parts.next().unwrap_or("");
+            let ip = parts.next().unwrap_or("");
+            let ss = parts.next().unwrap_or("");
+            if let Some(eth) = netinfo::parse_proc_net_dev(dev).into_iter().find(|i| i.name == "eth0") {
+                next.vm_total = Some((eth.rx, eth.tx));
+                next.vm_rate = vm.update("eth0", eth.rx, eth.tx, t);
+            }
+            next.wsl_ip = netinfo::parse_ip_addr(ip);
+            next.distro_listen = netinfo::parse_ss(ss);
+        }
+        Err(e) => next.error = Some(String::from(e)),
+    }
+}
+
 /// Zkontroluje naslouchající TCP porty ve všech běžících distribucích WSL 2 kromě `engine`
 /// (paralelně). Zastavené distribuce se přeskočí – `wsl -d` by je spustil.
 /// Spouští se jako root: distribuce sdílejí síťový prostor VM a vlastníka socketu
 /// (proces) `ss -p` ukáže jen s právy roota; nic se nemění.
 pub fn scan_distros(host: &dyn Host, engine: &str) -> DistroScan {
     let mut out = DistroScan { at: Some(Instant::now()), ..Default::default() };
+    // jen WSL a jen se sběrem jako root (readlink netns, DISTRO_SCRIPT)
+    if !host.caps().root_sampling || host.wsl().is_none() {
+        out.error = Some(crate::host::unavailable());
+        return out;
+    }
     let list = match wsl::list() {
         Ok(l) => l,
         Err(e) => {
@@ -389,6 +407,10 @@ fn container_pid(d: &Docker, id: &str) -> Result<u32, String> {
 /// Jedno kolo sběru: sockety pro dané kontejnery (ID -> PID) přes `nsenter` v distribuci.
 /// PID se předávají jako argumenty skriptu, nikdy jako jeho text.
 pub fn collect_ns(host: &dyn Host, pids: &[(String, u32)], mode: NsMode) -> Result<HashMap<String, NsDump>, String> {
+    // nsenter do jmenných prostorů kontejnerů jen jako root – bez schopnosti nic nespouštět
+    if !host.caps().root_sampling {
+        return Err(crate::host::unavailable());
+    }
     let valid: Vec<&(String, u32)> = pids.iter().filter(|(_, p)| *p > 0).collect();
     if valid.is_empty() {
         return Ok(HashMap::new());
@@ -490,6 +512,8 @@ pub fn start_ns_feed(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>, id: O
 pub fn windows_listeners(names: &mut HashMap<u32, String>) -> Result<Vec<WinListen>, String> {
     let mut v = match win::listeners() {
         Ok(v) => v,
+        // jiný systém než Windows: netstat.exe neexistuje
+        Err(e) if !cfg!(windows) => return Err(e),
         Err(e) => {
             // záložní cesta: netstat -ano
             let out = wsl::hidden("netstat.exe").args(["-ano"]).output().map_err(|x| format!("{e}; netstat: {x}"))?;
@@ -614,6 +638,37 @@ mod win {
 #[cfg(test)]
 #[path = "net_overview_live.rs"]
 mod live;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::fake::RecordingHost;
+    use crate::host::Caps;
+
+    /// Bez `root_sampling` periodický sběr nikdy nevolá hostitele jako root (Linux by žádal
+    /// o heslo); s ním (WSL) běží přehled i porty kontejnerů jako root jako dosud.
+    #[test]
+    fn root_sampling_skipped_without_cap() {
+        let pids = [("c1".to_string(), 42u32)];
+        let local = RecordingHost::new(Caps::LOCAL);
+        let mut next = NetData::default();
+        overview_round(&local, &mut RateTracker::default(), 0.0, &mut next);
+        let scan = scan_distros(&local, "x");
+        let ns = collect_ns(&local, &pids, NsMode::Detail);
+        assert!(local.root_calls().is_empty(), "{:?}", local.root_calls());
+        // přehled běží bez roota, distribuce ani jmenné prostory se nesbírají
+        assert_eq!(local.calls.lock().unwrap().len(), 1);
+        assert_eq!(scan.error, Some(crate::host::unavailable()));
+        assert_eq!(ns, Err(crate::host::unavailable()));
+        assert_eq!(overview_privilege(Caps::LOCAL), Privilege::User);
+
+        let wsl = RecordingHost::new(Caps::WSL);
+        overview_round(&wsl, &mut RateTracker::default(), 0.0, &mut next);
+        let _ = collect_ns(&wsl, &pids, NsMode::Detail);
+        assert_eq!(wsl.root_calls().len(), 2);
+        assert_eq!(overview_privilege(Caps::WSL), Privilege::Root);
+    }
+}
 
 /// Otevře `http://127.0.0.1:<port>` ve výchozím prohlížeči.
 pub fn open_browser(port: u16) -> Result<(), String> {

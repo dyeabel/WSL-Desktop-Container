@@ -61,9 +61,16 @@ impl LocalHost {
     }
 
     /// Hláška z hledání enginu pro UI (vzdálený engine, nic nenalezeno).
-    #[allow(dead_code)] // zobrazí ji UI (další úkol)
     pub fn note(&self) -> Option<&str> {
         self.note.as_deref()
+    }
+
+    /// Skutečně nalezený lokální endpoint (bez náhradního `/var/run/docker.sock`).
+    pub fn found_endpoint(&self) -> Option<&Endpoint> {
+        match &self.found {
+            Found::Endpoint(e) => Some(e),
+            _ => None,
+        }
     }
 }
 
@@ -73,15 +80,30 @@ fn is_root() -> bool {
     std::fs::metadata("/proc/self").map(|m| m.uid() == 0).unwrap_or(false)
 }
 
-/// Skutečný příkazový řádek: `Root` mimo roota přes `pkexec`. `pkexec` mění pracovní složku
-/// na domovskou složku roota, proto se při `cwd` do ní nejdřív přepne `sh`.
+/// Skutečný příkazový řádek: `Root` mimo roota přes `pkexec`, ale jen u výslovné akce
+/// uživatele (`interactive`); jinak se odmítne – periodický sběr nesmí žádat o heslo.
 pub(crate) fn command_line(req: &ExecReq, root: bool) -> Result<Vec<String>, HostError> {
+    line(req, root, req.interactive)
+}
+
+/// `pkexec` mění pracovní složku na domovskou složku roota, proto se při `cwd` do ní
+/// nejdřív přepne `sh`. `allow_pkexec` = smí se žádat o heslo.
+fn line(req: &ExecReq, root: bool, allow_pkexec: bool) -> Result<Vec<String>, HostError> {
     if req.args.is_empty() {
         return Err(HostError::from(crate::t!("prázdný příkaz", "empty command").to_string()));
     }
     let args = req.args.iter().map(|a| a.to_string());
     if req.privilege != Privilege::Root || root {
         return Ok(args.collect());
+    }
+    if !allow_pkexec {
+        return Err(HostError::Spawn(
+            crate::t!(
+                "Vyžaduje oprávnění roota (jen na výslovnou akci uživatele)",
+                "Requires root privileges (only on an explicit user action)"
+            )
+            .to_string(),
+        ));
     }
     let mut v: Vec<String> = vec!["pkexec".into()];
     if let Some(d) = req.cwd {
@@ -152,7 +174,8 @@ impl Host for LocalHost {
     }
 
     fn open_terminal(&self, _title: &str, req: &ExecReq) -> Result<(), HostError> {
-        let line = command_line(req, is_root())?;
+        // terminál se otevírá vždy na kliknutí a heslo se zadává v něm
+        let line = line(req, is_root(), true)?;
         let terminal = std::env::var("TERMINAL").ok();
         let mut last = String::new();
         for (prog, pre) in terminal_candidates(terminal.as_deref()) {
@@ -241,10 +264,10 @@ mod tests {
     #[test]
     fn root_uses_pkexec_when_not_root() {
         let args = ["systemctl", "start", "docker"];
-        let root = ExecReq::new(&args).privilege(Privilege::Root);
+        let root = ExecReq::new(&args).privilege(Privilege::Root).interactive();
         assert_eq!(command_line(&root, false).unwrap(), ["pkexec", "systemctl", "start", "docker"]);
         assert_eq!(command_line(&root, true).unwrap(), ["systemctl", "start", "docker"]);
-        let with_cwd = ExecReq::new(&args).privilege(Privilege::Root).cwd(Some("/srv/x"));
+        let with_cwd = ExecReq::new(&args).privilege(Privilege::Root).cwd(Some("/srv/x")).interactive();
         assert_eq!(
             command_line(&with_cwd, false).unwrap(),
             ["pkexec", "sh", "-c", r#"cd -- "$0" && exec "$@""#, "/srv/x", "systemctl", "start", "docker"]
@@ -254,9 +277,27 @@ mod tests {
         }
         // prázdný příkaz se odmítne (žádné holé `pkexec`)
         for root in [false, true] {
-            assert!(command_line(&ExecReq::new(&[]).privilege(Privilege::Root), root).is_err());
+            assert!(command_line(&ExecReq::new(&[]).privilege(Privilege::Root).interactive(), root).is_err());
         }
         assert!(LocalHost::new().exec(&ExecReq::new(&[])).is_err());
+    }
+
+    /// `Root` bez výslovné akce uživatele nikdy nespustí `pkexec` (periodický sběr).
+    #[test]
+    fn local_root_without_interactive_is_refused() {
+        let args = ["ss", "-ltnupH"];
+        let req = ExecReq::new(&args).privilege(Privilege::Root);
+        assert!(matches!(command_line(&req, false), Err(HostError::Spawn(_))));
+        // proces už běží jako root: pkexec není potřeba, nic se neodmítá
+        assert_eq!(command_line(&req, true).unwrap(), args);
+        // terminál se otevírá na kliknutí – pkexec smí
+        assert_eq!(line(&req, false, true).unwrap()[0], "pkexec");
+        // ani skutečné spuštění (exec i stream) nesmí dojít k pkexec
+        if !is_root() {
+            let h = LocalHost::new();
+            assert!(matches!(h.exec(&req), Err(HostError::Spawn(_))));
+            assert!(matches!(h.exec_stream(&req, None, &mut |_| {}), Err(HostError::Spawn(_))));
+        }
     }
 
     /// Složka s mezerou, uvozovkou a `$` jde do `sh` jako samostatný argument `$0`,
@@ -266,7 +307,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wslcd local 'q\" $HOME {}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let d = dir.to_str().unwrap();
-        let req = ExecReq::new(&["pwd"]).privilege(Privilege::Root).cwd(Some(d));
+        let req = ExecReq::new(&["pwd"]).privilege(Privilege::Root).cwd(Some(d)).interactive();
         let line = command_line(&req, false).unwrap();
         assert_eq!(line[..5], ["pkexec", "sh", "-c", r#"cd -- "$0" && exec "$@""#, d]);
         // totéž bez `pkexec` a bez current_dir: `sh` se do složky přepne sám

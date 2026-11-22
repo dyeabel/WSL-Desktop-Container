@@ -41,11 +41,14 @@ pub struct ExecReq<'a> {
     pub stdin: Option<&'a [u8]>,
     /// zapsat do přehledu „Na pozadí“ (výchozí ano)
     pub track: bool,
+    /// výslovná akce uživatele (kliknutí): jen tehdy smí místní hostitel žádat o heslo
+    /// (`pkexec`). Periodický sběr ho nikdy nenastavuje.
+    pub interactive: bool,
 }
 
 impl<'a> ExecReq<'a> {
     pub fn new(args: &'a [&'a str]) -> Self {
-        ExecReq { args, privilege: Privilege::User, cwd: None, stdin: None, track: true }
+        ExecReq { args, privilege: Privilege::User, cwd: None, stdin: None, track: true, interactive: false }
     }
 
     pub fn privilege(mut self, p: Privilege) -> Self {
@@ -66,6 +69,12 @@ impl<'a> ExecReq<'a> {
 
     pub fn stdin(mut self, input: &'a [u8]) -> Self {
         self.stdin = Some(input);
+        self
+    }
+
+    /// Výslovná akce uživatele – `Root` smí na Linuxu spustit `pkexec`.
+    pub fn interactive(mut self) -> Self {
+        self.interactive = true;
         self
     }
 }
@@ -203,6 +212,27 @@ pub fn refresh_discovery() {
     local::refresh_discovery();
 }
 
+/// Hláška z hledání enginu pro UI (Linux: vzdálený engine, nic nenalezeno); na Windows nic.
+pub fn engine_note() -> Option<String> {
+    #[cfg(unix)]
+    return local::LocalHost::new().note().map(str::to_string);
+    #[cfg(not(unix))]
+    None
+}
+
+/// Skutečně nalezený lokální endpoint enginu (Linux); na Windows nic.
+pub fn found_endpoint() -> Option<crate::http::Endpoint> {
+    #[cfg(unix)]
+    return local::LocalHost::new().found_endpoint().cloned();
+    #[cfg(not(unix))]
+    None
+}
+
+/// Text pro funkci, kterou aktuální hostitel nemá (sběr přeskočen, akce odmítnuta).
+pub fn unavailable() -> String {
+    crate::t!("Nedostupné na tomto systému", "Not available on this system").to_string()
+}
+
 /// Kudy se z aplikace dostaneme k API enginu aktuálního hostitele.
 pub fn endpoint(cfg: &Config) -> crate::http::Endpoint {
     current(cfg).engine_endpoint(cfg)
@@ -306,6 +336,63 @@ pub(crate) fn track(label: &str, p: Privilege, args: &[&str]) -> activity::Guard
         _ => format!("{label} (root)"),
     };
     activity::start(activity::Kind::Wsl, title, activity::describe_cmd(args, 160))
+}
+
+/// Testovací hostitel se zvolenými schopnostmi, který si zapisuje každé volání.
+#[cfg(test)]
+pub(crate) mod fake {
+    use super::*;
+    use std::sync::Mutex;
+
+    pub struct RecordingHost {
+        pub caps: Caps,
+        /// (oprávnění, interaktivní, argumenty)
+        pub calls: Mutex<Vec<(Privilege, bool, Vec<String>)>>,
+    }
+
+    impl RecordingHost {
+        pub fn new(caps: Caps) -> Self {
+            RecordingHost { caps, calls: Mutex::new(Vec::new()) }
+        }
+
+        pub fn root_calls(&self) -> Vec<Vec<String>> {
+            self.calls.lock().unwrap().iter().filter(|c| c.0 == Privilege::Root).map(|c| c.2.clone()).collect()
+        }
+
+        fn record(&self, req: &ExecReq) {
+            self.calls.lock().unwrap().push((req.privilege, req.interactive, req.args.iter().map(|a| a.to_string()).collect()));
+        }
+    }
+
+    impl Host for RecordingHost {
+        fn kind(&self) -> HostKind {
+            if self.caps == Caps::WSL { HostKind::Wsl } else { HostKind::Local }
+        }
+        fn caps(&self) -> Caps {
+            self.caps
+        }
+        fn label(&self) -> String {
+            "recording".into()
+        }
+        fn exec(&self, req: &ExecReq) -> Result<ExecOut, HostError> {
+            self.record(req);
+            Ok(ExecOut { code: 0, stdout: Vec::new(), stderr: Vec::new() })
+        }
+        fn exec_stream(&self, req: &ExecReq, _: Option<&AtomicBool>, _: &mut dyn FnMut(&str)) -> Result<i32, HostError> {
+            self.record(req);
+            Ok(0)
+        }
+        fn open_terminal(&self, _: &str, req: &ExecReq) -> Result<(), HostError> {
+            self.record(req);
+            Ok(())
+        }
+        fn to_guest_path(&self, path: &str) -> Result<String, HostError> {
+            Ok(path.to_string())
+        }
+        fn engine_endpoint(&self, _: &Config) -> crate::http::Endpoint {
+            crate::http::Endpoint::Tcp { port: 1 }
+        }
+    }
 }
 
 #[cfg(test)]

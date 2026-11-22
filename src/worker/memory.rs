@@ -39,9 +39,11 @@ impl Worker {
         let vmmem = self.shared.mem_probe.lock().ok().and_then(|mut p| p.get());
         self.alerts_memory(super::alerts::mem_input(&mi, vmmem));
         let t = memory::now_secs();
+        let vm = crate::host::current_caps().vm_memory;
         let now = rows.map(|rows| {
-            let ram = memory::total_ram();
-            let limit = memory::limit_from(&crate::wslconfig::read(), ram);
+            // Linux: paměť hostitele (/proc/meminfo), žádný limit VM ani .wslconfig
+            let ram = if vm { memory::total_ram() } else { mi.total };
+            let limit = if vm { memory::limit_from(&crate::wslconfig::read(), ram) } else { (mi.total, false) };
             // paměť po kontejnerech ukazuje tabulka výkonu – tady jen součet
             let sum = rows.iter().map(|r| r.mem).sum();
             MemNow { b: memory::breakdown(&mi, vmmem, limit, ram, sum, engine.unwrap_or(0)) }

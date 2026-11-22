@@ -140,12 +140,25 @@ fn security_hint(app: &mut App, ui: &mut egui::Ui, tls: bool) {
     ui.add_space(8.0);
 }
 
+/// Adresa API enginu pro zobrazení (`unix:///…`, `tcp://127.0.0.1:…`).
+fn endpoint_text(ep: &crate::http::Endpoint) -> String {
+    match ep {
+        crate::http::Endpoint::Tcp { port } => format!("tcp://127.0.0.1:{port}"),
+        crate::http::Endpoint::Unix(p) => format!("unix://{}", p.display()),
+    }
+}
+
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let distro = app.distro();
     let engine = app.cfg.read().map(|c| c.engine).unwrap_or_default();
     let ename = engine.name();
     let local = app.kind() == crate::host::HostKind::Local;
-    header(ui, if local { "Engine" } else { "WSL engine" }, t!("Řízení WSL distribucí a kontejnerového enginu (Docker / Podman)", "Manage WSL distributions and the container engine (Docker / Podman)"));
+    let subtitle = if local {
+        t!("Stav a řízení místního kontejnerového enginu (Docker / Podman)", "Status and control of the local container engine (Docker / Podman)")
+    } else {
+        t!("Řízení WSL distribucí a kontejnerového enginu (Docker / Podman)", "Manage WSL distributions and the container engine (Docker / Podman)")
+    };
+    header(ui, if local { "Engine" } else { "WSL engine" }, subtitle);
 
     // --- kontejnerový engine ---
     let dstate = app.current_distro().map(|d| d.state.clone()).unwrap_or_else(|| t!("nenalezena", "not found").into());
@@ -154,6 +167,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let tls = app.cfg.read().map(|c| c.tls).unwrap_or(false);
     let npipe_on = app.cfg.read().map(|c| c.npipe).unwrap_or(false);
     let caps = app.caps();
+    // Linux: kudy se aplikace k enginu připojuje a případná hláška z hledání enginu
+    let (endpoint, note) = if local { (endpoint_text(&app.engine_endpoint()), crate::host::engine_note()) } else { (String::new(), None) };
     security_hint(app, ui, tls);
     card(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -163,7 +178,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             dot(ui, if running { theme::green() } else { theme::grey() });
             ui.label(RichText::new(ename).size(20.0).strong());
             badge(ui, if running { t!("běží", "running") } else { t!("zastaven", "stopped") }, if running { theme::green() } else { theme::grey() });
-            ui.label(muted(tf!("v distribuci {distro} ({dstate})", "in distribution {distro} ({dstate})")));
+            if local {
+                ui.label(muted(t!("na tomto počítači", "on this computer")));
+            } else {
+                ui.label(muted(tf!("v distribuci {distro} ({dstate})", "in distribution {distro} ({dstate})")));
+            }
         });
         let mut info: Vec<String> = Vec::new();
         if let Some(i) = &app.snap.info {
@@ -176,12 +195,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 ui.label(muted(info.join(" · ")));
                 ui.label(muted("·"));
             }
+            if local {
+                ui.label(RichText::new(format!("\u{E184} {endpoint}")).color(if running { theme::green() } else { theme::muted() }));
+                return;
+            }
             match app.tcp_configured {
                 Some(true) => ui.label(RichText::new(tf!("\u{E184} API na 127.0.0.1:{port}", "\u{E184} API on 127.0.0.1:{port}")).color(theme::green())),
                 Some(false) => ui.label(RichText::new(t!("\u{E4E0} API není nastavené", "\u{E4E0} API is not configured")).color(theme::yellow())),
                 None => ui.label(muted(t!("kontroluji API…", "checking API…"))),
             };
         });
+
+        if let Some(n) = &note {
+            ui.label(RichText::new(format!("\u{E4E0} {n}")).color(theme::yellow()).small());
+        }
 
         // denní provoz
         ui.add_space(8.0);
@@ -206,7 +233,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     Cmd::Sleep,
                 );
             }
-            if ui.button(t!("\u{EAE8} Terminál", "\u{EAE8} Terminal")).on_hover_text(tf!("Shell v distribuci {distro}", "Shell in distribution {distro}")).clicked() {
+            let term_hint = if local { t!("Shell na tomto počítači", "Shell on this computer").to_string() } else { tf!("Shell v distribuci {distro}", "Shell in distribution {distro}") };
+            if ui.button(t!("\u{EAE8} Terminál", "\u{EAE8} Terminal")).on_hover_text(term_hint).clicked() {
                 app.send(Cmd::Terminal(Term::Distro(distro.clone())));
             }
         });

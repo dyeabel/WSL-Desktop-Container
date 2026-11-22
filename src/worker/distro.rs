@@ -35,8 +35,7 @@ impl Worker {
         thread::sleep(Duration::from_secs(3));
         wsl::start(&name)?;
         thread::sleep(Duration::from_secs(if lite { 1 } else { 3 }));
-        let cur = self.host();
-        let systemd = cur.wsl().expect("WSL").for_distro(&name).run(Privilege::Root, None, &["sh", "-c", crate::lite::HAS_INIT]).is_ok();
+        let systemd = self.wsl_host()?.for_distro(&name).run(Privilege::Root, None, &["sh", "-c", crate::lite::HAS_INIT]).is_ok();
         log.push_str(if systemd {
             t!("systemd (nebo náhrada WSLCD Lite) běží\n", "systemd (or the WSLCD Lite replacement) is running\n")
         } else {
@@ -59,7 +58,7 @@ impl Worker {
             }
         }
         log.push_str(&format!("\n=== {} ===\n", t!("Příprava (nástroje, náhrada systemctl, wsl.conf)", "Preparation (tools, systemctl replacement, wsl.conf)")));
-        match crate::lite::prepare(&self.host().wsl().expect("WSL").for_distro(name)) {
+        match crate::lite::prepare(&self.wsl_host()?.for_distro(name)) {
             Ok(o) => log.push_str(&o),
             Err(e) => {
                 log.push_str(&e);
@@ -89,8 +88,7 @@ impl Worker {
         // 2) systemd, uživatel, sudo
         step(log, t!("Příprava (systemd, uživatel, sudo)", "Preparation (systemd, user, sudo)"));
         let user = spec.user.trim().to_string();
-        let cur = self.host();
-        let target = cur.wsl().expect("WSL").for_distro(name);
+        let target = self.wsl_host()?.for_distro(name);
         match target.run(Privilege::Root, None, &["env", &format!("U={user}"), "sh", "-c", &crate::engine::distro_prepare_script()]) {
             Ok(o) => log.push_str(&o),
             Err(e) => {
@@ -142,8 +140,7 @@ impl Worker {
         }
         if let Some(e) = spec.engine {
             step(log, &tf!("Instalace {} (bez nastavení API)", "Installing {} (without API setup)", e.name()));
-            let cur = self.host();
-            match cur.wsl().expect("WSL").for_distro(&name).run(Privilege::Root, None, &["sh", "-c", &e.install_script()]) {
+            match self.wsl_host()?.for_distro(&name).run(Privilege::Root, None, &["sh", "-c", &e.install_script()]) {
                 Ok(o) => log.push_str(&o),
                 Err(err) => {
                     log.push_str(&err);
