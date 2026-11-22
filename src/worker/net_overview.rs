@@ -125,7 +125,8 @@ pub struct DistroScan {
 
 /// Běžící sběr síťového přehledu; zastaví se při zahození.
 pub struct NetFeed {
-    pub data: Arc<Mutex<NetData>>,
+    /// aktuální data; worker vždy publikuje nový `Arc` (UI si ho klonuje v O(1))
+    pub data: Arc<Mutex<Arc<NetData>>>,
     pub started: Instant,
     beat: Beat,
     /// tep záložky Porty – jen pak se kontrolují ostatní distribuce
@@ -158,7 +159,7 @@ const OVERVIEW_SCRIPT: &str = "cat /proc/net/dev; echo @@WSLCD@@; ip -4 -o addr 
 
 /// Spustí sběr síťového přehledu (~každé 2 s, historie 15 min) ve vlastním vlákně.
 pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) -> NetFeed {
-    let data = Arc::new(Mutex::new(NetData::default()));
+    let data = Arc::new(Mutex::new(Arc::new(NetData::default())));
     let stop = Arc::new(AtomicBool::new(false));
     let traffic = Arc::new(AtomicBool::new(true));
     let beat = Beat::new();
@@ -186,7 +187,7 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
                 thread::spawn(move || {
                     let r = scan_distros(&*host, &engine);
                     if let Ok(mut g) = out.lock() {
-                        g.distros = r;
+                        Arc::make_mut(&mut g).distros = r;
                     }
                     fl.store(false, Ordering::SeqCst);
                     cx.request_repaint();
@@ -225,8 +226,9 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
             }
             if let Ok(mut g) = buf.lock() {
                 // výsledek kontroly distribucí zapisuje vlastní vlákno přímo sem
-                next.distros = std::mem::take(&mut g.distros);
-                next.history = std::mem::take(&mut g.history);
+                let old = Arc::make_mut(&mut g);
+                next.distros = std::mem::take(&mut old.distros);
+                next.history = std::mem::take(&mut old.history);
                 if let Some((rx, tx)) = next.vm_rate {
                     next.history.push_back(NetSample { t, rx, tx });
                 }
@@ -234,7 +236,7 @@ pub fn start_net_overview(ctx: eframe::egui::Context, cfg: Arc<RwLock<Config>>) 
                     next.history.pop_front();
                 }
                 next.updated = Some(Instant::now());
-                *g = next;
+                *g = Arc::new(next);
             }
             ctx.request_repaint();
             wait(t0, OVERVIEW_EVERY, &st);

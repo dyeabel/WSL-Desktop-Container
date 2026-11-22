@@ -71,7 +71,7 @@ pub fn tabs(app: &mut App, ui: &mut egui::Ui) -> bool {
 }
 
 /// Spustí (nebo jen „povzbudí“) sběr přehledu a vrátí kopii dat a aktuální čas feedu.
-fn feed_data(app: &mut App, ctx: &egui::Context, traffic: bool) -> (NetData, f64) {
+fn feed_data(app: &mut App, ctx: &egui::Context, traffic: bool) -> (std::sync::Arc<NetData>, f64) {
     let cfg = app.cfg.clone();
     let f = app.net.feed.get_or_insert_with(|| crate::worker::start_net_overview(ctx.clone(), cfg));
     f.touch(traffic);
