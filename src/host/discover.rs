@@ -1,9 +1,6 @@
 //! Hledání lokálního enginu na Linuxu: `DOCKER_HOST`, aktivní Docker context, výchozí sockety.
 //! Čistá funkce (prostředí, home i test existence se předávají), takže běží i v testech na Windows.
 
-// Zatím se nepoužívá mimo testy (napojí se v dalším úkolu).
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 use crate::http::Endpoint;
@@ -41,7 +38,24 @@ fn parse_host(host: &str) -> Parsed {
             }
         }
     }
-    Parsed::Remote(h.to_string())
+    Parsed::Remote(mask_userinfo(h))
+}
+
+/// Adresa bez hesla (`ssh://user:pass@host` → `ssh://user:***@host`) pro hlášky.
+fn mask_userinfo(addr: &str) -> String {
+    let Some((scheme, rest)) = addr.split_once("://") else {
+        return addr.to_string();
+    };
+    // userinfo je jen v autoritě (do prvního `/`)
+    let auth_end = rest.find('/').unwrap_or(rest.len());
+    let (auth, path) = rest.split_at(auth_end);
+    match auth.rsplit_once('@') {
+        Some((info, host)) => {
+            let user = info.split_once(':').map(|(u, _)| format!("{u}:***")).unwrap_or_else(|| info.to_string());
+            format!("{scheme}://{user}@{host}{path}")
+        }
+        None => addr.to_string(),
+    }
 }
 
 fn sha256_hex(s: &str) -> String {
@@ -51,7 +65,11 @@ fn sha256_hex(s: &str) -> String {
 
 /// Adresa Dockeru z aktivního contextu (`None` = výchozí kontext nebo nečitelná konfigurace).
 fn context_host(env: &dyn Fn(&str) -> Option<String>, home: &Path) -> Option<String> {
-    let docker = home.join(".docker");
+    // DOCKER_CONFIG přesouvá celou konfigurační složku (jako u CLI Dockeru)
+    let docker = match env("DOCKER_CONFIG").filter(|s| !s.is_empty()) {
+        Some(d) => PathBuf::from(d),
+        None => home.join(".docker"),
+    };
     let name = match env("DOCKER_CONTEXT").filter(|s| !s.is_empty()) {
         Some(n) => n,
         None => {
@@ -240,6 +258,40 @@ mod tests {
         assert_eq!(f, Found::Endpoint(Endpoint::Unix("/run/user/1000/podman/podman.sock".into())));
         let (f, _) = discover(&e, &no_home(), &only(&["/run/podman/podman.sock"]));
         assert_eq!(f, Found::Endpoint(Endpoint::Unix("/run/podman/podman.sock".into())));
+    }
+
+    #[test]
+    fn remote_credentials_masked() {
+        assert_eq!(mask_userinfo("ssh://user:pass@host:22"), "ssh://user:***@host:22");
+        assert_eq!(mask_userinfo("tcp://a:b@10.0.0.5:2375/x@y"), "tcp://a:***@10.0.0.5:2375/x@y");
+        assert_eq!(mask_userinfo("ssh://user@host"), "ssh://user@host");
+        assert_eq!(mask_userinfo("tcp://10.0.0.5:2375"), "tcp://10.0.0.5:2375");
+        let e = envf(&[("DOCKER_HOST", "ssh://me:s3cret@far")]);
+        let (f, m) = discover(&e, &no_home(), &only(&["/var/run/docker.sock"]));
+        assert_eq!(f, Found::Endpoint(Endpoint::Unix("/var/run/docker.sock".into())));
+        let m = m.unwrap();
+        assert!(!m.contains("s3cret") && m.contains("ssh://me:***@far"), "{m}");
+        let (f, m) = discover(&e, &no_home(), &|_| false);
+        assert_eq!(f, Found::Remote("ssh://me:***@far".into()));
+        assert!(!m.unwrap().contains("s3cret"));
+    }
+
+    #[test]
+    fn docker_config_env_used_for_context() {
+        let home = tmp_home("dcfg-home");
+        let cfgdir = tmp_home("dcfg-dir");
+        // v <home>/.docker je jiný kontext, který se nesmí použít
+        write_cfg(&home, "wrong");
+        write_ctx(&home, "wrong", "unix:///wrong.sock");
+        std::fs::write(cfgdir.join("config.json"), r#"{"currentContext":"right"}"#).unwrap();
+        let dir = cfgdir.join("contexts/meta").join(sha256_hex("right"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("meta.json"), r#"{"Endpoints":{"docker":{"Host":"unix:///right.sock"}}}"#).unwrap();
+        let c = cfgdir.to_string_lossy().to_string();
+        let (f, _) = discover(&envf(&[("DOCKER_CONFIG", c.as_str())]), &home, &|_| false);
+        assert_eq!(f, Found::Endpoint(Endpoint::Unix("/right.sock".into())));
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&cfgdir);
     }
 
     #[test]

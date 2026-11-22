@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::http::Endpoint;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Engine {
@@ -133,6 +135,29 @@ impl Engine {
             (Engine::Podman, false) => vec!["podman".into(), "--url".into(), format!("tcp://127.0.0.1:{port}")],
             (Engine::Podman, true) => vec!["podman".into(), "--url".into(), format!("unix://{PODMAN_TLS_SOCK}")],
         }
+    }
+
+    /// Příkaz CLI pro endpoint hostitele: TCP jako [`Engine::cli`], unix socket přímo
+    /// (`docker -H unix://…`, `podman --url unix://…`; TLS se na socketu nepoužije).
+    pub fn cli_for(self, ep: &Endpoint, tls: bool) -> Vec<String> {
+        match ep {
+            Endpoint::Tcp { port } => self.cli(*port, tls),
+            Endpoint::Unix(p) => {
+                let url = format!("unix://{}", p.display());
+                match self {
+                    Engine::Docker => vec!["docker".into(), "-H".into(), url],
+                    Engine::Podman => vec!["podman".into(), "--url".into(), url],
+                }
+            }
+        }
+    }
+
+    /// Typ enginu z odpovědi `/version` (Podman hlásí komponentu `Podman Engine`).
+    /// `None`, když odpověď nemá seznam komponent.
+    pub fn from_version(v: &serde_json::Value) -> Option<Engine> {
+        let comps = v.get("Components")?.as_array()?;
+        let podman = comps.iter().any(|c| c.get("Name").and_then(|n| n.as_str()) == Some("Podman Engine"));
+        Some(if podman { Engine::Podman } else { Engine::Docker })
     }
 
     /// Skript (běží jako root), který zpřístupní API na 127.0.0.1:$PORT.
@@ -607,5 +632,32 @@ mod tests {
         assert_eq!(Engine::Docker.cli(2375, false), vec!["docker"]);
         assert_eq!(Engine::Podman.cli(2375, false), vec!["podman", "--url", "tcp://127.0.0.1:2375"]);
         assert_eq!(Engine::Podman.cli(2376, true), vec!["podman", "--url", "unix:///run/wslcd-podman/podman.sock"]);
+    }
+
+    #[test]
+    fn cli_for_tcp_matches_cli() {
+        for e in [Engine::Docker, Engine::Podman] {
+            for tls in [false, true] {
+                assert_eq!(e.cli_for(&Endpoint::Tcp { port: 2375 }, tls), e.cli(2375, tls), "{e:?} {tls}");
+            }
+        }
+    }
+
+    #[test]
+    fn cli_for_unix_docker_and_podman() {
+        let ep = Endpoint::Unix("/run/user/1000/podman/podman.sock".into());
+        for tls in [false, true] {
+            assert_eq!(Engine::Docker.cli_for(&ep, tls), ["docker", "-H", "unix:///run/user/1000/podman/podman.sock"]);
+            assert_eq!(Engine::Podman.cli_for(&ep, tls), ["podman", "--url", "unix:///run/user/1000/podman/podman.sock"]);
+        }
+    }
+
+    #[test]
+    fn engine_from_version() {
+        let podman = serde_json::json!({"Components": [{"Name": "Podman Engine"}, {"Name": "Conmon"}], "Version": "5.0"});
+        assert_eq!(Engine::from_version(&podman), Some(Engine::Podman));
+        let docker = serde_json::json!({"Components": [{"Name": "Engine"}, {"Name": "containerd"}], "Version": "27.0"});
+        assert_eq!(Engine::from_version(&docker), Some(Engine::Docker));
+        assert_eq!(Engine::from_version(&serde_json::json!({"message": "x"})), None);
     }
 }

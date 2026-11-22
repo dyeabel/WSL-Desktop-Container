@@ -3,7 +3,10 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+#[cfg(any(unix, test))]
 pub mod discover;
+#[cfg(unix)]
+pub mod local;
 pub mod wsl;
 
 use crate::activity;
@@ -111,7 +114,7 @@ pub struct Caps {
 
 impl Caps {
     pub const WSL: Caps = Caps::all(true);
-    #[allow(dead_code)] // použije místní (Linux) hostitel
+    #[cfg_attr(windows, allow(dead_code))] // jen místní (Linux) hostitel
     pub const LOCAL: Caps = Caps::all(false);
 
     const fn all(v: bool) -> Caps {
@@ -165,9 +168,17 @@ pub trait Host: Send + Sync {
     }
 }
 
-/// Aktuální hostitel podle konfigurace (nic se necachuje).
+/// Aktuální hostitel podle konfigurace (nic se necachuje): na Windows distribuce WSL,
+/// na Linuxu místní procesy.
+#[cfg(not(unix))]
 pub fn current(cfg: &Config) -> Arc<dyn Host> {
     Arc::new(wsl::WslHost::new(&cfg.distro))
+}
+
+/// Aktuální hostitel (nic se necachuje): na Linuxu místní procesy.
+#[cfg(unix)]
+pub fn current(_cfg: &Config) -> Arc<dyn Host> {
+    Arc::new(local::LocalHost::new())
 }
 
 /// Kudy se z aplikace dostaneme k API enginu aktuálního hostitele.
@@ -229,6 +240,36 @@ pub fn finish(out: ExecOut) -> Result<String, HostError> {
         let output = if stderr.trim().is_empty() { stdout } else { stderr };
         Err(HostError::Failed { code: out.code, output })
     }
+}
+
+/// Spustí připravený příkaz a počká na výstup. Vstup (je-li) píše samostatné vlákno, ať se
+/// nezablokuje: proces s velkým výstupem by jinak čekal na vyčtení stdout, zatímco my čekáme
+/// na zápis do stdin. Předčasně skončený proces (broken pipe) není chyba – zajímá nás jeho výstup.
+pub(crate) fn output_with_stdin(cmd: &mut std::process::Command, stdin: Option<&[u8]>) -> Result<ExecOut, HostError> {
+    use std::io::Write;
+    use std::process::Stdio;
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let out = match stdin {
+        None => cmd.stdin(Stdio::null()).output().map_err(|e| e.to_string())?,
+        Some(input) => {
+            let mut child = cmd.stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+            let si = child.stdin.take();
+            std::thread::scope(|s| {
+                let writer = s.spawn(move || match si {
+                    // `si` se po zápisu zahodí -> proces dostane EOF
+                    Some(mut si) => si.write_all(input),
+                    None => Ok(()),
+                });
+                let out = child.wait_with_output().map_err(|e| e.to_string());
+                match writer.join() {
+                    Ok(Err(e)) if e.kind() != std::io::ErrorKind::BrokenPipe => Err(HostError::from(e.to_string())),
+                    Ok(_) => Ok(out?),
+                    Err(_) => Err(HostError::from("zápis vstupu procesu selhal".to_string())),
+                }
+            })?
+        }
+    };
+    Ok(ExecOut { code: out.status.code().unwrap_or(-1), stdout: out.stdout, stderr: out.stderr })
 }
 
 /// Záznam pro požadavek: žádný, když je `quiet`.

@@ -1,6 +1,7 @@
 //! Parametry akcí zadávané z UI (spuštění kontejneru, sestavení image, přidání distribuce).
 
 use crate::engine::{qualify_image, Engine};
+use crate::http::Endpoint;
 
 #[derive(Debug, Clone, Default)]
 pub struct RunSpec {
@@ -23,8 +24,8 @@ impl RunSpec {
     }
 
     /// Skutečný příkaz pro daný engine (Podman: plně kvalifikovaný image).
-    pub fn args_for(&self, engine: Engine, port: u16, tls: bool) -> Vec<String> {
-        self.args_with(engine.cli(port, tls), engine == Engine::Podman)
+    pub fn args_for(&self, engine: Engine, ep: &Endpoint, tls: bool) -> Vec<String> {
+        self.args_with(engine.cli_for(ep, tls), engine == Engine::Podman)
     }
 
     fn args_with(&self, cli: Vec<String>, qualify: bool) -> Vec<String> {
@@ -191,8 +192,8 @@ impl BuildSpec {
 
     /// Skutečný příkaz pro daný engine. Spouští se v adresáři kontextu, proto kontext = `.`;
     /// absolutní `-f` musí být už linuxová cesta (převádí worker).
-    pub fn args_for(&self, engine: Engine, port: u16, tls: bool) -> Vec<String> {
-        self.args_with(engine.cli(port, tls), ".")
+    pub fn args_for(&self, engine: Engine, ep: &Endpoint, tls: bool) -> Vec<String> {
+        self.args_with(engine.cli_for(ep, tls), ".")
     }
 
     fn args_with(&self, cli: Vec<String>, context: &str) -> Vec<String> {
@@ -225,6 +226,8 @@ impl BuildSpec {
 mod tests {
     use super::*;
 
+    const TCP: Endpoint = Endpoint::Tcp { port: 2375 };
+
     fn bs(dockerfile: &str, tags: &str, build_args: &str) -> BuildSpec {
         BuildSpec { context: r"C:\src\app".into(), dockerfile: dockerfile.into(), tags: tags.into(), build_args: build_args.into(), ..Default::default() }
     }
@@ -243,16 +246,16 @@ mod tests {
         s.no_cache = true;
         s.pull = true;
         assert_eq!(
-            s.args_for(Engine::Podman, 2375, false),
+            s.args_for(Engine::Podman, &TCP, false),
             ["podman", "--url", "tcp://127.0.0.1:2375", "build", "-t", "web", "--target", "prod", "--no-cache", "--pull", "."]
         );
-        assert_eq!(s.args_for(Engine::Docker, 2375, false)[..2], ["docker".to_string(), "build".to_string()]);
+        assert_eq!(s.args_for(Engine::Docker, &TCP, false)[..2], ["docker".to_string(), "build".to_string()]);
     }
 
     #[test]
     fn build_spec_build_args_with_spaces() {
         let s = bs("", "", "GREETING=hello world\n\n  VERSION=1.2  \nEMPTY=");
-        let a = s.args_for(Engine::Docker, 2375, false);
+        let a = s.args_for(Engine::Docker, &TCP, false);
         assert_eq!(
             a,
             ["docker", "build", "--build-arg", "GREETING=hello world", "--build-arg", "VERSION=1.2", "--build-arg", "EMPTY=", "."]
@@ -262,13 +265,13 @@ mod tests {
     #[test]
     fn build_spec_dockerfile_relative_vs_absolute() {
         // relativní ke kontextu – zpětná lomítka na dopředná
-        let a = bs(r"docker\prod.Dockerfile", "x", "").args_for(Engine::Docker, 2375, false);
+        let a = bs(r"docker\prod.Dockerfile", "x", "").args_for(Engine::Docker, &TCP, false);
         assert_eq!(a[1..4], ["build", "-f", "docker/prod.Dockerfile"]);
         // absolutní linuxová zůstává
-        let a = bs("/home/u/df/Dockerfile", "x", "").args_for(Engine::Docker, 2375, false);
+        let a = bs("/home/u/df/Dockerfile", "x", "").args_for(Engine::Docker, &TCP, false);
         assert_eq!(a[2..4], ["-f", "/home/u/df/Dockerfile"]);
         // absolutní windowsová se v spec nepřevádí (to dělá worker)
-        let a = bs(r"D:\df\Dockerfile", "x", "").args_for(Engine::Docker, 2375, false);
+        let a = bs(r"D:\df\Dockerfile", "x", "").args_for(Engine::Docker, &TCP, false);
         assert_eq!(a[2..4], ["-f", r"D:\df\Dockerfile"]);
         // výchozí název se nepředává
         assert!(!bs("./Dockerfile", "x", "").args().contains(&"-f".to_string()));

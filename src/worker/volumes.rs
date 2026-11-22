@@ -174,7 +174,7 @@ impl Worker {
 
     fn cli(&self) -> Vec<String> {
         let c = self.cfg();
-        c.engine.cli(c.port, c.tls)
+        c.engine.cli_for(&self.host().engine_endpoint(&c), c.tls)
     }
 
     /// Běžící kontejnery, které mají volume připojený: (id, název).

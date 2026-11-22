@@ -3,6 +3,7 @@
 use super::spec::{is_windows_path, BuildSpec};
 use super::{Msg, Worker};
 use crate::engine::Engine;
+use crate::http::Endpoint;
 use crate::host::{ExecReq, Host, HostExt, Privilege};
 
 /// Ukončí právě prováděné RUN kroky buildů Podmanu: potomky služby wslcd-podman-api
@@ -28,7 +29,8 @@ impl Worker {
     pub(super) fn build_image(&self, spec: BuildSpec) -> Result<String, String> {
         CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
         let cfg = self.cfg();
-        let res = run_build(self.host().as_ref(), cfg.engine, cfg.port, cfg.tls, &spec, |line| self.send(Msg::BuildOutput(line.to_string())));
+        let host = self.host();
+        let res = run_build(host.as_ref(), cfg.engine, &host.engine_endpoint(&cfg), cfg.tls, &spec, |line| self.send(Msg::BuildOutput(line.to_string())));
         self.send(Msg::BuildDone(res.clone()));
         res
     }
@@ -37,7 +39,7 @@ impl Worker {
 /// Sestaví image: převede cesty na linuxové, ověří kontext a Dockerfile a spustí
 /// `<cli> build … .` v adresáři kontextu. Každý řádek výstupu předá `on_line`.
 /// Vrací text pro oznámení (úspěch) nebo chybu.
-pub fn run_build(host: &dyn Host, engine: Engine, port: u16, tls: bool, spec: &BuildSpec, mut on_line: impl FnMut(&str)) -> Result<String, String> {
+pub fn run_build(host: &dyn Host, engine: Engine, ep: &Endpoint, tls: bool, spec: &BuildSpec, mut on_line: impl FnMut(&str)) -> Result<String, String> {
     if spec.context.trim().is_empty() {
         return Err(t!("Není zadaná složka kontextu", "No build context folder given").into());
     }
@@ -57,7 +59,7 @@ pub fn run_build(host: &dyn Host, engine: Engine, port: u16, tls: bool, spec: &B
         on_line(&e);
         return Err(e);
     }
-    let args = spec.args_for(engine, port, tls);
+    let args = spec.args_for(engine, ep, tls);
     on_line(&format!("$ cd {ctx}"));
     // hodnoty build argumentů s „tajnými“ názvy ve výpisu zamaskovat (F-11)
     let shown: Vec<String> = args

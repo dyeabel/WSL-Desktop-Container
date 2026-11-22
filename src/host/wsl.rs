@@ -1,10 +1,8 @@
 //! Hostitel nad `wsl.exe`: příkazy běží v distribuci WSL2.
 
-use std::io::Write;
-use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
 
-use super::{track_req, ExecOut, ExecReq, Host, HostError, Privilege};
+use super::{output_with_stdin, track_req, ExecOut, ExecReq, Host, HostError, Privilege};
 use crate::config::Config;
 use crate::http::Endpoint;
 use crate::wsl;
@@ -57,39 +55,9 @@ impl Host for WslHost {
 
     fn exec(&self, req: &ExecReq) -> Result<ExecOut, HostError> {
         let mut g = track_req(&self.distro, req);
-        let r = (|| {
-            let mut cmd = wsl::hidden("wsl.exe");
-            cmd.args(wsl_args(&self.distro, req));
-            cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-            let out = match req.stdin {
-                None => cmd.stdin(Stdio::null()).output().map_err(|e| e.to_string())?,
-                Some(input) => {
-                    let mut child = cmd.stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
-                    let si = child.stdin.take();
-                    // vstup píše vlastní vlákno, ať se nezablokuje: proces s velkým výstupem
-                    // by jinak čekal na vyčtení stdout, zatímco my čekáme na zápis do stdin
-                    std::thread::scope(|s| {
-                        let writer = s.spawn(move || match si {
-                            // `si` se po zápisu zahodí -> proces dostane EOF
-                            Some(mut si) => si.write_all(input),
-                            None => Ok(()),
-                        });
-                        let out = child.wait_with_output().map_err(|e| e.to_string());
-                        match writer.join() {
-                            // předčasně skončený proces (broken pipe): zajímá nás jeho výstup
-                            Ok(Err(e)) if e.kind() != std::io::ErrorKind::BrokenPipe => Err(HostError::from(e.to_string())),
-                            Ok(_) => Ok(out?),
-                            Err(_) => Err(HostError::from("zápis vstupu procesu selhal".to_string())),
-                        }
-                    })?
-                }
-            };
-            Ok::<_, HostError>(ExecOut {
-                code: out.status.code().unwrap_or(-1),
-                stdout: out.stdout,
-                stderr: out.stderr,
-            })
-        })();
+        let mut cmd = wsl::hidden("wsl.exe");
+        cmd.args(wsl_args(&self.distro, req));
+        let r = output_with_stdin(&mut cmd, req.stdin);
         if let Some(g) = g.as_mut() {
             g.set_ok(matches!(&r, Ok(o) if o.code == 0));
         }
@@ -133,7 +101,7 @@ impl Host for WslHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::{current, HostExt};
+    use crate::host::HostExt;
 
     #[test]
     fn args_user() {
@@ -151,7 +119,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(unix))]
     fn current_follows_config() {
+        use crate::host::current;
         let mut cfg = Config::default();
         cfg.distro = "A".into();
         assert_eq!(current(&cfg).label(), "A");

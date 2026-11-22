@@ -340,6 +340,11 @@ impl Worker {
     }
 
     fn run(self, rx: Receiver<Cmd>) {
+        // Linux: typ enginu podle jeho API (na pozadí, UI nečeká)
+        if self.host().kind() == crate::host::HostKind::Local {
+            let w = self.clone();
+            thread::spawn(move || w.detect_local_engine());
+        }
         // spuštěno ze shimu = někdo právě potřebuje engine
         if self.cfg().autostart_engine || crate::wake::launched_from_shim() {
             let w = self.clone();
@@ -465,6 +470,20 @@ impl Worker {
                 w.shared.stats_running.store(false, Ordering::SeqCst);
             });
         }
+    }
+
+    /// Zjistí z `/version`, zda na socketu běží Docker, nebo Podman, a uloží to do konfigurace.
+    /// Nedostupný engine = nechat nastavený typ.
+    fn detect_local_engine(&self) {
+        let Ok(v) = self.docker().get::<serde_json::Value>("/version") else { return };
+        let Some(engine) = crate::engine::Engine::from_version(&v) else { return };
+        if let Ok(mut g) = self.cfg.write() {
+            if g.engine != engine {
+                g.engine = engine;
+                let _ = g.save();
+            }
+        }
+        self.ctx.request_repaint();
     }
 
     fn check_engine(&self) {

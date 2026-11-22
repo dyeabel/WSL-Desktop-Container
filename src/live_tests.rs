@@ -4,6 +4,7 @@
 
 use crate::host::wsl::WslHost;
 use crate::{docker::Docker, fs, wsl};
+use crate::http::Endpoint;
 
 fn host() -> WslHost {
     WslHost::new(distro())
@@ -82,11 +83,11 @@ fn live_podman_api() {
 
     // kontejner přes CLI (podman --url) jako v aplikaci
     let distro = distro();
-    let mut rm = Engine::Podman.cli(port, tls);
+    let mut rm = Engine::Podman.cli_for(&Endpoint::Tcp { port }, tls);
     rm.extend(["rm", "-f", "wslcd-pod-test"].map(String::from));
     let _ = wsl::run_owned(&distro, None, None, &rm);
     let spec = RunSpec { image: "alpine:3.20".into(), name: "wslcd-pod-test".into(), command: "sleep 120".into(), restart: "no".into(), ..Default::default() };
-    wsl::run_owned(&distro, None, None, &spec.args_for(Engine::Podman, port, tls)).expect("podman run");
+    wsl::run_owned(&distro, None, None, &spec.args_for(Engine::Podman, &Endpoint::Tcp { port }, tls)).expect("podman run");
     let c = d.snapshot().containers.into_iter().find(|c| c.name() == "wslcd-pod-test").expect("kontejner v API");
     assert!(c.running(), "{}", c.status);
     assert!(d.stats(&c.id, "wslcd-pod-test").is_some(), "stats");
@@ -220,7 +221,7 @@ fn live_container_detail() {
         command: r#"sh -c 'echo "hello detail"; sleep 600'"#.into(),
         ..Default::default()
     };
-    wsl::run_owned(&cfg.distro, None, None, &spec.args_for(engine, port, tls)).expect("run");
+    wsl::run_owned(&cfg.distro, None, None, &spec.args_for(engine, &Endpoint::Tcp { port }, tls)).expect("run");
     let det = inspect(name);
     eprintln!("inspect: {} {} {:?} ports={:?} nets={:?}", det.name, det.image, det.cmd, det.port_specs, det.networks);
     assert!(det.running, "{}", det.status);
@@ -478,7 +479,7 @@ fn live_build_image() {
         ..Default::default()
     };
     let mut lines = Vec::new();
-    let res = crate::worker::build::run_build(&WslHost::new(&distro), cfg.engine, port, tls, &spec, |l| {
+    let res = crate::worker::build::run_build(&WslHost::new(&distro), cfg.engine, &Endpoint::Tcp { port }, tls, &spec, |l| {
         eprintln!("| {l}");
         lines.push(l.to_string());
     });
@@ -627,7 +628,7 @@ fn live_volume_backup_restore() {
     let ver: serde_json::Value = d.get("/version").unwrap();
     let engine = if ver.to_string().contains("Podman") { Engine::Podman } else { Engine::Docker };
     let cfg = crate::config::Config { distro: distro(), engine, port, tls, ..Default::default() };
-    let cli = engine.cli(port, tls);
+    let cli = engine.cli_for(&Endpoint::Tcp { port }, tls);
     let (src, dst, cln) = ("wslcd-test-backup", "wslcd-test-restore", "wslcd-test-clone");
     // složka s mezerou a apostrofem (uvozovky Windows v názvech nedovolí)
     let dir = std::env::temp_dir().join("wslcd-test backup it's");
@@ -718,7 +719,7 @@ fn live_build_cancel() {
         crate::worker::cancel_build();
     });
     let t = std::time::Instant::now();
-    let res = crate::worker::build::run_build(&WslHost::new(&distro), cfg.engine, cfg.port, cfg.tls, &spec, |l| eprintln!("| {l}"));
+    let res = crate::worker::build::run_build(&WslHost::new(&distro), cfg.engine, &Endpoint::Tcp { port: cfg.port }, cfg.tls, &spec, |l| eprintln!("| {l}"));
     let took = t.elapsed();
     std::thread::sleep(std::time::Duration::from_secs(3));
     let ps = wsl::run(&distro, Some("root"), None, &["sh", "-c", "ps -eo args | grep 'sleep 45' | grep -v grep || true"]).unwrap_or_default();
@@ -742,7 +743,7 @@ fn live_compose_new_stack() {
     let port: u16 = std::env::var("WSLCD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(2375);
     let d = Docker::new(&crate::http::Endpoint::Tcp { port });
     assert!(d.ping(), "API na {port} neodpovídá");
-    let cli = cfg.engine.cli(port, false);
+    let cli = cfg.engine.cli_for(&Endpoint::Tcp { port }, false);
     let project = "wslcd-test-compose";
     let dir = format!("/tmp/wslcd-test-compose-{}", std::process::id());
     let t = crate::compose_templates::TEMPLATES.iter().find(|t| t.id == "redis").unwrap();
@@ -826,7 +827,7 @@ fn live_distro_manage() {
     }
     let engine_distro = distro();
     let cfg = crate::config::Config::load();
-    let cli = cfg.engine.cli(cfg.port, cfg.tls);
+    let cli = cfg.engine.cli_for(&crate::host::endpoint(&cfg), cfg.tls);
     let engine = |args: &[&str]| {
         let mut v = cli.clone();
         v.extend(args.iter().map(|s| s.to_string()));
@@ -925,7 +926,7 @@ fn live_compose_label_trust() {
         cfg.distro = d;
     }
     let d = Docker::new(&crate::host::endpoint(&cfg));
-    let cli = cfg.engine.cli(cfg.port, cfg.tls);
+    let cli = cfg.engine.cli_for(&crate::host::endpoint(&cfg), cfg.tls);
     let run = |extra: &[&str]| {
         let mut a: Vec<String> = cli.clone();
         a.extend(extra.iter().map(|s| s.to_string()));
@@ -941,7 +942,7 @@ fn live_compose_label_trust() {
     )
     .unwrap();
     let spec = crate::worker::BuildSpec { context: dir.to_string_lossy().to_string(), tags: "wslcd-test-trust:latest".into(), ..Default::default() };
-    crate::worker::build::run_build(&WslHost::new(&cfg.distro), cfg.engine, cfg.port, cfg.tls, &spec, |_| {}).expect("build");
+    crate::worker::build::run_build(&WslHost::new(&cfg.distro), cfg.engine, &Endpoint::Tcp { port: cfg.port }, cfg.tls, &spec, |_| {}).expect("build");
     run(&["create", "--name", "wslcd-test-trust-a", "wslcd-test-trust:latest", "true"]).expect("create a");
     let evil = crate::worker::check_stack_for_test(cfg.clone(), "/tmp", "wslcd-test-evil");
     // label na kontejneru (ne z image), ale složka neexistuje
@@ -1105,7 +1106,7 @@ fn live_stack_logs_attach_later() {
     crate::docker::configure_tls(cfg.tls).expect("tls");
     let d = Docker::new(&crate::host::endpoint(&cfg));
     assert!(d.ping(), "API na {} neodpovídá", cfg.port);
-    let cli = cfg.engine.cli(cfg.port, cfg.tls);
+    let cli = cfg.engine.cli_for(&crate::host::endpoint(&cfg), cfg.tls);
     let distro = std::env::var("WSLCD_DISTRO").unwrap_or(cfg.distro.clone());
     let run = |extra: &[&str]| {
         let mut a: Vec<String> = cli.clone();

@@ -24,6 +24,13 @@ mod config;
 #[path = "../engine.rs"]
 #[allow(dead_code)]
 mod engine;
+#[path = "../http/endpoint.rs"]
+#[allow(dead_code)] // shim mluví s enginem jen přes TCP
+mod endpoint;
+/// Jen adresa endpointu (pro `Engine::cli_for`), bez HTTP klienta.
+mod http {
+    pub use super::endpoint::Endpoint;
+}
 #[path = "../pathmap.rs"]
 mod pathmap;
 #[path = "../apitls.rs"]
@@ -221,7 +228,7 @@ fn main() -> ExitCode {
     // Podman: pole šablon, které se liší od Dockeru (`events --format '{{.Action}}'`)
     let args = if target.engine == engine::Engine::Podman { podmanfix::rewrite(&args) } else { args };
     // Docker -> `docker …`, Podman -> `podman --url tcp://127.0.0.1:<port> …`
-    let cli = target.engine.cli(target.port, target.tls);
+    let cli = target.engine.cli_for(&http::Endpoint::Tcp { port: target.port }, target.tls);
     // Podman: buildery buildx obslouží skutečný buildx (je-li v distribuci), viz podmanfix
     let cli = if target.engine == engine::Engine::Podman { podmanfix::buildx_cli(&args, &cli).unwrap_or(cli) } else { cli };
     // Podman: `compose ps` přes JSON, aby STATUS ukázal i stav healthchecku
