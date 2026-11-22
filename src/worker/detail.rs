@@ -15,6 +15,14 @@ pub const STATS_WINDOW: f64 = 300.0;
 /// Interval vzorkování statistik.
 const STATS_EVERY: Duration = Duration::from_secs(2);
 
+/// Interval vzorkování při skrytém okně (bez překreslení, graf bez mezer).
+const HIDDEN_EVERY: Duration = Duration::from_secs(10);
+
+/// Interval vzorkování podle viditelnosti okna.
+fn stats_interval(visible: bool) -> Duration {
+    if visible { STATS_EVERY } else { HIDDEN_EVERY }
+}
+
 /// Jeden vzorek statistik kontejneru.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StatSample {
@@ -67,12 +75,15 @@ pub fn start_stats(ctx: eframe::egui::Context, ep: crate::http::Endpoint, id: St
                             g.pop_front();
                         }
                     }
-                    ctx.request_repaint();
+                    // skryté okno nepřekreslovat
+                    if crate::tray::window_visible() {
+                        ctx.request_repaint();
+                    }
                 }
                 // kontejner neběží – zkusíme to znovu (mohl by se spustit)
                 None => prev = None,
             }
-            while t0.elapsed() < STATS_EVERY && !st.load(Ordering::SeqCst) {
+            while t0.elapsed() < stats_interval(crate::tray::window_visible()) && !st.load(Ordering::SeqCst) {
                 thread::sleep(Duration::from_millis(100));
             }
         }
@@ -250,5 +261,17 @@ impl Worker {
                 Err(restore(e))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_samples_slower_visible_fast() {
+        assert_eq!(stats_interval(true), Duration::from_secs(2));
+        assert_eq!(stats_interval(false), Duration::from_secs(10));
+        assert!(stats_interval(false) > stats_interval(true));
     }
 }
