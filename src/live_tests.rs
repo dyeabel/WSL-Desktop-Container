@@ -1281,6 +1281,20 @@ fn guard_events_max(d: &str, slice: &str) -> u64 {
     o.parse().unwrap_or(0)
 }
 
+/// Skutečný vzorek Paměti (`SAMPLE_SCRIPT` i `SAMPLE_SCRIPT_MIN`) přes `parse_guard`: strop z cgroup,
+/// který čte stránka Paměť, musí být stejný jako `memory.max` ve slice (špatná cesta ve skriptu = bez stropu).
+fn guard_sample_check(d: &str, engine: crate::engine::Engine, slice: &str, step: &str) {
+    let max: u64 = guard_root(d, &format!("cat /sys/fs/cgroup/{slice}/memory.max")).parse().expect("memory.max");
+    let mt = guard_root(d, "awk '/^MemTotal:/{print $2*1024}' /proc/meminfo").parse().expect("MemTotal");
+    for (label, script) in [("SAMPLE_SCRIPT", crate::memory::SAMPLE_SCRIPT), ("SAMPLE_SCRIPT_MIN", crate::memory::SAMPLE_SCRIPT_MIN)] {
+        let out = guard_root(d, script);
+        let g = crate::memory::parse_guard(&out, engine, mt).unwrap_or_else(|| panic!("{step} {label}: bez @@guard: {out}"));
+        eprintln!("{step}) {label}: {g:?}");
+        assert_eq!(g.max, Some(max), "{step} {label}: parse_guard nenašel strop {slice}: {out}");
+        assert_eq!(g.reserve, Some(mt.saturating_sub(max)), "{step} {label}: rezerva");
+    }
+}
+
 /// Jeden scénář stropu na jedné distribuci: `docker` / `podman`, `lite` = WSLCD Lite.
 fn guard_scenario(c: &GuardCleanup, name: &str, engine: crate::engine::Engine, lite: bool, port: u16, data: &std::path::Path) {
     use crate::engine::Engine;
@@ -1350,6 +1364,7 @@ fn guard_scenario(c: &GuardCleanup, name: &str, engine: crate::engine::Engine, l
     let max = guard_root(name, &format!("cat /sys/fs/cgroup/{slice}/memory.max"));
     eprintln!("1) {slice}/memory.max = {max}");
     assert!(max.parse::<u64>().is_ok(), "{max}");
+    guard_sample_check(name, engine, slice, "1");
 
     // 2) kontejner je pod stropem
     let probe = format!(
@@ -1394,6 +1409,7 @@ fn guard_scenario(c: &GuardCleanup, name: &str, engine: crate::engine::Engine, l
     let max = guard_root(name, &format!("cat /sys/fs/cgroup/{slice}/memory.max"));
     eprintln!("4) po startu {slice}/memory.max = {max}");
     assert!(max.parse::<u64>().is_ok(), "{max}");
+    guard_sample_check(name, engine, slice, "4");
     if !lite {
         let unit = if docker { "docker" } else { "wslcd-podman-api" };
         let t = guard_root(name, &format!("echo $(systemctl show -p ExecMainExitTimestampMonotonic --value wslcd-guard) $(systemctl show -p ExecMainStartTimestampMonotonic --value {unit})"));
