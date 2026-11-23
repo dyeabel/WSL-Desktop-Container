@@ -92,9 +92,18 @@ start_unit() {
     return 1
   fi
   cmd=$(unescape "$cmd")
+  # oneshot (strop paměti): synchronně, bez supervisoru; $u.stop smazat tu (po restartu by zůstal)
+  if [ "$(get_last "$u" Type)" = oneshot ]; then
+    rm -f "$RUN/$u.stop"
+    sh -c "$cmd" >> "$LOGS/${u%.service}.log" 2>&1 || return 1
+    return 0
+  fi
   # socket activation systemd tu není: dockerd -H fd:// → vlastní unix socket
   case "$cmd" in *"-H fd://"*) cmd=$(printf '%s' "$cmd" | sed 's#-H fd://#-H unix:///var/run/docker.sock#') ;; esac
   restart=$(get_last "$u" Restart)
+  oom=$(get_last "$u" OOMScoreAdjust)
+  oomp=""
+  if [ -n "$oom" ]; then oomp="echo $oom > /proc/self/oom_score_adj 2>/dev/null; "; fi
   log="$LOGS/${u%.service}.log"
   [ -f "$log" ] && [ "$(wc -c < "$log")" -gt 1048576 ] && mv -f "$log" "$log.1"
   get_all "$u" ExecStartPre | while IFS= read -r pre; do sh -c "$(unescape "$pre")" >> "$log" 2>&1 || true; done
@@ -105,7 +114,7 @@ start_unit() {
     while :; do
       # vlastní relace jako v systemd: konec relace wsl.exe pošle SIGHUP a Podman 5.8 na něj
       # znovu načte konfiguraci a ztratí volume_path (svazky pak vznikají s relativní cestou)
-      setsid sh -c "exec $cmd" >> "$log" 2>&1 < /dev/null &
+      setsid sh -c "${oomp}exec $cmd" >> "$log" 2>&1 < /dev/null &
       echo $! > "$RUN/$u.pid"
       wait $!
       code=$?
@@ -150,11 +159,13 @@ tmpfiles() {
 
 boot() {
   tmpfiles
+  # strop paměti pro kontejnery dřív než engine (oneshot)
+  [ -e "$STATE/wslcd-guard.service" ] && start_unit wslcd-guard.service
   # DNS pro kontejnery před enginem, TLS proxy až po něm
   for f in "$STATE"/wslcd-dns.service "$STATE"/*; do
     [ -e "$f" ] || continue
     u=$(basename "$f")
-    case "$u" in wslcd-tls-proxy.service|podman-restart.service) continue ;; esac
+    case "$u" in wslcd-tls-proxy.service|podman-restart.service|wslcd-guard.service) continue ;; esac
     start_unit "$u"
   done
   [ -e "$STATE/wslcd-tls-proxy.service" ] && start_unit wslcd-tls-proxy.service

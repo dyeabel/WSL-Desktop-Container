@@ -144,6 +144,12 @@ mod tests {
         assert!(SYSTEMCTL.contains("setsid sh -c"), "služby ve vlastní relaci");
         assert!(SYSTEMCTL.contains("podman start --all --filter restart-policy=always"), "vestavěný podman-restart");
         assert!(SYSTEMCTL.contains("start_unit podman-restart.service"), "kontejnery při bootu až po enginu");
+        for p in ["get_last \"$u\" Type", "= oneshot", "get_last \"$u\" OOMScoreAdjust", "/proc/self/oom_score_adj"] {
+            assert!(SYSTEMCTL.contains(p), "{p}");
+        }
+        let g = SYSTEMCTL.find("start_unit wslcd-guard.service").expect("guard při bootu");
+        assert!(g < SYSTEMCTL.find("for f in \"$STATE\"/wslcd-dns.service").unwrap(), "guard první");
+        assert!(SYSTEMCTL.contains("podman-restart.service|wslcd-guard.service) continue"), "oneshot se ve smyčce nespouští znovu");
         assert!(PREPARE.contains("command = /usr/local/bin/systemctl --boot"));
         assert!(!SYSTEMCTL.contains('\r') && !PREPARE.contains('\r'), "bez CRLF");
     }
