@@ -1368,7 +1368,7 @@ fn guard_scenario(c: &GuardCleanup, name: &str, engine: crate::engine::Engine, l
 
     // 2) kontejner je pod stropem
     let probe = format!(
-        "{cli} run -d --name wslcd-test-guard {img} sleep 300 >/dev/null; pid=$({cli} inspect -f '{{{{.State.Pid}}}}' wslcd-test-guard); cat /proc/$pid/cgroup; p=$(sed -n 's/^0:://p' /proc/$pid/cgroup); echo PARENT=$(dirname $p); echo PARENT_MAX=$(cat /sys/fs/cgroup$(dirname $p)/memory.max); echo OOMADJ=$(cat /proc/$pid/oom_score_adj)"
+        "{cli} run -d --name wslcd-test-guard {img} sleep 300 >/dev/null; pid=$({cli} inspect -f '{{{{.State.Pid}}}}' wslcd-test-guard); cat /proc/$pid/cgroup; p=$(sed -n 's/^0:://p' /proc/$pid/cgroup); echo PARENT=$(dirname $p); echo PARENT_MAX=$(cat /sys/fs/cgroup$(dirname $p)/memory.max); echo OOMADJ=$(cat /proc/$pid/oom_score_adj); echo DOCKERD_OOMADJ=$(cat /proc/$(pidof -s dockerd)/oom_score_adj 2>/dev/null)"
     );
     let out = guard_root(name, &probe);
     eprintln!("2) {out}");
@@ -1376,6 +1376,10 @@ fn guard_scenario(c: &GuardCleanup, name: &str, engine: crate::engine::Engine, l
         assert!(out.contains(if lite { "/wslcd-containers/" } else { "wslcd-containers.slice" }), "{out}");
     } else {
         assert!(out.contains(if lite { "/libpod_parent/" } else { "/machine.slice/" }), "{out}");
+    }
+    if docker {
+        let adj = out.lines().find_map(|l| l.strip_prefix("DOCKERD_OOMADJ=")).unwrap_or("");
+        assert_eq!(adj, "-900", "dockerd bez OOMScoreAdjust (systemd i Lite): {out}");
     }
     let pm = out.lines().find_map(|l| l.strip_prefix("PARENT_MAX=")).unwrap_or("");
     if docker {

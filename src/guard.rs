@@ -35,7 +35,8 @@ EOF
   for u in docker containerd wslcd-podman-api wslcd-tls-proxy wslcd-dns; do
     case "$u" in
       docker|containerd)
-        [ -e /etc/systemd/system/$u.service ] || [ -e /usr/lib/systemd/system/$u.service ] || [ -e /lib/systemd/system/$u.service ] || continue ;;
+        # Lite: docker.service je jen drop-in 10 aplikace
+        [ -e /etc/systemd/system/$u.service ] || [ -e /usr/lib/systemd/system/$u.service ] || [ -e /lib/systemd/system/$u.service ] || [ -e /etc/systemd/system/$u.service.d/10-wsl-container-desktop-tcp.conf ] || continue ;;
     esac
     mkdir -p /etc/systemd/system/$u.service.d
     printf '[Service]\nOOMScoreAdjust=-900\n' > /etc/systemd/system/$u.service.d/30-wsl-container-desktop-oom.conf
@@ -152,5 +153,65 @@ mod tests {
             assert!(!f.contains(bad), "{bad:?}");
         }
         assert!(apply_script().ends_with("guard_apply\n"));
+    }
+
+    /// `guard_install` v zástupném kořeni: bez systemd, `systemctl` je maketa, guard.sh jen nasucho.
+    /// Vrací soubory v `etc/systemd/system` po instalaci; None = `sh` v tomto prostředí není.
+    fn install_in_sandbox(name: &str, seed: &[&str]) -> Option<Vec<String>> {
+        use std::process::Command;
+        let t = std::env::temp_dir().join(format!("wslcd-guard-sandbox-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let root = |sub: &str| t.join(sub).to_string_lossy().replace('\\', "/");
+        for f in seed {
+            let f = t.join("etc/systemd/system").join(f);
+            std::fs::create_dir_all(f.parent()?).ok()?;
+            std::fs::write(f, "").ok()?;
+        }
+        std::fs::create_dir_all(t.join("etc/systemd/system")).ok()?;
+        let script = FUNCS
+            .replace("/usr/lib/systemd/system", &root("usr"))
+            .replace("/lib/systemd/system", &root("lib"))
+            .replace("/etc/systemd/system", &root("etc/systemd/system"))
+            .replace("/usr/local/lib/wsl-container-desktop", &root("guard"));
+        let run = format!("systemctl() {{ return 0; }}
+{script}guard_install 0
+");
+        let out = Command::new("sh")
+            .args(["-c", &run])
+            .env("WSLCD_GUARD_DRY", "1")
+            .env("WSLCD_GUARD_MEMTOTAL_KB", "8000000")
+            .output()
+            .ok()?;
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let mut found = Vec::new();
+        let base = t.join("etc/systemd/system");
+        for d in std::fs::read_dir(&base).ok()?.flatten() {
+            if let Ok(rd) = std::fs::read_dir(d.path()) {
+                for f in rd.flatten() {
+                    found.push(format!("{}/{}", d.file_name().to_string_lossy(), f.file_name().to_string_lossy()));
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&t);
+        found.sort();
+        Some(found)
+    }
+
+    const OOM: &str = "30-wsl-container-desktop-oom.conf";
+
+    /// WSLCD Lite: `docker.service` existuje jen jako drop-in 10 aplikace – dockerd i tak dostane OOMScoreAdjust.
+    #[test]
+    fn oom_dropin_for_docker_without_main_unit() {
+        let Some(f) = install_in_sandbox("lite", &["docker.service.d/10-wsl-container-desktop-tcp.conf"]) else { return };
+        assert!(f.contains(&format!("docker.service.d/{OOM}")), "{f:?}");
+        assert!(!f.contains(&format!("containerd.service.d/{OOM}")), "containerd bez jednotky se přeskočí: {f:?}");
+        assert!(f.contains(&format!("wslcd-podman-api.service.d/{OOM}")), "{f:?}");
+    }
+
+    /// Bez enginu (žádná jednotka ani drop-in) se do docker/containerd nic nezapíše.
+    #[test]
+    fn oom_dropin_skips_missing_engines() {
+        let Some(f) = install_in_sandbox("none", &[]) else { return };
+        assert!(!f.iter().any(|x| x.starts_with("docker.service.d") || x.starts_with("containerd.service.d")), "{f:?}");
     }
 }
