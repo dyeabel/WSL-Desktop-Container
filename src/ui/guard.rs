@@ -55,7 +55,7 @@ pub fn overview_rows(ui: &mut egui::Ui, g: Option<&GuardNow>, docker: bool, ungu
 /// Karta „Paměť kontejnerů“ v Nastavení – mění se okamžitě.
 pub fn settings_section(app: &mut App, ui: &mut egui::Ui) {
     section(ui, t!("Paměť kontejnerů", "Container memory"));
-    let (mut on, reserve, docker) = app.cfg.read().map(|c| (c.container_guard, c.guard_reserve_gb, c.engine == crate::engine::Engine::Docker)).unwrap_or_default();
+    let (mut on, docker) = app.cfg.read().map(|c| (c.container_guard, c.engine == crate::engine::Engine::Docker)).unwrap_or_default();
     let changed = egui::Id::new("guard-changed");
     let mut apply = false;
     card(ui, |ui| {
@@ -66,12 +66,9 @@ pub fn settings_section(app: &mut App, ui: &mut egui::Ui) {
             save(app, |c| c.container_guard = on);
             apply = true;
         }
-        let mut r = reserve;
         ui.horizontal(|ui| {
             ui.label(t!("Rezerva (GB, 0 = automaticky)", "Reserve (GB, 0 = automatic)"));
-            let resp = ui.add_enabled(on, egui::DragValue::new(&mut r).range(0.0..=64.0).speed(0.5).max_decimals(1));
-            if super::alerts::save_now(&resp) {
-                let v = crate::guard::snap_reserve(r);
+            if let Some(v) = reserve_row(ui, on, &mut app.cfg_draft) {
                 save(app, |c| c.guard_reserve_gb = v);
                 apply = true;
             }
@@ -92,10 +89,22 @@ pub fn settings_section(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-fn save(app: &mut App, f: impl FnOnce(&mut crate::config::Config)) {
+/// Políčko rezervy; vrací zaokrouhlenou hodnotu, když ji uložit (psaní, konec tažení).
+fn reserve_row(ui: &mut egui::Ui, enabled: bool, draft: &mut crate::config::Config) -> Option<f64> {
+    let resp = ui.add_enabled(enabled, egui::DragValue::new(&mut draft.guard_reserve_gb).range(0.0..=64.0).speed(0.5).max_decimals(1));
+    super::alerts::save_now(&resp).then(|| crate::guard::snap_reserve(draft.guard_reserve_gb))
+}
+
+/// Změna konfigurace i konceptu Nastavení – jinak by Uložit přepsal změnu starým konceptem.
+fn apply(cfg: &mut crate::config::Config, draft: &mut crate::config::Config, f: impl Fn(&mut crate::config::Config)) {
+    f(cfg);
+    f(draft);
+}
+
+fn save(app: &mut App, f: impl Fn(&mut crate::config::Config)) {
     let res = match app.cfg.write() {
         Ok(mut g) => {
-            f(&mut g);
+            apply(&mut g, &mut app.cfg_draft, f);
             g.save()
         }
         Err(e) => Err(e.to_string()),
@@ -108,6 +117,47 @@ fn save(app: &mut App, f: impl FnOnce(&mut crate::config::Config)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+
+    #[test]
+    fn apply_keeps_draft_in_sync() {
+        let (mut cfg, mut draft) = (Config::default(), Config::default());
+        apply(&mut cfg, &mut draft, |c| c.container_guard = true);
+        apply(&mut cfg, &mut draft, |c| c.guard_reserve_gb = 3.5);
+        assert!(draft.container_guard);
+        assert_eq!(draft.guard_reserve_gb, 3.5);
+        assert!(cfg == draft, "Uložit by se jinak rozsvítilo a přepsalo změnu");
+    }
+
+    /// Tažení myší: na uvolňovacím snímku musí zápis nést tažením změněnou hodnotu.
+    #[test]
+    fn reserve_drag_saves_dragged_value() {
+        let ctx = egui::Context::default();
+        let mut draft = Config { guard_reserve_gb: 0.0, ..Config::default() };
+        let mut saved = Vec::new();
+        let step = |events: Vec<egui::Event>, draft: &mut Config, saved: &mut Vec<f64>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 300.0))),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| saved.extend(reserve_row(ui, true, draft)));
+            });
+        };
+        step(vec![], &mut draft, &mut saved);
+        // pole rezervy je v levém horním rohu panelu
+        let start = egui::pos2(20.0, 16.0);
+        let btn = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        step(vec![egui::Event::PointerMoved(start)], &mut draft, &mut saved);
+        step(vec![btn(start, true)], &mut draft, &mut saved);
+        for dx in [10.0, 20.0, 30.0, 40.0] {
+            step(vec![egui::Event::PointerMoved(start + egui::vec2(dx, 0.0))], &mut draft, &mut saved);
+        }
+        step(vec![btn(start + egui::vec2(40.0, 0.0), false)], &mut draft, &mut saved);
+        step(vec![], &mut draft, &mut saved);
+        assert!(saved.last().is_some_and(|v| *v > 0.0), "uložená hodnota po tažení: {saved:?}");
+    }
 
     #[test]
     fn gb_one_decimal() {
