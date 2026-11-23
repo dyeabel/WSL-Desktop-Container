@@ -27,6 +27,9 @@ mod config;
 #[path = "../engine.rs"]
 #[allow(dead_code)]
 mod engine;
+#[path = "../guard.rs"]
+#[allow(dead_code)]
+mod guard;
 #[path = "../http/endpoint.rs"]
 #[allow(dead_code)] // shim mluví s enginem jen přes TCP
 mod endpoint;

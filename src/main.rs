@@ -16,6 +16,7 @@ mod engine;
 mod error;
 mod eventlog;
 mod fs;
+mod guard;
 mod history;
 mod host;
 mod http;
@@ -45,6 +46,8 @@ mod wslconfig;
 mod bench;
 #[cfg(test)]
 mod live_docker;
+#[cfg(test)]
+mod live_guard;
 #[cfg(test)]
 mod live_tests;
 #[cfg(test)]

@@ -45,6 +45,12 @@ pub struct Config {
     pub container_notify: ContainerNotify,
     /// Každých 10 min uvolnit cache Linuxu ve WSL (když je nad 1 GB), aby VmmemWSL vracel paměť Windows
     pub auto_free_memory: bool,
+    /// Společný strop paměti pro kontejnery (jen WSL distribuce), aby engine nevyčerpal paměť celé VM
+    pub container_guard: bool,
+    /// Rezerva paměti pro Linux mimo kontejnery v GB (0 = automaticky, 0–64 po 0,5)
+    pub guard_reserve_gb: f64,
+    /// Distribuce, kde se strop paměti nemá nastavovat
+    pub unguarded_distros: Vec<String>,
     /// API enginu jen přes TLS s klientským certifikátem (port 2376, certifikáty v %APPDATA%\WSL_Container_Desktop\tls)
     pub tls: bool,
     /// Upozornění „API bez ověření“ na stránce WSL engine bylo zavřeno
@@ -184,6 +190,9 @@ impl Default for Config {
             notifications: true,
             container_notify: ContainerNotify::default(),
             auto_free_memory: true,
+            container_guard: true,
+            guard_reserve_gb: 0.0,
+            unguarded_distros: Vec::new(),
             tls: false,
             security_hint_dismissed: false,
             npipe: false,
@@ -513,5 +522,19 @@ mod xdg_tests {
         assert_eq!(super::xdg_config_home(env(&[("XDG_CONFIG_HOME", "/x/cfg")])), Some(PathBuf::from("/x/cfg")));
         assert_eq!(super::xdg_config_home(env(&[("HOME", "/h")])), Some(PathBuf::from("/h/.config")));
         assert_eq!(super::xdg_config_home(env(&[])), None);
+    }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    #[test]
+    fn config_defaults_guard_on() {
+        let c: Config = serde_json::from_str("{}").unwrap();
+        assert!(c.container_guard && c.guard_reserve_gb == 0.0 && c.unguarded_distros.is_empty());
+        let c: Config =
+            serde_json::from_str(r#"{"container_guard":false,"guard_reserve_gb":2.5,"unguarded_distros":["A"]}"#).unwrap();
+        assert!(!c.container_guard && c.guard_reserve_gb == 2.5 && c.unguarded_distros == ["A"]);
     }
 }
