@@ -13,6 +13,7 @@ mod distro_manage;
 mod engine_ops;
 mod events;
 mod fs_ops;
+mod guard;
 pub(crate) mod k8s;
 mod limits;
 mod memory;
@@ -152,6 +153,8 @@ pub enum Cmd {
     SetTls(bool),
     /// uvolnit paměť WSL (cache Linuxu) – VmmemWSL ji pak vrátí Windows
     FreeMemory,
+    /// Použije strop paměti pro kontejnery podle nastavení.
+    ApplyGuard,
     /// smazat historii zdrojů z disku
     ClearHistory,
     /// přegenerovat TLS certifikáty
@@ -859,6 +862,7 @@ impl Worker {
             Cmd::Sleep => self.sleep_distro(),
             Cmd::SetTls(on) => self.set_tls(on),
             Cmd::FreeMemory => self.free_memory(false),
+            Cmd::ApplyGuard => self.apply_guard(),
             Cmd::ClearHistory => crate::history::store().clear().map(|_| t!("Historie zdrojů smazána", "Resource history deleted").into()),
             Cmd::RegenCerts => self.regen_certs(),
             Cmd::SetKeepAlive(on) => self.set_keep_alive(on),
@@ -911,7 +915,7 @@ fn supported(caps: crate::host::Caps, c: &Cmd) -> bool {
         Cmd::InstallEngine(..) | Cmd::UninstallEngine { .. } | Cmd::SetupEngine => caps.engine_install,
         Cmd::SetTls(_) | Cmd::RegenCerts => caps.api_tls,
         Cmd::LoadDaemonJson | Cmd::SaveDaemonJson(_) => caps.daemon_json,
-        Cmd::FreeMemory => caps.vm_memory,
+        Cmd::FreeMemory | Cmd::ApplyGuard => caps.vm_memory,
         Cmd::Fs { root: true, .. } => caps.files_root,
         _ => true,
     }
@@ -953,6 +957,7 @@ fn activity_label(c: &Cmd) -> String {
         Cmd::Sleep => t!("Uspání distribuce", "Putting the distribution to sleep").into(),
         Cmd::SetTls(on) => if *on { t!("Zapnutí TLS", "Turning TLS on") } else { t!("Vypnutí TLS", "Turning TLS off") }.into(),
         Cmd::FreeMemory => t!("Uvolnění paměti WSL", "Freeing WSL memory").into(),
+        Cmd::ApplyGuard => t!("Strop paměti pro kontejnery", "Memory cap for containers").into(),
         Cmd::RegenCerts => t!("Nové certifikáty", "New certificates").into(),
         Cmd::PauseAll => t!("Pozastavení kontejnerů", "Pausing containers").into(),
         Cmd::UnpauseAll => t!("Obnovení kontejnerů", "Resuming containers").into(),
@@ -1031,6 +1036,7 @@ mod tests {
             Cmd::LoadDaemonJson,
             Cmd::SaveDaemonJson("{}".into()),
             Cmd::FreeMemory,
+            Cmd::ApplyGuard,
             Cmd::Sleep,
             Cmd::Wsl(WslCmd::Shutdown),
             Cmd::ListOnline,

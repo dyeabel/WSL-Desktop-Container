@@ -265,11 +265,17 @@ impl Worker {
         if old.distro != distro && !others.contains(&old.distro) {
             others.push(old.distro.clone());
         }
+        let script = crate::engine::api_release_script();
+        let mut marked: Vec<String> = Vec::new();
         for o in &others {
-            let script = format!("{}\n{}", crate::engine::LEGACY_CLEANUP, crate::engine::API_RELEASE);
             match wh.for_distro(o).run(Privilege::Root, None, &["sh", "-c", &script]) {
                 Ok(r) if r.trim().is_empty() => log.push_str(&tf!("{o}: API tu nebylo\n", "{o}: no API here\n")),
-                Ok(r) => log.push_str(&format!("{o}: {}\n", r.trim().replace('\n', ", "))),
+                Ok(r) => {
+                    if r.contains(crate::guard::UNGUARDED_MARK) {
+                        marked.push(o.clone());
+                    }
+                    log.push_str(&format!("{o}: {}\n", r.trim().replace('\n', ", ")))
+                }
                 Err(e) => log.push_str(&format!("{o}: {e}\n")),
             }
         }
@@ -301,6 +307,7 @@ impl Worker {
             g.engine = cfg.engine;
             g.distro_engines = cfg.distro_engines.clone();
             g.keep_previous_primary = !sleep_old;
+            g.unguarded_distros = super::guard::unguarded_list(&old.unguarded_distros, marked, slept.then_some(old.distro.as_str()), distro);
             let _ = g.save();
         }
         self.shared.tcp_checked.store(false, Ordering::SeqCst);
@@ -369,6 +376,7 @@ impl Worker {
         crate::lite::refresh_shim(host.as_ref());
         // výchozí uživatel distribuce – v režimu TLS dostane přístup k unix socketu enginu
         let user = host.run(Privilege::User, None, &["id", "-un"]).map(|u| u.trim().to_string()).unwrap_or_default();
+        let guard_env = crate::guard::env_args(cfg, crate::host::current_caps().vm_memory);
         let out = host.run(
             Privilege::Root,
             None,
@@ -378,6 +386,8 @@ impl Worker {
                 &format!("TLS={}", if cfg.tls { 1 } else { 0 }),
                 &format!("U={user}"),
                 &format!("REGEN={}", if regen { 1 } else { 0 }),
+                &guard_env[0],
+                &guard_env[1],
                 "sh",
                 "-c",
                 &cfg.engine.setup_script(),
