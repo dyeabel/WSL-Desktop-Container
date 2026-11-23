@@ -319,7 +319,8 @@ hour. *Settings* can turn the history off or delete it.
 ### Memory cap for containers
 
 Docker and Podman containers in the primary WSL distribution share one cgroup v2 cap
-(`MemoryMax` = MemTotal - reserve, `MemoryHigh` = 90 % of it), and the engine itself gets
+(`MemoryMax` = MemTotal - reserve, `MemoryHigh` = 90 % of it, `MemorySwapMax` = half of the
+distribution's swap, none without swap), and the engine itself gets
 `OOMScoreAdjust=-900`. When containers run out of memory, a container is killed, not the engine
 or WSL. The reserve is *Reserve (GB)* in *Settings* (0 = automatic: the larger of 1 GiB and
 15 % of MemTotal). The cap and its usage show in Settings and in the Memory overview. For Docker

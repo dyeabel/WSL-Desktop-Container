@@ -61,7 +61,7 @@ pub fn settings_section(app: &mut App, ui: &mut egui::Ui) {
     card(ui, |ui| {
         ui.set_width(ui.available_width());
         let label = t!("Strop paměti pro kontejnery (rezerva pro systém)", "Memory cap for containers (reserve for the system)");
-        let tip = t!("Když kontejnery vyčerpají paměť, ukončí se kontejner, ne engine ani WSL.", "When containers run out of memory, a container is killed, not the engine or WSL.");
+        let tip = t!("Když kontejnery vyčerpají paměť, ukončí se kontejner, ne engine ani WSL. Kontejnery smí zabrat nejvýš polovinu swapu.", "When containers run out of memory, a container is killed, not the engine or WSL. Containers may use at most half of the swap.");
         if ui.checkbox(&mut on, label).on_hover_text(tip).changed() {
             save(app, |c| c.container_guard = on);
             apply = true;

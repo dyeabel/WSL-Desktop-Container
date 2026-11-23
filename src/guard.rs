@@ -132,7 +132,7 @@ mod tests {
         for need in [
             "* 15 / 100", "1048576", "524288", "* 9 / 10", "wslcd-guard: max=$MAX high=$HIGH reserve=",
             "set-property --runtime", "wslcd-containers.slice machine.slice", "wslcd-containers libpod_parent",
-            "cgroup.subtree_control", "VAROVANI",
+            "cgroup.subtree_control", "VAROVANI", "MemorySwapMax=$SWAP", "MemorySwapMax=infinity",
         ] {
             assert!(s.contains(need), "{need}");
         }
@@ -224,9 +224,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&t);
         let d = t.join("wslcd-containers");
         std::fs::create_dir_all(&d).unwrap();
-        let (max, high) = (d.join("memory.max"), d.join("memory.high"));
+        let (max, high, swap) = (d.join("memory.max"), d.join("memory.high"), d.join("memory.swap.max"));
         std::fs::write(&max, "1000\n").unwrap();
         std::fs::write(&high, "900\n").unwrap();
+        std::fs::write(&swap, "500\n").unwrap();
         let Ok(out) = Command::new("sh")
             .args(["-c", GUARD_SH, "guard", "0"])
             .env("WSLCD_GUARD_CG", t.to_string_lossy().replace('\\', "/"))
@@ -235,9 +236,48 @@ mod tests {
         else {
             return;
         };
-        let (m, h) = (std::fs::read_to_string(&max).unwrap(), std::fs::read_to_string(&high).unwrap());
+        let read = |p: &std::path::Path| std::fs::read_to_string(p).unwrap().trim().to_string();
+        let (m, h, s) = (read(&max), read(&high), read(&swap));
         let _ = std::fs::remove_dir_all(&t);
         assert!(out.status.success() && String::from_utf8_lossy(&out.stderr).contains("VAROVANI"), "{out:?}");
-        assert_eq!((m.trim(), h.trim()), ("max", "max"), "předchozí strop zůstal");
+        assert_eq!((m.as_str(), h.as_str(), s.as_str()), ("max", "max", "max"), "předchozí strop zůstal");
+    }
+
+    /// Lite bez systemd: skutečný zápis do zástupné cgroup; vrací obsah `memory.swap.max` obou skupin (None = soubor nevznikl).
+    fn swap_cap_in_sandbox(name: &str, swap_kb: &str) -> Option<[Option<String>; 2]> {
+        if std::path::Path::new("/run/systemd/system").exists() {
+            return None;
+        }
+        let t = std::env::temp_dir().join(format!("wslcd-guard-swap-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        std::fs::create_dir_all(&t).unwrap();
+        std::fs::write(t.join("cgroup.controllers"), "cpu memory pids\n").unwrap();
+        let out = std::process::Command::new("sh")
+            .args(["-c", GUARD_SH, "guard", "0"])
+            .env("WSLCD_GUARD_CG", t.to_string_lossy().replace('\\', "/"))
+            .env("WSLCD_GUARD_MEMTOTAL_KB", "8000000")
+            .env("WSLCD_GUARD_SWAPTOTAL_KB", swap_kb)
+            .output()
+            .ok()?;
+        assert!(out.status.success(), "{out:?}");
+        let read = |d: &str| std::fs::read_to_string(t.join(d).join("memory.swap.max")).ok().map(|s| s.trim().to_string());
+        let r = [read("wslcd-containers"), read("libpod_parent")];
+        let _ = std::fs::remove_dir_all(&t);
+        Some(r)
+    }
+
+    /// Strop swapu kontejnerů = polovina swapu distribuce, v obou skupinách.
+    #[test]
+    fn swap_cap_is_half_of_swap() {
+        let Some(r) = swap_cap_in_sandbox("half", "2000000") else { return };
+        let want = Some((1000000u64 * 1024).to_string());
+        assert_eq!(r, [want.clone(), want]);
+    }
+
+    /// Distribuce bez swapu: strop swapu se nenastavuje.
+    #[test]
+    fn no_swap_no_swap_cap() {
+        let Some(r) = swap_cap_in_sandbox("none", "0") else { return };
+        assert_eq!(r, [None, None]);
     }
 }
