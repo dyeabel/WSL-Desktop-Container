@@ -76,7 +76,7 @@ pub fn banner(app: &mut App, ui: &mut egui::Ui) {
 }
 
 /// Uložit na disk hned? (změna zápisem, nebo konec tažení – ne v každém snímku tažení)
-fn save_now(r: &egui::Response) -> bool {
+pub(super) fn save_now(r: &egui::Response) -> bool {
     (r.changed() && !r.dragged()) || r.drag_stopped()
 }
 

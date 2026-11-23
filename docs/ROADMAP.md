@@ -55,6 +55,7 @@ A list of ideas for future work, grouped by area. **★ = recommended next steps
   map from conntrack, rules → NetworkPolicy with connection tests, portable kubeconfig.
 - WSLCD Lite: Alpine distribution without systemd (POSIX `systemctl` replacement), Docker or
   Podman with TLS, API ~1–2 s after a cold start.
+- Memory cap for containers: shared cgroup v2 cap (MemTotal − reserve) for Docker and Podman in the primary WSL distribution, OOMScoreAdjust=-900 for the engine, cap and usage in Settings and the Memory overview.
 
 ## Recommended next steps
 

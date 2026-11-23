@@ -12,6 +12,7 @@ pub mod detail;
 pub mod distros;
 pub mod engine;
 pub mod files;
+pub mod guard;
 pub mod images;
 pub mod k8s;
 pub mod k8s_map;

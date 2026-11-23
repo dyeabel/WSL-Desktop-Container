@@ -60,10 +60,13 @@ fn c_vmmem() -> Color32 {
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
-    let (now, points, events) = match app.shared.memory.lock() {
-        Ok(m) => (m.now.clone(), m.history.points.iter().copied().collect::<Vec<_>>(), m.history.events.iter().copied().collect::<Vec<_>>()),
+    let (now, points, events, guard) = match app.shared.memory.lock() {
+        Ok(m) => (m.now.clone(), m.history.points.iter().copied().collect::<Vec<_>>(), m.history.events.iter().copied().collect::<Vec<_>>(), m.guard),
         Err(_) => return,
     };
+    let (container_guard, engine, unguarded) = app.cfg.read().map(|c| (c.container_guard, c.engine, c.unguarded_distros.clone())).unwrap_or_default();
+    let primary = app.distro();
+    let unguarded: Vec<String> = unguarded.into_iter().filter(|n| *n != primary && app.distros.iter().any(|d| d.name == *n && d.running())).collect();
 
     // nadpis + tlačítko vpravo
     ui.add_space(12.0);
@@ -124,6 +127,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     None => {
                         ui.label(muted(t!("Měřím paměť…", "Measuring memory…")));
                     }
+                }
+                if container_guard {
+                    super::guard::overview_rows(ui, guard.as_ref(), engine == crate::engine::Engine::Docker, &unguarded);
                 }
                 if let Some(r) = &last {
                     ui.add_space(6.0);

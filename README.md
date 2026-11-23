@@ -316,6 +316,15 @@ and 15-minute min / avg / max for 35 days; the time the app was not running show
 *Weekly summary* shows peaks and averages, memory freeing, disk growth, traffic and the busiest
 hour. *Settings* can turn the history off or delete it.
 
+### Memory cap for containers
+
+Docker and Podman containers in the primary WSL distribution share one cgroup v2 cap
+(`MemoryMax` = MemTotal - reserve, `MemoryHigh` = 90 % of it), and the engine itself gets
+`OOMScoreAdjust=-900`. When containers run out of memory, a container is killed, not the engine
+or WSL. The reserve is *Reserve (GB)* in *Settings* (0 = automatic: the larger of 1 GiB and
+15 % of MemTotal). The cap and its usage show in Settings and in the Memory overview. For Docker
+the cap applies after *Set up API only* and only to newly created containers.
+
 ### Network overview and ports
 
 *Networks* has three tabs:
@@ -854,6 +863,7 @@ src/
     alerts.rs      memory and disk threshold alerts (hysteresis, repeat limit)
     net_overview.rs  network overview: VM / container traffic, sockets, in / out ports
     net_overview_live.rs  live test of the network overview (live_net)
+    guard.rs       memory cap for containers (apply, remove)
     testkit.rs     worker operations for live tests without a running app
     spec.rs        RunSpec, BuildSpec, AddDistroSpec
   docker.rs        Docker Engine API client (ureq, optional mutual TLS), events, Docker Hub
@@ -887,8 +897,11 @@ src/
   contexts.rs      docker contexts for the shim
   npipe.rs         named-pipe relay for tools
   live_tests.rs    integration tests against a real WSL distribution (ignored by default)
+  guard.rs         memory cap: reserve calculation
+  guard.sh         shell script that sets the cgroup cap and OOMScoreAdjust
+  live_guard.rs    live test of the memory cap
   live_docker.rs   Docker end-to-end test in a fresh distribution (live_docker_e2e)
-  ui/              individual pages (+ chart.rs, memory.rs, net_overview.rs, alerts.rs, distros.rs, events.rs)
+  ui/              individual pages (+ chart.rs, memory.rs, net_overview.rs, alerts.rs, distros.rs, events.rs, guard.rs)
 build.rs           generates the .ico and embeds it into the EXE (winresource)
 ```
 

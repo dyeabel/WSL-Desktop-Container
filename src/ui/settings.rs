@@ -487,6 +487,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             app.page = crate::app::Page::Engine;
         }
         super::memory::history_settings(app, ui);
+        if caps.vm_memory {
+            super::guard::settings_section(app, ui);
+        }
     }
 
     if tab == Tab::General {
