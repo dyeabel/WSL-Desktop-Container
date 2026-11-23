@@ -173,9 +173,7 @@ mod tests {
             .replace("/lib/systemd/system", &root("lib"))
             .replace("/etc/systemd/system", &root("etc/systemd/system"))
             .replace("/usr/local/lib/wsl-container-desktop", &root("guard"));
-        let run = format!("systemctl() {{ return 0; }}
-{script}guard_install 0
-");
+        let run = format!("systemctl() {{ return 0; }}\n{script}guard_install 0\n");
         let out = Command::new("sh")
             .args(["-c", &run])
             .env("WSLCD_GUARD_DRY", "1")

@@ -25,12 +25,12 @@ const ENGINE_PROCS: [&str; 10] =
 /// Na konci řádek `cpu` z /proc/stat (vytížení CPU VM v kartě enginu).
 pub const SAMPLE_SCRIPT: &str = concat!(
     "cat /proc/meminfo; echo @@ps; ps -e -o comm=,rss= 2>/dev/null; echo @@net; cat /proc/net/dev 2>/dev/null; echo @@cpu; head -n 1 /proc/stat",
-    r#"; echo @@guard; for d in wslcd.slice/wslcd-containers.slice machine.slice wslcd-containers libpod_parent; do f=/sys/fs/cgroup/$d; [ -r $f/memory.max ] && echo "${d##*/} $(cat $f/memory.max) $(cat $f/memory.current)"; done; echo "outside $(ls -d /sys/fs/cgroup/system.slice/docker-*.scope /sys/fs/cgroup/docker/*/ 2>/dev/null | wc -l)"; true"#
+    r#"; echo @@guard; for d in wslcd.slice/wslcd-containers.slice machine.slice wslcd-containers libpod_parent; do f=/sys/fs/cgroup/$d; [ -r $f/memory.max ] && echo "${d##*/} $(cat $f/memory.max) $(cat $f/memory.current)"; done; echo "cgparent $(grep -c -- --cgroup-parent= /proc/$(pidof -s dockerd 2>/dev/null)/cmdline 2>/dev/null)"; echo "outside $(ls -d /sys/fs/cgroup/system.slice/docker-*.scope /sys/fs/cgroup/docker/*/ 2>/dev/null | wc -l)"; true"#
 );
 /// Minimální vzorek – /proc/meminfo, čítače rozhraní a řádek `cpu`.
 pub const SAMPLE_SCRIPT_MIN: &str = concat!(
     "cat /proc/meminfo; echo @@net; cat /proc/net/dev 2>/dev/null; echo @@cpu; head -n 1 /proc/stat",
-    r#"; echo @@guard; for d in wslcd.slice/wslcd-containers.slice machine.slice wslcd-containers libpod_parent; do f=/sys/fs/cgroup/$d; [ -r $f/memory.max ] && echo "${d##*/} $(cat $f/memory.max) $(cat $f/memory.current)"; done; echo "outside $(ls -d /sys/fs/cgroup/system.slice/docker-*.scope /sys/fs/cgroup/docker/*/ 2>/dev/null | wc -l)"; true"#
+    r#"; echo @@guard; for d in wslcd.slice/wslcd-containers.slice machine.slice wslcd-containers libpod_parent; do f=/sys/fs/cgroup/$d; [ -r $f/memory.max ] && echo "${d##*/} $(cat $f/memory.max) $(cat $f/memory.current)"; done; echo "cgparent $(grep -c -- --cgroup-parent= /proc/$(pidof -s dockerd 2>/dev/null)/cmdline 2>/dev/null)"; echo "outside $(ls -d /sys/fs/cgroup/system.slice/docker-*.scope /sys/fs/cgroup/docker/*/ 2>/dev/null | wc -l)"; true"#
 );
 
 pub fn now_secs() -> f64 {
@@ -140,11 +140,11 @@ pub struct GuardNow {
     pub reserve: Option<u64>,
     /// aktuální spotřeba skupiny kontejnerů
     pub current: u64,
-    /// počet kontejnerů Dockeru mimo strop
+    /// počet kontejnerů Dockeru mimo strop, které by se vytvořením znovu dostaly pod strop (0, dokud dockerd neběží s `--cgroup-parent`)
     pub outside: u32,
 }
 
-/// Čte sekci `@@guard`: skupinu enginu (první přítomná) a počet kontejnerů mimo strop (jen Docker).
+/// Čte sekci `@@guard`: skupinu enginu (první přítomná) a počet kontejnerů mimo strop (jen Docker se stropem a `--cgroup-parent`).
 pub fn parse_guard(out: &str, engine: crate::engine::Engine, mem_total: u64) -> Option<GuardNow> {
     let (_, rest) = out.split_once("@@guard")?;
     let docker = engine == crate::engine::Engine::Docker;
@@ -157,7 +157,9 @@ pub fn parse_guard(out: &str, engine: crate::engine::Engine, mem_total: u64) -> 
         g.current = it.next().and_then(|c| c.parse().ok()).unwrap_or(0);
         g.reserve = g.max.map(|m| mem_total.saturating_sub(m));
     }
-    if docker {
+    // k novému vytvoření se nabízí jen při existujícím stropu a dockerd běžícím s `--cgroup-parent`
+    let switch = line("cgparent").is_some_and(|c| c.trim().parse::<u32>().is_ok_and(|n| n > 0));
+    if docker && switch && g.max.is_some() {
         g.outside = line("outside").and_then(|o| o.trim().parse().ok()).unwrap_or(0);
     }
     Some(g)
@@ -607,6 +609,7 @@ cpu  1 2 3 4
 @@guard
 wslcd-containers.slice 14602889216 3328599654
 machine.slice max 0
+cgparent 1
 outside 3
 ";
 
@@ -615,6 +618,22 @@ outside 3
         use crate::engine::Engine;
         let g = parse_guard(G, Engine::Docker, 16 << 30).unwrap();
         assert_eq!((g.max, g.reserve, g.current, g.outside), (Some(14602889216), Some(2576979968), 3328599654, 3));
+    }
+
+    /// Kontejnery se k vytvoření znovu nabízejí jen když dockerd běží s `--cgroup-parent` a strop existuje.
+    #[test]
+    fn guard_outside_needs_switch_and_cap() {
+        use crate::engine::Engine;
+        let cases = [
+            ("@@guard\noutside 3\n", 0),
+            ("@@guard\ncgparent 1\noutside 3\n", 0),
+            ("@@guard\nwslcd-containers.slice 1000 10\ncgparent 0\noutside 3\n", 0),
+            ("@@guard\nwslcd-containers.slice 1000 10\noutside 3\n", 0),
+            ("@@guard\nwslcd-containers.slice 1000 10\ncgparent 1\noutside 3\n", 3),
+        ];
+        for (o, want) in cases {
+            assert_eq!(parse_guard(o, Engine::Docker, 4000).unwrap().outside, want, "{o:?}");
+        }
     }
 
     #[test]
