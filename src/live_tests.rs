@@ -1239,3 +1239,204 @@ fn live_migrate_rename() {
         assert!(left.trim().is_empty(), "{}: {left}", d.name);
     }
 }
+
+// ------------------------------------------------------------------ live_container_guard
+
+const GUARD_PREFIX: &str = "WSLCD-Guard-";
+
+/// Úklid testu stropu paměti: odregistruje jen distribuce, které test sám vytvořil
+/// (kromě `WSLCD_E2E_KEEP=1`), a po Dockeru vrátí sdílené iptables FORWARD na ACCEPT.
+struct GuardCleanup {
+    created: std::sync::Mutex<Vec<String>>,
+    docker: std::sync::Mutex<Option<String>>,
+}
+
+impl Drop for GuardCleanup {
+    fn drop(&mut self) {
+        if let Some(d) = self.docker.lock().unwrap().as_deref() {
+            let r = wsl::run(d, Some("root"), None, &["sh", "-c", "docker rm -f $(docker ps -aq --filter name=wslcd-test-guard) 2>/dev/null; iptables -P FORWARD ACCEPT; iptables -S FORWARD | head -1"]);
+            eprintln!("úklid: FORWARD {r:?}");
+        }
+        if std::env::var("WSLCD_E2E_KEEP").is_ok() {
+            eprintln!("WSLCD_E2E_KEEP: distribuce ponechány: {:?}", self.created.lock().unwrap());
+            return;
+        }
+        for n in self.created.lock().unwrap().iter() {
+            assert!(n.starts_with(GUARD_PREFIX));
+            let _ = std::process::Command::new("wsl.exe").args(["--unregister", n]).output();
+            eprintln!("úklid: {n} odregistrována");
+        }
+    }
+}
+
+fn guard_root(d: &str, script: &str) -> String {
+    match wsl::run(d, Some("root"), None, &["sh", "-c", script]) {
+        Ok(o) => o.trim().to_string(),
+        Err(e) => format!("CHYBA: {e}"),
+    }
+}
+
+fn guard_events_max(d: &str, slice: &str) -> u64 {
+    let o = guard_root(d, &format!("awk '/^(max|high) /{{s+=$2}} END{{print s+0}}' /sys/fs/cgroup/{slice}/memory.events"));
+    o.parse().unwrap_or(0)
+}
+
+/// Jeden scénář stropu na jedné distribuci: `docker` / `podman`, `lite` = WSLCD Lite.
+fn guard_scenario(c: &GuardCleanup, name: &str, engine: crate::engine::Engine, lite: bool, port: u16, data: &std::path::Path) {
+    use crate::engine::Engine;
+    assert!(name.starts_with(GUARD_PREFIX), "test smí vytvářet jen distribuce {GUARD_PREFIX}*, ne {name}");
+    let docker = engine == Engine::Docker;
+    let cli = if docker { "docker" } else { "podman" };
+    let img = "docker.io/library/alpine:3.20";
+    eprintln!("=========== {name} ({cli}{}) ===========", if lite { ", Lite" } else { "" });
+    let exists = wsl::list().expect("wsl -l").iter().any(|d| d.name == name);
+    // Docker se nejdřív nainstaluje bez stropu (kontejner „vzniklý před --cgroup-parent“)
+    let mut cfg = crate::config::Config { distro: name.into(), engine, port, tls: false, keep_alive: false, container_guard: !docker, ..Default::default() };
+    if !exists {
+        c.created.lock().unwrap().push(name.into());
+        if lite {
+            let spec = crate::worker::AddDistroSpec { distro: crate::lite::LITE_ID.into(), name: name.into(), engine: Some(engine), use_for_app: true, tls: false, ..Default::default() };
+            let (r, log, _) = crate::worker::testkit::add_distro(cfg.clone(), spec);
+            eprintln!("{log}\n{r:?}");
+            r.expect("add_distro");
+        } else {
+            let loc = data.join("distros").join(name);
+            std::fs::create_dir_all(&loc).unwrap();
+            let out = std::process::Command::new("wsl.exe").args(["--install", "Ubuntu", "--no-launch", "--name", name, "--location"]).arg(&loc).output().expect("wsl --install");
+            assert!(out.status.success(), "wsl --install: {}", String::from_utf8_lossy(&out.stdout));
+            let prep = wsl::run(name, Some("root"), None, &["env", "U=tester", "sh", "-c", &crate::engine::distro_prepare_script()]).expect("příprava");
+            assert!(prep.contains("systemd=true"), "{prep}");
+            let _ = wsl::terminate(name);
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            wsl::start(name).expect("start");
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        }
+    }
+    if docker {
+        *c.docker.lock().unwrap() = Some(name.into());
+    }
+    if exists || !lite {
+        let (r, log) = crate::worker::testkit::install_engine(cfg.clone(), engine, false);
+        assert!(r.is_ok(), "{r:?}\n{log}");
+    }
+    let mut keep = wsl::keepalive(name).unwrap();
+    let kill = |k: &mut std::process::Child| {
+        let _ = k.kill();
+        let _ = k.wait();
+    };
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let _ = guard_root(name, &format!("{cli} rm -f wslcd-test-guard wslcd-test-guard-old"));
+    let _ = guard_root(name, &format!("{cli} pull {img}"));
+
+    // kontejner vzniklý před stropem (jen Docker)
+    if docker {
+        eprintln!("{}", guard_root(name, &format!("docker run -d --name wslcd-test-guard-old {img} sleep 3000")));
+    }
+
+    // 1) setup se stropem
+    cfg.container_guard = true;
+    let (r, log) = crate::worker::testkit::install_engine(cfg.clone(), engine, false);
+    assert!(r.is_ok(), "{r:?}\n{log}");
+    let direct = guard_root(name, "sh /usr/local/lib/wsl-container-desktop/guard.sh 0");
+    eprintln!("1) guard.sh: {direct}");
+    assert!(direct.contains("wslcd-guard: max="), "{direct}");
+    let slice = if lite {
+        if docker { "wslcd-containers" } else { "libpod_parent" }
+    } else if docker {
+        "wslcd.slice/wslcd-containers.slice"
+    } else {
+        "machine.slice"
+    };
+    let max = guard_root(name, &format!("cat /sys/fs/cgroup/{slice}/memory.max"));
+    eprintln!("1) {slice}/memory.max = {max}");
+    assert!(max.parse::<u64>().is_ok(), "{max}");
+
+    // 2) kontejner je pod stropem
+    let probe = format!(
+        "{cli} run -d --name wslcd-test-guard {img} sleep 300 >/dev/null; pid=$({cli} inspect -f '{{{{.State.Pid}}}}' wslcd-test-guard); cat /proc/$pid/cgroup; p=$(sed -n 's/^0:://p' /proc/$pid/cgroup); echo PARENT=$(dirname $p); echo PARENT_MAX=$(cat /sys/fs/cgroup$(dirname $p)/memory.max); echo OOMADJ=$(cat /proc/$pid/oom_score_adj)"
+    );
+    let out = guard_root(name, &probe);
+    eprintln!("2) {out}");
+    if docker {
+        assert!(out.contains(if lite { "/wslcd-containers/" } else { "wslcd-containers.slice" }), "{out}");
+    } else {
+        assert!(out.contains(if lite { "/libpod_parent/" } else { "/machine.slice/" }), "{out}");
+    }
+    let pm = out.lines().find_map(|l| l.strip_prefix("PARENT_MAX=")).unwrap_or("");
+    if docker {
+        assert!(pm.parse::<u64>().is_ok(), "memory.max rodiče kontejneru: {out}");
+    }
+
+    // 3) malý strop a spotřeba nad ním (Docker)
+    if docker {
+        let before = guard_events_max(name, slice);
+        let mt: u64 = guard_root(name, "awk '/^MemTotal:/{print int($2/1024)}' /proc/meminfo").parse().unwrap();
+        eprintln!("3) {}", guard_root(name, &format!("sh /usr/local/lib/wsl-container-desktop/guard.sh {}", mt - 768)));
+        let run = guard_root(name, &format!("docker run --rm {img} sh -c 'head -c 1500m /dev/zero | tail >/dev/null'; echo exit=$?"));
+        let after = guard_events_max(name, slice);
+        let state = guard_root(name, "systemctl is-active docker");
+        let oom = guard_root(name, &format!("cat /sys/fs/cgroup/{slice}/memory.events /sys/fs/cgroup/{slice}/memory.swap.current | tr '\\n' ' '"));
+        eprintln!("3) run: {run}\n3) memory.events max+high {before} -> {after}, {oom}, docker: {state}");
+        assert!(after > before, "čítač max ve slice nevzrostl");
+        assert_eq!(state, "active");
+        let r = guard_root(name, &format!("systemctl restart wslcd-guard; sleep 1; cat /sys/fs/cgroup/{slice}/memory.max"));
+        eprintln!("3) po restartu wslcd-guard: {r}");
+    }
+
+    // 4) terminate + start: pořadí jednotek, strop hned po startu
+    kill(&mut keep);
+    let _ = guard_root(name, &format!("{cli} rm -f wslcd-test-guard"));
+    let _ = wsl::terminate(name);
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    wsl::start(name).expect("start");
+    let mut keep = wsl::keepalive(name).unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(if lite { 2 } else { 6 }));
+    let max = guard_root(name, &format!("cat /sys/fs/cgroup/{slice}/memory.max"));
+    eprintln!("4) po startu {slice}/memory.max = {max}");
+    assert!(max.parse::<u64>().is_ok(), "{max}");
+    if !lite {
+        let unit = if docker { "docker" } else { "wslcd-podman-api" };
+        let t = guard_root(name, &format!("echo $(systemctl show -p ExecMainExitTimestampMonotonic --value wslcd-guard) $(systemctl show -p ExecMainStartTimestampMonotonic --value {unit})"));
+        eprintln!("4) guard exit / {unit} start: {t}");
+        let v: Vec<u64> = t.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+        assert!(v.len() == 2 && v[0] <= v[1], "{t}");
+    }
+
+    // 5) docker restart kontejneru vzniklého před --cgroup-parent (KNOWN-ISSUES 1)
+    if docker {
+        let o = guard_root(name, "docker restart wslcd-test-guard-old >/dev/null; pid=$(docker inspect -f '{{.State.Pid}}' wslcd-test-guard-old); cat /proc/$pid/cgroup");
+        eprintln!("5) starý kontejner po docker restart: {o} (pod stropem: {})", o.contains("wslcd-containers"));
+    }
+    let _ = guard_root(name, &format!("{cli} rm -f $({cli} ps -aq --filter name=wslcd-test-guard) 2>/dev/null"));
+    kill(&mut keep);
+}
+
+/// Živý test stropu paměti pro kontejnery. Vytvoří si vlastní distribuce `WSLCD-Guard-*`
+/// (Ubuntu z obchodu pod `target\guard-live-data`, Lite přes testkit), izolovaná data, porty 2391–2394.
+/// Proměnné: WSLCD_GUARD_DOCKER, WSLCD_GUARD_PODMAN, WSLCD_GUARD_LITE, WSLCD_GUARD_LITE_PODMAN (jména).
+#[test]
+#[ignore]
+fn live_container_guard() {
+    use crate::engine::Engine;
+    let data = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("guard-live-data");
+    std::fs::create_dir_all(&data).unwrap();
+    // SAFETY (env): test běží samostatně
+    unsafe { std::env::set_var("WSLCD_DATA_DIR", &data) };
+    let c = GuardCleanup { created: Default::default(), docker: Default::default() };
+    let parts = [
+        ("WSLCD_GUARD_DOCKER", Engine::Docker, false, 2391u16),
+        ("WSLCD_GUARD_PODMAN", Engine::Podman, false, 2392),
+        ("WSLCD_GUARD_LITE", Engine::Docker, true, 2393),
+        ("WSLCD_GUARD_LITE_PODMAN", Engine::Podman, true, 2394),
+    ];
+    for (var, engine, lite, port) in parts {
+        match std::env::var(var) {
+            Ok(n) if !n.is_empty() => guard_scenario(&c, &n, engine, lite, port, &data),
+            _ => eprintln!("{var} není nastaveno – přeskočeno"),
+        }
+    }
+    drop(c);
+    let real = std::fs::read_to_string(r"C:\WSLContainerDesktop\data\config.json").unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&real).unwrap_or_default();
+    assert_eq!(v["distro"], "WSLCD-Lite-Docker", "skutečná konfigurace se nesmí změnit");
+}

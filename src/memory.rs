@@ -25,12 +25,12 @@ const ENGINE_PROCS: [&str; 10] =
 /// Na konci řádek `cpu` z /proc/stat (vytížení CPU VM v kartě enginu).
 pub const SAMPLE_SCRIPT: &str = concat!(
     "cat /proc/meminfo; echo @@ps; ps -e -o comm=,rss= 2>/dev/null; echo @@net; cat /proc/net/dev 2>/dev/null; echo @@cpu; head -n 1 /proc/stat",
-    r#"; echo @@guard; for d in wslcd-containers.slice machine.slice wslcd-containers libpod_parent; do f=/sys/fs/cgroup/$d; [ -r $f/memory.max ] && echo "$d $(cat $f/memory.max) $(cat $f/memory.current)"; done; echo "outside $(ls -d /sys/fs/cgroup/system.slice/docker-*.scope /sys/fs/cgroup/docker/*/ 2>/dev/null | wc -l)"; true"#
+    r#"; echo @@guard; for d in wslcd.slice/wslcd-containers.slice machine.slice wslcd-containers libpod_parent; do f=/sys/fs/cgroup/$d; [ -r $f/memory.max ] && echo "${d##*/} $(cat $f/memory.max) $(cat $f/memory.current)"; done; echo "outside $(ls -d /sys/fs/cgroup/system.slice/docker-*.scope /sys/fs/cgroup/docker/*/ 2>/dev/null | wc -l)"; true"#
 );
 /// Minimální vzorek – /proc/meminfo, čítače rozhraní a řádek `cpu`.
 pub const SAMPLE_SCRIPT_MIN: &str = concat!(
     "cat /proc/meminfo; echo @@net; cat /proc/net/dev 2>/dev/null; echo @@cpu; head -n 1 /proc/stat",
-    r#"; echo @@guard; for d in wslcd-containers.slice machine.slice wslcd-containers libpod_parent; do f=/sys/fs/cgroup/$d; [ -r $f/memory.max ] && echo "$d $(cat $f/memory.max) $(cat $f/memory.current)"; done; echo "outside $(ls -d /sys/fs/cgroup/system.slice/docker-*.scope /sys/fs/cgroup/docker/*/ 2>/dev/null | wc -l)"; true"#
+    r#"; echo @@guard; for d in wslcd.slice/wslcd-containers.slice machine.slice wslcd-containers libpod_parent; do f=/sys/fs/cgroup/$d; [ -r $f/memory.max ] && echo "${d##*/} $(cat $f/memory.max) $(cat $f/memory.current)"; done; echo "outside $(ls -d /sys/fs/cgroup/system.slice/docker-*.scope /sys/fs/cgroup/docker/*/ 2>/dev/null | wc -l)"; true"#
 );
 
 pub fn now_secs() -> f64 {
