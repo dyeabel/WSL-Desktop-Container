@@ -212,4 +212,32 @@ mod tests {
         let Some(f) = install_in_sandbox("none", &[]) else { return };
         assert!(!f.iter().any(|x| x.starts_with("docker.service.d") || x.starts_with("containerd.service.d")), "{f:?}");
     }
+
+    /// Zvýšená rezerva, po které na kontejnery zbývá méně než 512 MiB: dřívější strop se zruší (ne jen varuje).
+    #[test]
+    fn low_headroom_resets_previous_cap() {
+        use std::process::Command;
+        if std::path::Path::new("/run/systemd/system").exists() {
+            return;
+        }
+        let t = std::env::temp_dir().join(format!("wslcd-guard-cg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let d = t.join("wslcd-containers");
+        std::fs::create_dir_all(&d).unwrap();
+        let (max, high) = (d.join("memory.max"), d.join("memory.high"));
+        std::fs::write(&max, "1000\n").unwrap();
+        std::fs::write(&high, "900\n").unwrap();
+        let Ok(out) = Command::new("sh")
+            .args(["-c", GUARD_SH, "guard", "0"])
+            .env("WSLCD_GUARD_CG", t.to_string_lossy().replace('\\', "/"))
+            .env("WSLCD_GUARD_MEMTOTAL_KB", "1000000")
+            .output()
+        else {
+            return;
+        };
+        let (m, h) = (std::fs::read_to_string(&max).unwrap(), std::fs::read_to_string(&high).unwrap());
+        let _ = std::fs::remove_dir_all(&t);
+        assert!(out.status.success() && String::from_utf8_lossy(&out.stderr).contains("VAROVANI"), "{out:?}");
+        assert_eq!((m.trim(), h.trim()), ("max", "max"), "předchozí strop zůstal");
+    }
 }
