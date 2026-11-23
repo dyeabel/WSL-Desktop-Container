@@ -52,6 +52,7 @@ if [ "$R" = "1" ] && systemctl is-active -q docker 2>/dev/null; then systemctl r
 /// Podman API na TCP a `-H tcp://` u dockerd. Engine i kontejnery běží dál (unix socket);
 /// po návratu distribuce na místo primární vše znovu nastaví `setup_script`.
 pub const API_RELEASE: &str = r#"if [ ! -d /run/systemd/system ] && [ ! -d /run/wslcd-init ]; then exit 0; fi
+guard_remove
 if [ -f /etc/systemd/system/wslcd-tls-proxy.service ]; then
   systemctl disable --now wslcd-tls-proxy >/dev/null 2>&1 || true
   systemctl reset-failed wslcd-tls-proxy >/dev/null 2>&1 || true
@@ -69,8 +70,18 @@ if [ -f $O ] && grep -q -- '-H tcp://' $O; then
   if systemctl is-active -q docker; then systemctl restart docker; fi
   echo "Docker API na TCP vypnuto"
 fi
+if [ -f $O ] && grep -q -- '--cgroup-parent=' $O; then
+  sed -i 's# --cgroup-parent=[^ ]*##' $O
+  systemctl daemon-reload
+fi
+if systemctl is-active -q docker 2>/dev/null || [ -n "$(podman ps -q 2>/dev/null)" ]; then echo "{UNGUARDED}"; fi
 exit 0
 "#;
+
+/// `API_RELEASE` s funkcemi ochrany (`guard_remove`) a čištěním starého `LEGACY_CLEANUP`.
+pub fn api_release_script() -> String {
+    format!("{LEGACY_CLEANUP}{}{}", crate::guard::FUNCS, API_RELEASE.replace("{UNGUARDED}", crate::guard::UNGUARDED_MARK))
+}
 
 /// Vypíše nainstalované enginy (`docker`, `podman`), každý na řádku.
 pub const DETECT_ENGINES: &str = "for b in dockerd podman; do command -v $b >/dev/null 2>&1 && echo ${b%d}; done; true";
@@ -165,7 +176,8 @@ impl Engine {
     /// U = výchozí uživatel distribuce (dostane přístup k unix socketu enginu).
     pub fn setup_script(self) -> String {
         format!(
-            "{PKG}\n{TLS_FUNCS}\n{LEGACY_CLEANUP}\n{}",
+            "{PKG}\n{TLS_FUNCS}\n{}\n{LEGACY_CLEANUP}\n{}",
+            crate::guard::FUNCS,
             match self {
                 Engine::Docker => DOCKER_SETUP,
                 Engine::Podman => PODMAN_SETUP,
@@ -189,7 +201,7 @@ impl Engine {
             Engine::Docker => DOCKER_UNINSTALL,
             Engine::Podman => PODMAN_UNINSTALL,
         };
-        format!("{PKG}{LEGACY_CLEANUP}{body}")
+        format!("{PKG}{LEGACY_CLEANUP}{}{body}", crate::guard::FUNCS)
     }
 
     /// Kde engine drží data (pro text v dialogu).
@@ -210,6 +222,7 @@ systemctl disable --now wslcd-tls-proxy >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/wslcd-tls-proxy.service
 systemctl disable --now wslcd-dns >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/wslcd-dns.service
+guard_remove
 rmdir /etc/systemd/system/docker.service.d 2>/dev/null || true
 systemctl daemon-reload 2>/dev/null || true
 PKGS=$(pkg_installed docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
@@ -226,6 +239,7 @@ systemctl disable --now wslcd-podman-api podman-restart >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/wslcd-podman-api.service
 systemctl disable --now wslcd-tls-proxy >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/wslcd-tls-proxy.service
+guard_remove
 systemctl daemon-reload 2>/dev/null || true
 if [ "$PURGE" = "1" ]; then podman system reset -f >/dev/null 2>&1 || true; fi
 PKGS=$(pkg_installed podman podman-docker)
@@ -282,6 +296,16 @@ EOF
     echo "VAROVANI: dnsmasq se nepodarilo nainstalovat - host.docker.internal nebude fungovat." >&2
   fi
 fi
+# strop pameti: kontejnery pod wslcd-containers (guard.sh); daemon.json s cgroup-parent ma prednost
+if [ "$GUARD" = "1" ]; then
+  if [ -f /etc/docker/daemon.json ] && grep -q '"cgroup-parent"' /etc/docker/daemon.json; then
+    echo "VAROVANI: daemon.json nastavuje cgroup-parent - kontejnery Dockeru nebudou pod stropem pameti." >&2
+  elif [ -d /run/systemd/system ]; then
+    EXTRA="$EXTRA --cgroup-parent=wslcd-containers.slice"
+  else
+    EXTRA="$EXTRA --cgroup-parent=/wslcd-containers"
+  fi
+fi
 mkdir -p /etc/systemd/system/docker.service.d
 if [ "$TLS" = "1" ]; then
   # API jen na unix socketu, TCP obslouží TLS proxy
@@ -297,6 +321,7 @@ cat > /etc/systemd/system/docker.service.d/20-wsl-container-desktop-shared-net.c
 ExecStartPost=-/bin/sh -c 'for i in $$(seq 20); do iptables -n -L DOCKER-USER >/dev/null 2>&1 && break; sleep 0.5; done; for t in iptables ip6tables; do for d in -i -o; do $$t -C DOCKER-USER $$d podman+ -j ACCEPT 2>/dev/null || $$t -I DOCKER-USER $$d podman+ -j ACCEPT 2>/dev/null; done; done; true'
 EOF
 if [ -f /etc/docker/daemon.json ] && grep -q '"hosts"' /etc/docker/daemon.json; then echo "VAROVANI: /etc/docker/daemon.json obsahuje 'hosts' - koliduje s -H, odstran ho." >&2; fi
+guard_apply || true
 systemctl daemon-reload
 systemctl enable docker >/dev/null 2>&1 || true
 systemctl restart docker
@@ -376,6 +401,7 @@ printf '# WSL Container Desktop: Docker socket -> Podman API\nL+ /run/docker.soc
 systemd-tmpfiles --create /etc/tmpfiles.d/wslcd-docker-sock.conf >/dev/null 2>&1 || ln -sfn "$DSOCK" /run/docker.sock
 # kontejnery s restart policy po startu (podman nemá stále běžícího démona)
 systemctl enable podman-restart.service >/dev/null 2>&1 || true
+guard_apply || true
 systemctl daemon-reload
 systemctl enable wslcd-podman-api >/dev/null 2>&1 || true
 systemctl restart wslcd-podman-api
@@ -617,6 +643,56 @@ mod tests {
             assert!(s.contains("Options = -SessionTicket\\n' > $T/openssl.cnf"), "{e:?}");
             assert!(s.contains("[Service]\nExecStart=/usr/bin/env OPENSSL_CONF=$T/openssl.cnf $S OPENSSL-LISTEN:"), "{e:?}");
         }
+    }
+
+    #[test]
+    fn docker_cgroup_parent_flag() {
+        let s = Engine::Docker.setup_script();
+        for p in [
+            "grep -q '\"cgroup-parent\"' /etc/docker/daemon.json",
+            "EXTRA=\"$EXTRA --cgroup-parent=wslcd-containers.slice\"",
+            "EXTRA=\"$EXTRA --cgroup-parent=/wslcd-containers\"",
+            "VAROVANI: daemon.json nastavuje cgroup-parent",
+            "if [ \"$GUARD\" = \"1\" ]",
+        ] {
+            assert!(s.contains(p), "{p}");
+        }
+        let flag = s.find("--cgroup-parent=wslcd").unwrap();
+        let unit = s.find("printf '[Service]\\nExecStart=\\nExecStart=%s -H fd://").unwrap();
+        assert!(flag < unit);
+    }
+
+    #[test]
+    fn guard_never_aborts_setup() {
+        for (e, restart) in [(Engine::Docker, "systemctl restart docker"), (Engine::Podman, "systemctl restart wslcd-podman-api")] {
+            let s = e.setup_script();
+            assert!(s.contains("guard_apply || true") && s.contains("guard_apply() {"), "{e:?}");
+            let prefix = s.split("\nset -e\n").next().unwrap();
+            assert!(prefix.contains("guard_apply() {") && prefix.contains("tls_proxy() {"), "{e:?}");
+            let body = s.split_once("\nset -e\n").unwrap().1;
+            assert!(body.find("guard_apply || true").unwrap() < body.find(restart).unwrap(), "{e:?}");
+        }
+    }
+
+    #[test]
+    fn uninstall_removes_guard() {
+        for e in [Engine::Docker, Engine::Podman] {
+            let s = e.uninstall_script();
+            assert!(s.contains("guard_remove() {") && s.contains("\nguard_remove\n"), "{e:?}");
+        }
+        let s = Engine::Docker.uninstall_script();
+        assert!(s.find("\nguard_remove\n").unwrap() < s.find("rmdir /etc/systemd/system/docker.service.d").unwrap());
+    }
+
+    #[test]
+    fn release_removes_guard() {
+        let s = api_release_script();
+        assert!(s.contains("guard_remove() {"));
+        assert!(s.find("guard_remove\n").unwrap() > s.find("then exit 0; fi\n").unwrap());
+        assert!(s.contains("s# --cgroup-parent=[^ ]*##"));
+        let m = s.find(crate::guard::UNGUARDED_MARK).unwrap();
+        let cond = s.find("systemctl is-active -q docker 2>/dev/null || [ -n \"$(podman ps -q 2>/dev/null)\" ]").unwrap();
+        assert!(cond < m);
     }
 
     #[test]
