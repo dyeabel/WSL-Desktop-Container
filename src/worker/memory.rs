@@ -51,6 +51,7 @@ impl Worker {
         // historie na disku: paměť a čítače eth0 VM (stejný výstup wsl, žádné další volání)
         let net = memory::parse_net(&out);
         let ticks = memory::parse_cpu(&out);
+        let guard = memory::parse_guard(&out, self.cfg().engine, mi.total);
         crate::history::store().record(t, Sample { vmmem, used: Some(mi.used()), cache: Some(mi.cache()), net, ..Default::default() });
         if let Ok(mut m) = self.shared.memory.lock() {
             m.history.push(MemPoint::new(t, vmmem, mi.used(), mi.cache()));
@@ -60,6 +61,7 @@ impl Worker {
                 _ => None,
             };
             m.cpu_ticks = ticks;
+            m.guard = guard;
             let (ram, win_used) = memory::win_ram();
             m.glance = Some(memory::Glance { used: mi.used(), total: mi.total, cache: mi.cache(), vmmem, ram, win_used, cpu });
             if now.is_some() {

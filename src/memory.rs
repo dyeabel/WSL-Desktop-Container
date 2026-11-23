@@ -23,10 +23,15 @@ const ENGINE_PROCS: [&str; 10] =
 /// Příkaz pro jedno volání `wsl -e sh -c …`: /proc/meminfo, oddělovač, RSS procesů
 /// a čítače rozhraní (provoz VM do historie).
 /// Na konci řádek `cpu` z /proc/stat (vytížení CPU VM v kartě enginu).
-pub const SAMPLE_SCRIPT: &str =
-    "cat /proc/meminfo; echo @@ps; ps -e -o comm=,rss= 2>/dev/null; echo @@net; cat /proc/net/dev 2>/dev/null; echo @@cpu; head -n 1 /proc/stat; true";
+pub const SAMPLE_SCRIPT: &str = concat!(
+    "cat /proc/meminfo; echo @@ps; ps -e -o comm=,rss= 2>/dev/null; echo @@net; cat /proc/net/dev 2>/dev/null; echo @@cpu; head -n 1 /proc/stat",
+    r#"; echo @@guard; for d in wslcd-containers.slice machine.slice wslcd-containers libpod_parent; do f=/sys/fs/cgroup/$d; [ -r $f/memory.max ] && echo "$d $(cat $f/memory.max) $(cat $f/memory.current)"; done; echo "outside $(ls -d /sys/fs/cgroup/system.slice/docker-*.scope /sys/fs/cgroup/docker/*/ 2>/dev/null | wc -l)"; true"#
+);
 /// Minimální vzorek – /proc/meminfo, čítače rozhraní a řádek `cpu`.
-pub const SAMPLE_SCRIPT_MIN: &str = "cat /proc/meminfo; echo @@net; cat /proc/net/dev 2>/dev/null; echo @@cpu; head -n 1 /proc/stat; true";
+pub const SAMPLE_SCRIPT_MIN: &str = concat!(
+    "cat /proc/meminfo; echo @@net; cat /proc/net/dev 2>/dev/null; echo @@cpu; head -n 1 /proc/stat",
+    r#"; echo @@guard; for d in wslcd-containers.slice machine.slice wslcd-containers libpod_parent; do f=/sys/fs/cgroup/$d; [ -r $f/memory.max ] && echo "$d $(cat $f/memory.max) $(cat $f/memory.current)"; done; echo "outside $(ls -d /sys/fs/cgroup/system.slice/docker-*.scope /sys/fs/cgroup/docker/*/ 2>/dev/null | wc -l)"; true"#
+);
 
 pub fn now_secs() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
@@ -124,6 +129,38 @@ pub fn parse_cpu(out: &str) -> Option<(u64, u64)> {
     let total: u64 = v.iter().sum();
     let idle = v[3] + v.get(4).copied().unwrap_or(0);
     Some((total - idle, total))
+}
+
+/// Strop paměti kontejnerů ze sekce `@@guard` vzorku.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct GuardNow {
+    /// strop (`memory.max`); None = bez stropu
+    pub max: Option<u64>,
+    /// rezerva pro systém (MemTotal − strop)
+    pub reserve: Option<u64>,
+    /// aktuální spotřeba skupiny kontejnerů
+    pub current: u64,
+    /// počet kontejnerů Dockeru mimo strop
+    pub outside: u32,
+}
+
+/// Čte sekci `@@guard`: skupinu enginu (první přítomná) a počet kontejnerů mimo strop (jen Docker).
+pub fn parse_guard(out: &str, engine: crate::engine::Engine, mem_total: u64) -> Option<GuardNow> {
+    let (_, rest) = out.split_once("@@guard")?;
+    let docker = engine == crate::engine::Engine::Docker;
+    let names = if docker { ["wslcd-containers.slice", "wslcd-containers"] } else { ["machine.slice", "libpod_parent"] };
+    let line = |key: &str| rest.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix(' '));
+    let mut g = GuardNow::default();
+    if let Some(v) = names.iter().find_map(|n| line(n)) {
+        let mut it = v.split_whitespace();
+        g.max = it.next().and_then(|m| m.parse().ok());
+        g.current = it.next().and_then(|c| c.parse().ok()).unwrap_or(0);
+        g.reserve = g.max.map(|m| mem_total.saturating_sub(m));
+    }
+    if docker {
+        g.outside = line("outside").and_then(|o| o.trim().parse().ok()).unwrap_or(0);
+    }
+    Some(g)
 }
 
 /// Vytížení CPU (0–100 %) mezi dvěma vzorky `parse_cpu`; None bez přírůstku (nebo po restartu VM).
@@ -346,6 +383,8 @@ pub struct MemState {
     pub glance: Option<Glance>,
     /// tiky CPU z předchozího vzorku (zaneprázdněno, celkem)
     pub cpu_ticks: Option<(u64, u64)>,
+    /// strop paměti kontejnerů z posledního vzorku
+    pub guard: Option<GuardNow>,
 }
 
 // ---------------------------------------------------------------- Windows
@@ -560,6 +599,58 @@ mod tests {
         assert_eq!(vmmem_direct(), Some(None));
         assert_eq!(VmmemProbe::default().get(), None);
         assert_eq!(vmmem_now(), None);
+    }
+
+    const G: &str = "MemTotal: 16777216 kB
+@@cpu
+cpu  1 2 3 4
+@@guard
+wslcd-containers.slice 14602889216 3328599654
+machine.slice max 0
+outside 3
+";
+
+    #[test]
+    fn guard_docker_slice() {
+        use crate::engine::Engine;
+        let g = parse_guard(G, Engine::Docker, 16 << 30).unwrap();
+        assert_eq!((g.max, g.reserve, g.current, g.outside), (Some(14602889216), Some(2576979968), 3328599654, 3));
+    }
+
+    #[test]
+    fn guard_podman_uncapped() {
+        let g = parse_guard(G, crate::engine::Engine::Podman, 16 << 30).unwrap();
+        assert_eq!((g.max, g.reserve, g.current, g.outside), (None, None, 0, 0));
+    }
+
+    #[test]
+    fn guard_lite_paths() {
+        use crate::engine::Engine;
+        let o = "@@guard
+wslcd-containers 536870912 1000
+libpod_parent 536870912 2000
+outside 0
+";
+        let d = parse_guard(o, Engine::Docker, 1 << 30).unwrap();
+        assert_eq!((d.max, d.current), (Some(536870912), 1000));
+        assert_eq!(parse_guard(o, Engine::Podman, 1 << 30).unwrap().current, 2000);
+    }
+
+    #[test]
+    fn guard_missing() {
+        use crate::engine::Engine;
+        assert_eq!(parse_guard(MEMINFO, Engine::Docker, 1), None);
+        assert_eq!(parse_guard("@@guard
+outside 0
+", Engine::Docker, 1), Some(GuardNow { outside: 0, ..Default::default() }));
+    }
+
+    #[test]
+    fn guard_section_keeps_cpu() {
+        assert_eq!(parse_cpu(G), Some((6, 10)));
+        for s in [SAMPLE_SCRIPT, SAMPLE_SCRIPT_MIN] {
+            assert!(s.find("echo @@guard").unwrap() > s.find("@@cpu").unwrap() && s.ends_with("; true"));
+        }
     }
 
     const MEMINFO: &str = "MemTotal:        8134304 kB\nMemFree:         7410380 kB\nMemAvailable:    7508088 kB\nBuffers:            9516 kB\nCached:           225196 kB\nSwapCached:            0 kB\nSReclaimable:      15776 kB\nHugePages_Total:       0\n";
