@@ -49,7 +49,7 @@ pub struct Config {
     pub container_guard: bool,
     /// Rezerva paměti pro Linux mimo kontejnery v GB (0 = automaticky, 0–64 po 0,5)
     pub guard_reserve_gb: f64,
-    /// Distribuce, kde se strop paměti nemá nastavovat
+    /// Distribuce, kde po přepnutí primární distribuce engine stále běží bez stropu paměti (upozornění v přehledu Paměti)
     pub unguarded_distros: Vec<String>,
     /// API enginu jen přes TLS s klientským certifikátem (port 2376, certifikáty v %APPDATA%\WSL_Container_Desktop\tls)
     pub tls: bool,
